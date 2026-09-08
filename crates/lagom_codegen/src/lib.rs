@@ -51,10 +51,8 @@ use cranelift::codegen::settings;
 use cranelift::codegen::Context;
 use cranelift::codegen::isa::CallConv;
 use cranelift::prelude::*;
-use cranelift_module::{
-    default_libcall_names, DataDescription, DataId, FuncId, Linkage, Module,
-};
-use cranelift_object::{ObjectBuilder, ObjectModule};
+use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
+use cranelift_object::ObjectModule;
 
 use lagom_lir::{
     BlockId, FormatPart, LirFunction, LirInstr, LirOperand, LirProgram, LirTerm, SlotId, StrId,
@@ -76,19 +74,22 @@ fn verify_flags() -> &'static settings::Flags {
 ///
 /// `source` is the program text (embedded for the LOM failure report in dev
 /// builds; never embedded in release). `dev` selects the build mode the
-/// runtime reports. `no_pdb` controls whether debug info is discarded, so
-/// the produced object does not generate a `.pdb` on Windows.
+/// runtime reports. `no_pdb` controls whether debug info may be emitted into
+/// the object file.
 ///
 /// The default for end-user builds is `no_pdb = true`: users should not see
 /// debug-info files unless they explicitly ask for them with `--pdb`.
-pub fn compile(lir: &LirProgram, source: &str, dev: bool, no_pdb: bool) -> Result<Vec<u8>, String> {
-    let mut builder = settings::builder();
-    if no_pdb {
-        // Discarding debuggable suppresses debug-info emission at the object
-        // level, which is the layer that produces a `.pdb` on Windows.
-        let _ = builder.set("discarding_debuggable", "true");
-    }
-    let flags = settings::Flags::new(builder);
+///
+/// PDB generation is controlled at the object-backend level, not by a
+/// Cranelift codegen setting.
+pub fn compile(lir: &LirProgram, source: &str, dev: bool, _no_pdb: bool) -> Result<Vec<u8>, String> {
+    let mut sb = settings::builder();
+    // Position-independent code: the object is linked by the platform linker
+    // on every OS (ELF and Mach-O default to PIE, and the runtime rlib rustc
+    // builds is PIC), so absolute relocations (R_X86_64_64) against rt_*
+    // symbols are rejected on Linux/macOS without this.
+    let _ = sb.set("is_pic", "true");
+    let flags = settings::Flags::new(sb);
     let isa_builder = cranelift_native::builder().map_err(|why| {
         format!("this machine's architecture is not supported by the Cranelift backend: {why}")
     })?;
@@ -96,10 +97,10 @@ pub fn compile(lir: &LirProgram, source: &str, dev: bool, no_pdb: bool) -> Resul
         .finish(flags)
         .map_err(|e| format!("Cranelift ISA setup failed: {e}"))?;
     let call_conv = isa.default_call_conv();
-    let builder = ObjectBuilder::new(
+    let builder = cranelift_object::ObjectBuilder::new(
         isa.clone(),
         "lagom_module.o".to_string(),
-        default_libcall_names(),
+        cranelift_module::default_libcall_names(),
     )
     .map_err(|e| e.to_string())?;
     let mut module = ObjectModule::new(builder);
