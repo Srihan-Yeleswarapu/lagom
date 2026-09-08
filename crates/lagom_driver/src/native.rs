@@ -133,9 +133,16 @@ fn mtime(p: &Path) -> Option<std::time::SystemTime> {
 
 fn build_runtime(workspace: &Path, target_dir: &Path) {
     // Quiet, best-effort; failures surface as the not-found error above.
+    // `CARGO_TARGET_DIR` already names the profile subdirectory
+    // (`target/lagom-rt/debug`), and cargo appends its own `debug`/`release`
+    // — so point it one level up and let cargo do the layout.
+    let parent = target_dir
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| target_dir.to_path_buf());
     let _ = Command::new("cargo")
         .args(["build", "-p", "lagom_rt"])
-        .env("CARGO_TARGET_DIR", target_dir)
+        .env("CARGO_TARGET_DIR", parent)
         .current_dir(workspace)
         .output();
 }
