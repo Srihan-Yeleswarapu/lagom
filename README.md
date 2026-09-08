@@ -46,13 +46,50 @@ The surface syntax is word-based and reads like structured English, but it is a 
 | [08 — Compiler](docs/08-compiler.md) | Phase 8 spec (stub) |
 | [09 — Tooling](docs/09-tooling.md) | Phase 9 spec (stub) |
 | [10 — Roadmap](docs/10-roadmap.md) | Phase 10 spec (stub) — milestones M0–M6 with gates |
-| [11 — Design review](docs/11-design-review.md) | Adversarial architecture review: 24 issue cards, stress tests, contradiction matrix, KEEP/MODIFY/INVESTIGATE/REJECT verdicts |
+| [11 — Design review](docs/11-design-review.md) | Adversarial architecture review: 24 issue cards, stress tests, contradiction matrix, KEEP/MODIFY/INVESTIGATE/REJECT verdicts — **approved fixes applied** (grammar unified with additive-level args, method calls without dots, equality/send/locking semantics, text↔number, comptime staging, the Lagom Observability Model; decisions D-30…D-39) |
+| [12 — Consistency pass](docs/12-consistency-pass.md) | Post-fix re-review of the changed areas: checklist results, every applied change classified (contradiction fix / clarification / wording), zero new design decisions — **architecture frozen for M0** |
 
 Docs 01–10 are phase stubs by design: they scope what each specification must contain, bind the decisions already made in 00, and record open questions with decision dates. They fill in as each phase matures.
 
+## Getting the command
+
+**From a checkout** (requires a Rust toolchain — the compiler's implementation detail, not yours):
+
+```
+cargo install --path crates/lagom_cli
+```
+
+This installs `lagom` onto your PATH. It works from any directory.
+
+**From a release artifact** (once the CI release story lands): download the artifact for your platform from a release workflow run, unpack it, and put its `lagom` binary on your PATH.
+
+## First program
+
+```
+lagom new hello
+cd hello
+lagom run
+```
+
+`lagom new` writes a starter `main.lagom` that asks your name and greets you. From there:
+
+| Command | What it does |
+|---|---|
+| `lagom run` | compile and run `main.lagom` (or `lagom run file.lagom`) |
+| `lagom run --release` | optimized build |
+| `lagom run --trace` | run on the teaching interpreter — live probes and a failure report when things go wrong |
+| `lagom build [file] [-o out]` | compile to a native executable |
+| `lagom test [file]` | run this file's `test` blocks |
+| `lagom check [file]` | parse and check; show diagnostics |
+| `lagom fmt [file] [--write]` | canonically format (print, or rewrite with `--write`) |
+| `lagom explain <code>` | the teaching write-up for an error code |
+| `lagom words` | the reserved words |
+
+Everything works from any directory on a single `.lagom` file — no project manifest needed.
+
 ## Status
 
-**Design phase.** No compiler exists yet, by intention — the design (brief §32/§33) comes first. Next step: M0 planning for the Rust-bootstrap compiler (lexer → parser → sema → HIR → MIR → LIR → Cranelift), scoped in [00 §33](docs/00-architecture.md#33-mvp-proposal) and [doc 10](docs/10-roadmap.md).
+**M0: the compiler exists.** `lagom run`, `build`, `test`, `check`, `fmt`, `new`, `explain`, and `words` work today (Rust bootstrap; lexer → parser → sema → HIR → MIR → LIR → Cranelift, scoped in [00 §33](docs/00-architecture.md#33-mvp-proposal) and [doc 10](docs/10-roadmap.md)). `doc`, `play`, `add`, and `profile` are M1+ (doc 09/10).
 
 ## Reference notes
 

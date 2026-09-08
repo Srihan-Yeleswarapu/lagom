@@ -15,10 +15,11 @@
 ## Decisions inherited from 00 (binding here)
 
 - D-2 (one language, layered exposure), D-3 (word-based, formally specified), D-5 (immutable by default), D-6 (words for comparisons/logic), D-28 (validation with real users at every milestone).
+- **From the design review (doc 11), applied 2026-09:** the vocabulary rule gains "deletions are also vocabulary decisions" — `same as`, `different from`, and `either` were removed from the reserved set at v0.1 (REJECT list, doc 11); the frozen-word-count target shrinks accordingly.
 
 ## Open questions
 
-- How much vocabulary growth is acceptable per release? (Propose: a frozen ~120-word core + a documented approval process; owner decision needed.)
+- How much vocabulary growth is acceptable per release? (Propose: a frozen core + a documented approval process; owner decision needed — note the list shrank at v0.1 with the doc-11 deletions, so the ~120 figure needs recounting at the freeze.)
 - Should localized *diagnostics* precede localized documentation? (Propose: diagnostics first, no localized keywords ever — D-3.)
 - What is the project's stance on "playground-first" vs "install-first" onboarding for schools? (Ties to tooling doc 09; decide at M2.)
 

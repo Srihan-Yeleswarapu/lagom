@@ -140,7 +140,8 @@ The complete capability map with layer assignments. Every feature listed here ha
 | Feature | Syntax (§7) | Status |
 |---|---|---|
 | Output | `say "…"`, `say x` | M0 |
-| Input | `ask "…" and remember it as answer` | M0 |
+| Input | `make answer equal to ask "…"` | M0 |
+| Text↔number conversion | `number from answer` (`can fail`), `text from 42` — [§7.1](#71-output-and-input--student) | M0 |
 | Variables (immutable by default) | `make x equal to 15` | M0 |
 | Mutable variables | `make changing score equal to 0`, `set score to 5` | M0 |
 | Arithmetic | `+ - * /`, `divided by`, `divided evenly by`, `remainder of a and b` | M0 |
@@ -159,6 +160,7 @@ The complete capability map with layer assignments. Every feature listed here ha
 | Basic tests | `test "name"` + `check that …` | M0 |
 | Modules | `use math for square root` | M0 |
 | Errors as values (basic) | `can fail`, `fail with`, `attempt … if it fails then …` | M0 (basic) / M1 (full) |
+| Options as values (basic) | `first of` returns an option; `say` prints the value or the word `nothing` (D-34) | M0 (basic) / M1 (full) |
 
 ### 5.2 Intermediate — `intermediate`
 
@@ -441,7 +443,7 @@ function calculate average
     give back total divided evenly by size of scores
 ```
 
-- Clause words, in order: `takes …` (one per parameter), `returns …` (optional; inferred when absent), `can fail …` (error capability, 13), `can wait` (async capability, 15). Body indented under the header.
+- Clause words, in order: `takes …` (one per parameter), `returns …` (optional; inferred when absent), `can fail …` (error capability, 13), `can wait` (async capability, 15 — orthogonal to `can fail`; both compose on one function). Body indented under the header.
 - Calling: `greet "bo"` (positional) or `greet with name "bo"` (labeled — the same `with` shape as construction, 7.9).
 
 **The beginner's signature from the project brief** — `takes number of correct answers` — is the same grammar: `takes number of correct answers` declares a parameter named `correct answers` of type `number` (type word first, `called` optional when the type word directly precedes the name; an `of` directly after a *complete atomic type* is filler — the type grammar consumes compound types like `a list of …` greedily first, so `takes number of correct answers` parses as type `number`, filler `of`, name `correct answers`):
@@ -573,13 +575,17 @@ block       = INDENT { statement } DEDENT ;          (* indentation-scanner gene
 
 statement   = say | ask | make | set | increase | decrease
             | if | repeat | match | stop | next | use | checkthat
-            | giveback | failwith | attemptstmt
+            | giveback | failwith | attempt
             | taskstmt | unsafe | region | usingscope
             | assignment | exprstmt ;                (* exprstmt = a call used for effect: `bump c` *)
 
-make        = "make" ["changing"] name "equal to" expr ;
+make        = "make" ["changing"] name "equal to" ( expr | funclit ) ;   (* funclit = block lambda (11.1) *)
+funclit     = "a function" ["taking" name { "and" name }] block ;   (* the block may open with
+                                                        takes/returns/can clauses (11.1: `twice`) *)
 set         = "set" target "to" expr ;
 increase    = ("increase"|"decrease") target "by" expr ;
+target      = name { prep additive } ;               (* set things at 2 to "plum"; field access via
+                                                        the same closed prepositions (7.6, 7.11) *)
 if          = "if" expr block { "otherwise if" expr block } [ "otherwise" block ] ;
 repeat      = "repeat" (count | whilec | foreach) block ;
 count       = number "times" ["using" name] ;
@@ -588,7 +594,9 @@ foreach     = "for each" pattern "in" expr ;
 
 function    = "function" name { clause } block ;
 clause      = takes | returns | canfail | canwait ;
-takes       = "takes" [articles] (type | "any number of" type) name ["with default of" expr] ;
+takes       = "takes" [articles] [parammode] (type | "any number of" type) ["called"] name
+              ["with default of" expr] ;
+parammode   = "owned" | "borrowed" ;                 (* owning-region transfers only (9.6, expert) *)
             (* greedy-type-then-filler (7.8): `takes number of correct answers` = type `number`,
                filler `of`, name `correct answers`. The ONE bounded backtrack point in the grammar: *)
 returns     = "returns" [articles] type ;            (* commit to the greedy type read; if the name
@@ -598,25 +606,31 @@ canfail     = "can fail" [type] ;
 canwait     = "can wait" ;
 
 hasfield    = "has" name "of type" type ;            (* struct/class field clause (7.11, 10.2) *)
-constr      = "construction" "with" name "of type" type { "and" name "of type" type } block ;  (* 10.3 *)
+constr      = "construction" { takes | canfail | canwait } block ;   (* 10.3 — takes-clauses like a
+                                                        function; no `returns` (a construction
+                                                        returns the new object) *)
 method      = "can" name [takes] block ;             (* method clause inside a class block (10.2):
                                                         methods are ordinary functions whose FIRST
                                                         parameter is the receiver (10.2, R-2) *)
-class       = "class" name ["extends" name] ["does" name { "," name }] block ;   (* 10.2/10.5, M1–M2 *)
-interface   = "interface" name block ;               (* 10.6, M2 *)
+class       = "class" name ["of" name] ["extends" name] ["does" name { "," name }] block ;
+                                                      (* 10.2/10.5/12.2, M1–M2; `of some type` names
+                                                         the type parameter (12.2) *)
+interface   = "interface" name ["of" name] { interfacereq } ;   (* 10.6, M2 *)
+interfacereq = "can" name [takes] [canfail] [canwait] ;   (* a requirement — no body (10.6) *)
 typealias   = "a type called" name "is a" type ;     (* 8.4, M1 *)
 
 giveback    = "give back" expr ;
 failwith    = "fail with" expr ;
-attemptstmt = "attempt" orexpr attempttail ;
+attempt     = "attempt" orexpr [attempttail] ;       (* ONE production, used in statement AND
+                                                          expression position (R-20.1, 13.1) *)
 attempttail = "and pass the problem on"                (* propagation — ONE reserved phrase-token, so
                                                           the call grammar's greedy `and` can never
                                                           consume into it (7.15 note, R-11) *)
             | "if it fails" "then" block ["otherwise" block]
             | "as" name block ["otherwise" block] ;
             (* in the if-it-fails/otherwise form: error is bound to `problem`, success value to `result`.
-               attempt is ALSO an expression (R-20.1): the bare form `attempt expr` appears in `primary`
-               below and evaluates to the result value (13.1). *)
+             `and pass the problem on` is valid only when the attempt is the whole statement
+             (parser-checked: nothing may follow the tail). *)
 
 match       = "match" expr { "when" pattern block } [ "otherwise" block ] ;
 pattern     = literal | name | "a" usertype [destructure] | "nothing" | "something with value" pattern | pair ;
@@ -625,12 +639,14 @@ test        = "test" textliteral block ;
 checkthat   = "check that" comparison ;
 doccomment  = "##" text ;
 export      = "export" (function | structure) ;
+use         = "use" name [ ("for" name { "," name }) | ("from" textliteral) ] ;   (* 7.13 *)
 
 (* Concurrency / regions / resources — deliberately clause-free, one statement per form (14.2): *)
 taskstmt    = "start" "a" "task" block { "start" "a" "task" block } ["wait for all tasks"] ;
             (* one statement per spawn — no chaining word; region exit joins implicitly.
                `wait for all tasks` is a single reserved phrase-token, same rule as above. *)
-unsafe      = "unsafe" block ;                       (* 18.1 *)
+unsafe      = "unsafe" ["because" text] block ;      (* 18.1 — the because-justification is
+                                                        compiler-enforced from M3 *)
 region      = "within" ("owning" | "arena" name) block ;   (* memory-discipline regions (9.6, 9.8) *)
 usingscope  = "using" expr block ;                   (* disposable-resource scope (10.4); statement-
                                                           initial `using` never collides with the call
@@ -649,7 +665,7 @@ multiplicative = unary { ("*"|"times") unary | ("/"|"divided by") unary
                           | "divided evenly by" unary | ("remainder of"|"modulo") unary } ;
 unary       = "-" primary | primary ;
 primary     = literal | name | call | "(" expr ")" | listlit | maplit | pairlit
-            | interpolation | newexpr | "attempt" additive ;   (* bare attempt-as-expression, 13.1 *)
+            | interpolation | newexpr | attempt ;    (* bare attempt-as-expression, 13.1 *)
 
 (* The call grammar (R-1): ONE production covers every call form in this document —
    `ask "What is your name?"` (bare positional), `divide 10 and 0` (positional + `and`-separated),
@@ -662,9 +678,13 @@ flowcall    = name [additive] { prep additive } { "and" additive } ;   (* closed
 prep        = "of" | "at" | "from" | "to" ;          (* boolean arguments need parentheses or the
                                                           `where` suffix — the ambiguous form is a
                                                           compile error with a teaching diagnostic (7.9) *)
-lambda      = name                                   (* named function:            using double *)
-            | "it" additive                          (* implicit single parameter: using it plus 5 *)
-            | "taking" name { "and" name } "giving back" additive ;  (* inline lambda — the body is
+lambda      = comparison                             (* a bare name passes the function itself:
+                                                        `using double`; a larger comparison is
+                                                        evaluated per element with `it` — and any
+                                                        names bound by preceding `with` suffixes —
+                                                        in scope: `using it plus 5`,
+                                                        `using start plus it` (11.2) *)
+            | "taking" name { "and" name } "giving back" comparison ;  (* inline lambda — the body is
                one additive-or-comparison expression; boolean/multi-operator bodies use the block
                lambda `a function taking n …`, delimited by indentation (R-3, 11.1) *)
 
@@ -681,10 +701,13 @@ type        = "number" | "decimal" | "text" | "boolean"
             | "a list of" type | "a map from" type "to" type | "a pair of" type "and" type
             | "a box of" type                       (* heap cell — the indirection primitive that makes
                                                           recursive types finitely representable (R-13) *)
-            | usertype | fntype | gentype ;   (* fntype/gentype: doc 04 *)
+            | usertype | fntype | gentype           (* fntype/gentype: doc 04 *)
+            ;   (* the EXPERT layer extends this type grammar with the fixed-size integers,
+                   fixed-size decimals, and C/pointer types of 17–18 — layer-gated, never legal in
+                   student/intermediate code; doc 04 owns the extended production *)
 ```
 
-Notes: the call grammar is **unified** (R-1 of doc 11) — one production covers every call form used in this document: `ask "What is your name?"` (bare positional), `greet "bo"`, `divide 10 and 0` (positional + `and`-separated), `download "a" to "a.file"` and `send "hello" to messages` (positional + prepositional), `bigger of a and b`, `square root of 16`, `things at 0`. Arguments bind at the **additive level** (R-4), so `and` inside a call is *always* an argument separator — the sentence a human reads and the sentence the compiler parses are the same; a boolean argument needs parentheses or the `where` suffix, and the ambiguous spelling is a compile error with a teaching diagnostic, never a silent misparse. Multi-word phrase-statements that could collide with the greedy `and` — `and pass the problem on`, `wait for all tasks` — are **single reserved phrase-tokens**, so no name can ever contain them (7.0.3) and no call can ever consume into them. `flowcall` prepositions are a **closed set** (`of`, `at`, `from`, `to`) — extending it requires a grammar change, not prose. `either` was deleted at v0.1 (it had no job; reserving unused words is how ambiguity creep starts — REJECT list, doc 11). The reserved-word list (~120) is frozen per release cycle and printed by `lagom words` (tooling, doc 09).
+Notes: the implicit combinator parameter `it` is a **reserved word** (11.1) — a user name can never collide with it, which is what makes the `"it" comparison` lambda form deterministic. The call grammar is **unified** (R-1 of doc 11) — one production covers every call form used in this document: `ask "What is your name?"` (bare positional), `greet "bo"`, `divide 10 and 0` (positional + `and`-separated), `download "a" to "a.file"` and `send "hello" to messages` (positional + prepositional), `bigger of a and b`, `square root of 16`, `things at 0`. Arguments bind at the **additive level** (R-4), so `and` inside a call is *always* an argument separator — the sentence a human reads and the sentence the compiler parses are the same; a boolean argument needs parentheses or the `where` suffix, and the ambiguous spelling is a compile error with a teaching diagnostic, never a silent misparse. Multi-word phrase-statements that could collide with the greedy `and` — `and pass the problem on`, `wait for all tasks` — are **single reserved phrase-tokens**, so no name can ever contain them (7.0.3) and no call can ever consume into them. `flowcall` prepositions are a **closed set** (`of`, `at`, `from`, `to`) — extending it requires a grammar change, not prose. `either` was deleted at v0.1 (it had no job; reserving unused words is how ambiguity creep starts — REJECT list, doc 11). The reserved-word list (~120) is frozen per release cycle and printed by `lagom words` (tooling, doc 09).
 
 ---
 
@@ -711,6 +734,16 @@ Types are checked **statically**, but beginners rarely write them. `make age equ
 
 **The `number` decision (D-10).** Beginners get *one* number type. `number` is a 64-bit integer; `/` (`divided by`) on two `number`s promotes to `decimal` (5/2 = 2.5) — matching Scratch and school intuition where division makes fractions. Experts who need exact integer division write `divided evenly by`; experts who need floats annotate `decimal`; experts who need f32/i32/i8/packed go to the expert layer (18.3). This "one visible type, precise escape hatches" pattern repeats throughout the design. Overflow: a beginner's `9,000,000,000,000,000,000 + 1` must not silently wrap — checked failure teaches the boundary honestly; `unsafe`/`expert` layer can choose raw wrapping ops.
 
+**Literal typing and mixed arithmetic (R-15 of doc 11).** Numeric literals are *polymorphic at inference*: a literal unifies with its context and defaults to `number` when unconstrained. This is what makes the canonical accumulator work:
+
+```lagom
+make total equal to 0                        # 0 is number or decimal — whatever the arithmetic needs
+repeat for each score in scores              # scores: a list of decimal
+    increase total by score                  # works: literal 0 unified with decimal
+```
+
+Mixed `number`/`decimal` arithmetic promotes to `decimal` — the *only* implicit numeric conversion (doc 04 owns the operator table). An *annotated* `number` accumulator receiving decimals is a compile error whose diagnostic teaches the annotation — the teachable case is an error, the common case just works.
+
 ### 8.3 Static checking with dynamic-feeling errors
 
 Statically typed but the *errors* are runtime-shaped: a failed type match is not a "TypeError" at line 1 of a 500-line program — it is a precise diagnostic at the exact expression, with the fix (see the example in doc 09-tooling). No truthiness: `if name` (name is `text`) is a compile error, "a text is not a yes-or-no value; did you mean `size of name is greater than 0`?" — one of many diagnostics that teach the type system *through* the error.
@@ -729,9 +762,12 @@ otherwise
     say "First is {maybe_name}."               # narrowed inside otherwise
 ```
 
-- `nothing?` (written in annotations) with values `nothing` and `something with value v`. Flow-sensitive narrowing: after the `is nothing` test, the `otherwise` branch sees a definite value — no `!`, no unwrap ceremony at student level.
+- **One concept, two canonical spellings** (R-18 of doc 11): the compact form `T?` (`text?`) and the word form `a T or nothing` (`a text or nothing`) are *the same type* — one desugaring rule. `nothing?` as a standalone annotation is deleted (it hides the inner type).
+- Values: `nothing` and `something with value v`. Flow-sensitive narrowing: after the `is nothing` test, the `otherwise` branch sees a definite value — no `!`, no unwrap ceremony at student level.
+- **Printing an option:** `say` and interpolation print the contained value, or the word `nothing` when absent — honest, Scratch-friendly, and it makes the empty-list `first of` case a visible lesson (7.6).
 - The same mechanism is **the error story**: `can fail` functions return a result; `attempt … as problem` binds the error (13). Option and result are two spellings of one concept (tagged unions, 7.12) — students learn it once.
 - Equivalents: Rust `Option<T>`/`Result<T, E>`; Swift `Optional<T>` / `throws`; Kotlin nullable types. **No null literal exists in the language** — the billion-dollar mistake is simply absent (Tony Hoare's own diagnosis; Lagom takes the same exit Kotlin, Rust, and Swift took).
+- **Equality semantics (R-6 of doc 11): one operator, two behaviors.** `is equal to` is **structural** for value types (numbers, decimals, text, booleans, structs, lists, maps, pairs, kinds, options) and **identity** for classes — two distinct counter objects with equal fields are never `equal to`; the teaching diagnostic points at field comparison (`count of a is equal to count of b`) and at `does comparable` (10.8) for opt-in structural comparison of classes. `same as`/`different from` are deleted (decision D-30). The grammar's `cmpword` list reflects this.
 
 ### 8.6 What the type system deliberately does *not* have (yet)
 
@@ -758,9 +794,11 @@ Structs, lists, maps, and pairs are **values**: assignment copies (shallow for s
 ```lagom
 make a equal to a list of 1, 2, 3
 make b equal to a
-set second of b to 99
-say second of a          # 2 — b was a copy; this is *taught*, with the aliasing lesson at intermediate
+set b at 1 to 99
+say a at 1          # 2 — b was a copy; this is *taught*, with the aliasing lesson at intermediate
 ```
+
+**The one honest exception (R-12 of doc 11): a struct with a class-typed field copies shallowly.** The struct itself is copied; the *reference* to the class object is copied with it — both structs then name the same object. This is Swift's real semantics, and Lagom specs it, teaches it, and lints it rather than hiding it: the compiler emits a one-time student-layer note the first time such a struct is copied ("both players now name the same address object — make address a structure if it should copy"), and the lint recommends struct-over-class for pure data (10.1 already steers there). Doc 05 owns the full copy/elide/refcount matrix, and the value/reference lesson (9.7, 11 of doc 11) is taught *at* the struct/class boundary.
 
 ### 9.3 Classes are ARC'd references — `student` → `advanced`
 
@@ -788,7 +826,9 @@ function process
 
 Ownership mode is declared **per region**: a function may declare `within owning` for its whole body (or any nested block). Parameter modes mark how arguments transfer: `an owned …` (the caller gives up the value — a move) and `a borrowed …` (the caller keeps it; the callee may use but not store it beyond the call).
 
-Within `within owning` regions: every value has one owner; `takes owned`/`takes borrowed` parameter modes; moves are destructive; the borrow checker (the same rules as Rust's, minus lifetimes-as-syntax — borrows are lexically scoped, no NLL problem) enforces no-aliasing for `changing` borrows. This is Rust's discipline **without Rust's syntax tax**: a beginner never sees it; an expert who wants C-speed sharing and mutation without refcounts writes it. Errors in these regions are the full what/where/why/fix diagnostics, teaching ownership *when the student arrives at it*.
+Within `within owning` regions: every value has one owner; `takes owned`/`takes borrowed` parameter modes; moves are destructive; the borrow checker (the same rules as Rust's, minus lifetimes-as-syntax — borrows are lexically scoped) enforces no-aliasing for `changing` borrows. This is Rust's discipline **without Rust's syntax tax**: a beginner never sees it; an expert who wants C-speed sharing and mutation without refcounts writes it. Errors in these regions are the full what/where/why/fix diagnostics, teaching ownership *when the student arrives at it*.
+
+**The borrow contract (R-7 of doc 11): borrows cannot escape.** A borrow never outlives the region or scope in which it is created — so a function cannot return a borrow of its parameters (`longest of a and b` returning `a borrowed text` is inexpressible by design, not by accident). This is the honest price of "no lifetime syntax," and the workaround ladder is documented, not hidden: **(1)** return an owned copy; **(2)** return an ARC'd class; **(3)** take a continuation — the callback style, which needs no lifetime at all (`longest of a and b using say it`, or with a block lambda). An escape-analysis-based checker that permits borrow-returning APIs is an INVESTIGATE item (M4, benchmarked against the continuation ladder before adoption). Interface *objects* (existentials) built from borrows are rejected — they escape by construction; a `borrowed` value satisfies an interface constraint for the call's duration only. The tiers-differ-in-annotations-never-in-semantics invariant (9.1) is preserved: these are capability restrictions, not semantic differences.
 
 ### 9.7 What beginners *learn* about memory anyway
 
@@ -822,12 +862,13 @@ class counter
         increase count of myself by 1
 
 make c equal to a new counter
-can bump of c
-can bump of c
+bump c                       # method call: the receiver is the first argument
+add 5 to c                   # a method with arguments — same grammar
 say count of c            # 2
 ```
 
-- `myself` is the receiver name (Python's `self`, Rust's `self`, Swift's `self` — same concept, reserved word). Methods use `can` (they are *capabilities of the object* — the same clause system as functions; `can` methods may also declare `can fail`/`can wait`).
+- **Methods are ordinary calls whose first argument is the receiver** (R-2 of doc 11): `bump c`, `add 5 to c` — no dot syntax anywhere (the grammar has no `.` production; see 7.13). Declared methods lower to functions with a leading receiver parameter; `can` is reserved for declarations (methods, interface requirements). Dynamic dispatch is unaffected — the receiver is simply the vtable-carrying argument. This is the Go/Lua shape, and the transfer sentence is honest: *methods are functions that take the object first* (true of Python's `self` too).
+- `myself` is the receiver name *inside the method body* (Python's `self`, Rust's `self`, Swift's `self` — same concept, reserved word). Methods use `can` to declare (they are *capabilities of the object* — the same clause system as functions; `can` methods may also declare `can fail`/`can wait`).
 - Internally: class instance = ARC'd heap object with a vtable pointer when dynamic; methods on a non-polymorphic class are statically dispatched until a subclass/interface forces a vtable (devirtualization by default, 25).
 - Equivalents: Swift class + methods; Python class; C++ class (with ARC instead of manual new/delete).
 
@@ -837,12 +878,13 @@ say count of c            # 2
 class counter
     has count of type number
     has step of type number
-    construction with step of type number
+    construction
+        takes number called starting step
         set count of myself to 0
-        set step of myself to step
+        set step of myself to starting step
 ```
 
-`construction` clauses are named constructors (`a new counter with step 2`); the compiler enforces full field initialization before any method runs (the Swift rule, which kills the un-initialized-field bug class *at compile time*). Multiple constructors are multiple named clauses — no overloading-by-arity ambiguity (D-14).
+`construction` clauses are named constructors with `takes`-clause parameters (`a new counter with starting step 2` — construction arguments use the ordinary call-suffix shapes); the compiler enforces full field initialization before any method runs (the Swift rule, which kills the un-initialized-field bug class *at compile time*). Multiple constructors are multiple named clauses — no overloading-by-arity ambiguity (D-14).
 
 ### 10.4 Destructors / finalization — `intermediate` (concept) → `advanced` (mechanism)
 
@@ -861,7 +903,7 @@ using open file at "data.txt"
 
 Two region words, two jobs: **`using`** binds a *disposable resource* for a scope (RAII — closing files, releasing locks); **`within`** sets a *memory-discipline region* (`owning`, `arena`). They compose but never substitute for each other.
 
-No finalizers-as-safety-net (the Java lesson): cleanup is deterministic or explicit; the GC-style "eventually" path does not exist.
+No finalizers-as-safety-net (the Java lesson): cleanup is deterministic or explicit; the GC-style "eventually" path does not exist. **Finalizers cannot fail** (R-20.3 of doc 11): `before last reference disappears` may not call `can fail` functions un-attempted — a failing cleanup is a bug class, not a feature, and the checker enforces it; this is also the rule that keeps the cycle collector's re-entrancy story sound (doc 05 owns it).
 
 ### 10.5 Inheritance: allowed, single, discouraged — `intermediate` → `advanced`
 
@@ -894,7 +936,7 @@ Interfaces are the substitution mechanism (no field inheritance, no method confl
 
 ### 10.7 Static members, class-level behavior — `intermediate`
 
-No `static` keyword: class-level behavior lives in module-level functions in the same file as the class (`counter.new` is a `construction`; "static constants" are module constants). Rationale: `static` mutable state is shared mutable state — the exact thing the concurrency model (14) makes painful, so the language does not hand beginners a tool that the rest of the language discourages. Rejected alternative: `shared` members — deferred to M6 if a real need emerges (tracked in doc 10-roadmap open questions).
+No `static` keyword: class-level behavior lives in module-level functions in the same file as the class (construction is spelled `a new counter with step 2`, 10.3; "static constants" are module constants). Rationale: `static` mutable state is shared mutable state — the exact thing the concurrency model (14) makes painful, so the language does not hand beginners a tool that the rest of the language discourages. Rejected alternative: `shared` members — deferred to M6 if a real need emerges (tracked in doc 10-roadmap open questions).
 
 ### 10.8 Operator overloading — `intermediate`
 
@@ -1013,9 +1055,14 @@ attempt divide 10 and 0 if it fails then
     say problem
 otherwise
     say result          # the successful value is bound to `result` here
+
+function read config
+    …
+    attempt open file at path and pass the problem on        # the readable `?` — `intermediate`
 ```
 
 - A function that can fail declares `can fail` (its type includes it, 7.8). `fail with` produces an error value (a `text` at student level; a rich error type at intermediate+, 13.4). The caller *must* handle it: `attempt … if it fails …` (student), `attempt … as problem …` (bind the error under a chosen name), or `attempt … and pass the problem on` (propagate — the `?`-operator's readable form, `intermediate`). Forgetting to handle a `can fail` call is a **compile error** (the Rust/Swift rule, which is the whole point).
+- **`attempt` is an expression** (R-20.1 of doc 11): the bare form evaluates to the success value and makes the function `can fail`; in the `if it fails/otherwise` form it evaluates to the branch's value, so nesting is legal — `(attempt divide 10 and 0) plus 1` — with a lint steering deeply nested attempts toward named intermediate bindings (the same house style as nested combinators). `and pass the problem on` is the statement-shaped propagation shortcut.
 - **The two fixed binding names:** in the `if it fails … otherwise` form, the failure branch binds the error to `problem` and the success branch binds the value to `result` — two fixed names, the Scratch `answer`-block precedent, chosen so the beginner's first error handling needs zero extra syntax. The `as` form binds a custom name when clarity demands it. Shadowing a user's own `result`/`problem` inside these branches is allowed with a student-layer lint (doc 03 owns the exact rule).
 - **Why not exceptions?** (a) Hidden control flow: any line can jump — the hardest thing for beginners to trace and for experts to audit. (b) Transfer: Rust, Go, Swift, Zig, C all use value/explicit error flow; Lagom's mapping to all five is 1:1. (c) Determinism: error propagation is visible in the signature, so "what can this line do?" is answered by reading one line. Exceptions' single advantage (unobtrusive happy path) Lagom buys with the `attempt`-flowing syntax instead.
 - Panics (unrecoverable bugs: assertion failures, overflow traps, OOM) exist separately — they are crashes, not errors, and are not catchable (Go's distinction). A beginner's unhandled failure stops the program with the teaching diagnostic (see doc 09-tooling for the exact format).
@@ -1062,12 +1109,12 @@ Error kinds are ordinary kinds (7.12) — one concept again: students learn tagg
 ```lagom
 start a task
     download "a" to "a.file"
-start another task
+start a task
     download "b" to "b.file"
 wait for all tasks        # optional early join; the region also joins implicitly at scope exit
 ```
 
-Each form is one plain statement — no chaining word, so `and` keeps exactly two jobs (logic, arguments). `start a task` spawns on a work-stealing thread pool; the *region* waits for all spawned tasks at its exit (structured concurrency — the Python trio / Kotlin coroutine-shape guarantee): no orphaned tasks, no detached-thread leaks, cancellation propagates inward. A single `start a task` in a function is implicitly awaited before return unless `in the background` is written (which requires a scope that outlives it — enforced).
+Each spawn is its own `start a task` statement — the form repeats (no `start another task` variant to hardcode the second one); `wait for all tasks` is a single reserved phrase-token (7.15). `start a task` spawns on a work-stealing thread pool; the *region* waits for all spawned tasks at its exit (structured concurrency — the Python trio / Kotlin coroutine-shape guarantee): no orphaned tasks, no detached-thread leaks, cancellation propagates inward. A single `start a task` in a function is implicitly awaited before return unless `in the background` is written (which requires a scope that outlives it — enforced). **Supervision (doc 06 decision):** a failed child fails the region unless the task declares `keep going` — fail-fast by default, matching structured-concurrency precedent.
 
 ### 14.3 Channels — `advanced`
 
@@ -1078,7 +1125,7 @@ start a task
 say receive from messages
 ```
 
-Typed channels (`a channel of text`), blocking and `can wait` variants, closing semantics, `repeat for each message in messages` integration (channels are iterable). Channels + tasks = the Go/Clojure composition, chosen over actor systems as the *default* story because channels compose with structured tasks; actors remain a library pattern (an actor is a task owning state with a channel inbox — stdlib provides it at M3).
+Typed channels (`a channel of text`), blocking and `can wait` variants, closing semantics, `repeat for each message in messages` integration (channels are iterable; explicit close — the loop does not close the channel, doc 06). **Send moves (R-8 of doc 11):** a send transfers ownership — the sender loses access, checker-enforced, and the receiver owns the value. This makes the race-freedom story structural rather than disciplinary: shared mutable state through a channel must be a `shareable` class with `shared`/`guard`ed fields (14.4), never an accident of aliasing. `shareable` classes may be sent as shared references — the Rust Send/Sync split, spelled in student words ("sending gives it away"). Channels + tasks = the Go/Clojure composition, chosen over actor systems as the *default* story because channels compose with structured tasks; actors remain a library pattern (an actor is a task owning state with a channel inbox — stdlib provides it at M3).
 
 ### 14.4 Shared memory and race freedom — `advanced`
 
@@ -1091,8 +1138,10 @@ Safe Lagom has **no data races** — by send/share semantics (the Rust "Send/Syn
 class tally
     has shared count of type number guarded by a lock
     can add one
-        increase count of myself by 1      # lock held automatically for the field access
+        increase count of myself by 1      # the guard is held for the whole method body
 ```
+
+**Lock scope = the method body (R-9 of doc 11).** On any class with `shared` fields, entering a method acquires the guard(s) for the fields it touches, held for the *entire* method; direct field access from outside methods is a compile error. A per-statement lock would admit the classic lost-update race (`make current equal to count of myself` … `set count of myself to current plus 1` as two separate acquisitions) inside the very model that promises no races — so the *method* is the unit of atomicity. Coarse but sound, trivially explainable ("while a tally method runs, nobody else can touch its count"), and it is exactly Java's `synchronized`-method model, which students later meet verbatim. Experts who need finer granularity use explicit locks or atomics (14.5) inside `unsafe`.
 
 The borrow-free beginner path: tasks + channels (message passing). The intermediate path: `shared`+`guard`. The expert path: 14.5. Race conditions are a compile-time category error, not a runtime mystery — the same decision Rust made, with a syntax that starts at message passing.
 
@@ -1153,7 +1202,7 @@ at compile time
     function lookup …
 ```
 
-`at compile time` regions execute at compile time with the full safe language (the Zig comptime insight: **the metaprogramming language is the language** — no second macro language, no template syntax). Compile-time functions can generate types (a function returning a type is a type-level program), unroll loops, build lookup tables, and validate embedded data (parse a regex at compile time, fail the build if invalid). Cost model: compile-time interpreter over the MIR; budgets prevent pathological build times.
+`at compile time` regions execute at compile time with the full safe language (the Zig comptime insight: **the metaprogramming language is the language** — no second macro language, no template syntax). Compile-time functions build lookup tables, unroll loops, and validate embedded data (parse a regex at compile time, fail the build if invalid). **Staged in two tiers** (R-19 of doc 11 — MIR is monomorphized, so it cannot host type-generating programs): **value-level comptime at M3** runs over monomorphized MIR exactly as described here (tables, validation, unrolling); **type-level comptime at M4+** — a function returning a type is a type-level program — runs over a pre-monomorphization IR (HIR) with its own evaluation budget and caching story, designed only after value-level comptime has real users. Cost model per tier: compile-time interpreter with budgets that prevent pathological build times.
 
 ### 16.3 Why not macros? — Decision Log D-18
 
@@ -1182,11 +1231,15 @@ from the C library "libsqlite3"
     function sqlite3 libversion
         returns a C string
 
-attempt sqlite3 libversion as problem
-    fail with problem
-otherwise
-    say result
+function library version
+    returns text
+    can fail
+    unsafe because calling a C library that needs raw string handling
+    make raw equal to sqlite3 libversion
+    give back text from C string raw        # the wrapper converts; C calls return values, not errors
 ```
+
+**C calls return values, period — no magic capability inference** (R-20.4 of doc 11). A C function never implicitly becomes `can fail`; error conversion is *explicit in the wrapper*: the Lagom wrapper declares `can fail`, inspects the C return code, and constructs a Lagom error with `fail with` (or returns the converted value). The caller sees only the readable Lagom API; the unsafe C boundary and the error translation both live in one audited place.
 
 - C declarations are written in Lagom syntax (no separate header language, no bindgen *required* — a `lagom bind` tool that reads C headers and emits Lagom declarations ships at M3 for ergonomics).
 - Type bridge: C `int/long long/double/char*/void*/fn ptr` map to Lagom `C number`/`C decimal`/`C string`/`C pointer`/`C function` types — distinct from safe types, usable only in `unsafe`-adjacent contexts (18.2 defines the exact rules). Strings cross as UTF-8 with explicit ownership marks (`borrowed` vs `owned`).
@@ -1195,7 +1248,17 @@ otherwise
 
 ### 17.3 Being called from C — `advanced`
 
-`export` marks a Lagom function/structure to emit with C ABI (`export function lagom add(a as a C number, b as a C number) returns a C number`), enabling Lagom-built static/shared libraries callable from C, Python (ctypes), Swift, etc. This is also the embedding story (a Lagom runtime library with a C API, the Lua/SQLite model).
+`export` marks a Lagom function/structure to emit with C ABI:
+
+```lagom
+export function lagom add
+    takes a C number called a
+    takes a C number called b
+    returns a C number
+    give back a plus b
+```
+
+This enables Lagom-built static/shared libraries callable from C, Python (ctypes), Swift, etc. This is also the embedding story (a Lagom runtime library with a C API, the Lua/SQLite model).
 
 ### 17.4 OS APIs — `advanced` → `expert`
 
@@ -1231,7 +1294,7 @@ C structure packet header
     is packed to 1 byte
 ```
 
-Fixed-size integer types (`unsigned 8 bit number` … `signed 64 bit number`), explicit endianness for IO types, `is packed to N bytes`, `is aligned to N bytes` on C structures — the complete hardware-layout kit (needed for FFI struct matching, network protocols, and memory-mapped IO). These types are *invalid* in safe student code (the checker rejects them outside `unsafe`/owning regions with a diagnostic explaining why) — the layer system enforced by the compiler, not the docs.
+Fixed-size integer types (`unsigned 8 bit number` … `signed 64 bit number`) and **fixed-size decimals** (`a 32 bit decimal`, `a 64 bit decimal` — the latter an alias of `decimal`; R-21 of doc 11), explicit endianness for IO types, `is packed to N bytes`, `is aligned to N bytes` on C structures — the complete hardware-layout kit (needed for FFI struct matching — C `float`/`double` distinctions — network protocols, and memory-mapped IO). These types are *invalid* in safe student code (the checker rejects them outside `unsafe`/owning regions with a diagnostic explaining why) — the layer system enforced by the compiler, not the docs.
 
 ### 18.4 ABI and calling conventions — `expert`
 
@@ -1241,7 +1304,7 @@ Fixed-size integer types (`unsigned 8 bit number` … `signed 64 bit number`), e
 
 Two mechanisms, mirroring the field's best practice:
 
-1. **Portable vectors:** fixed-size vector types (`4 float numbers packed` — a 128-bit lane type) with element-wise ops; the compiler lowers to NEON/SSE/AVX/RVV as the target allows, and *auto-vectorizes* plain loops regardless (25).
+1. **Portable vectors:** fixed-size vector types (`4 of a 32 bit decimal packed` — a 128-bit lane type; the R-21 element type) with element-wise ops; the compiler lowers to NEON/SSE/AVX/RVV as the target allows, and *auto-vectorizes* plain loops regardless (25).
 2. **Intrinsics:** `cpu intrinsic "pause"`-style named intrinsics per target ISA, valid only in `unsafe` (a registry of intrinsics ships with the compiler, generated from target ISA docs).
 
 No embedded-DSL matrix library in the core language; that is stdlib/package territory (Mojo's lesson: DSLs belong above a clean vector base, not in the grammar).
@@ -1445,7 +1508,7 @@ Full spec: [docs/09-tooling.md](09-tooling.md). One principle drives all of it: 
 
 ### 26.1 The `lagom` CLI (one binary)
 
-`lagom run|build|test|check|fmt|doc|play|new|add|words|explain|profile` — the Go single-binary model; `lagom play` is the REPL (with incremental eval, teaching mode showing inferred types after each line); `lagom explain E1024` prints the full teaching write-up for any error code (docs-in-the-compiler, so explanations ship with the version that emits them).
+`lagom run|build|test|check|fmt|doc|play|new|add|words|explain|profile` — the Go single-binary model; `lagom play` is the REPL (with incremental eval, teaching mode showing inferred types after each line); `lagom explain E0003` prints the full teaching write-up for any error code (docs-in-the-compiler, so explanations ship with the version that emits them).
 
 ### 26.2 Teaching diagnostics (the differentiator)
 
@@ -1479,12 +1542,27 @@ Learn more: run `lagom explain E0003` — "Types describe what values are".
 - **Debugger**: DAP server over LLVM debug info (Cranelift emits full DWARF — it was built for Wasmtime debugging); stepping, scopes, and a *teaching pane* (what changed in this step).
 - **Profiler**: perf/DTrace integration + a Lagom-flavored sampling profiler with task-aware views (per-task timelines, 14); allocation profiling (ARC counts) at M4.
 - **Test runner**: `lagom test` runs `test` blocks (28 of the brief → doc 09), with property-based testing (`try many random … check that …`) and fuzzing (`lagom fuzz`) at M3.
+- **Debugging, as a product of LOM (26.5)**: the dev/release boundary is a *build-mode* fact, not a flag — dev builds instrument (events + provenance + the failure report) and are also fully DAP-debuggable; release builds contain zero LOM code and are bit-identical to non-LOM builds. `lagom run --trace` (interpreter) is the teaching/replay mode. The 90/10 objective is an *engineering target* (the LOM test is its acceptance criterion), never an unconditional guarantee — budgets bound what is recorded, and release behavior is unchanged by design.
 - **Benchmarks**: `lagom bench` (criterion-shaped, with compile-time benchmarks too, 24.3).
 - **Documentation**: `lagom doc` renders doc-comments (`##`) into a static site with *executable examples* (doctest-style — every example in every doc compiles and runs, the Rust lesson).
 
 ### 26.4 Editor support
 
 VS Code extension at M2 (LSP + syntax + snippets); the grammar ships a tree-sitter + textmate definition from M0 so highlighters exist before the LSP does. Educational deployments (Code.org-shaped) get a hosted playground (Wasm backend, 23.4) at M4 — no install is the K-12 on-ramp.
+
+### 26.5 The Lagom Observability Model (LOM) — the 90/10 debugging contract
+
+The brief's goal 5 makes debugging an *explanation* process: the system answers what happened, where, why, what the program was doing, which values caused the failure, where those values came from, how to fix it, and what concept was missed — without the programmer scattering `say` statements. Compile-time diagnostics (26.2) are half of that; **LOM is the runtime half, adopted as a named subsystem with a testable definition** (R-22 of doc 11):
+
+> **LOM test:** any unhandled failure in a dev build must produce a report that names the failing value's origin — without the programmer having added any code.
+
+**Principle: observability is a build mode, not a runtime cost you opt out of. Development builds explain; release builds are silent — bit-identical to non-LOM builds (a tested invariant, like the reproducible-builds rule).**
+
+1. **Dev builds (default) — structured events with provenance.** The MIR instrumentation pass (the pass that already owns every load/store/ARC op, 22.2) emits, *only in dev mode*: function entry/exit with argument snapshots, task spawn/join/cancel events, failure events carrying the full error value, and **value provenance** — every binding records where its value came from (which expression, which earlier binding). Storage is a bounded in-memory ring (fixed budget, oldest evicted — no unbounded recording, ever).
+2. **The failure report (the payoff).** On unhandled failure, the dev runtime prints, from the ring: the call chain in source words, each frame's argument values, and the provenance chain of the failing values — *"bottom was 0, bound at line 12 (`make bottom equal to size of names`); names became empty at line 9 after the `stop`."* Answers 1–7 of the goal from one artifact the student never built. Answer 8 (the concept) comes from the existing `lagom explain` pipeline: the failure's error kind links to its lesson.
+3. **Interpreter mode — full tracing and replay.** `lagom play` and `lagom run --trace` run on the interpreter backend, where per-step value history is free — the teaching mode, and the deterministic-replay story for M0–M2 (re-run the recorded event ring; strict evaluation makes replay deterministic).
+
+**Explicit non-goals:** no always-on production tracing; no value recording in release; no instrumentation-induced heisenbugs. **Ownership:** doc 08 owns the instrumentation pass, ring format, and the release-identity invariant; doc 09 owns the failure-report format (designed and snapshot-tested like diagnostics); doc 06 owns task events; doc 10 schedules M0 (failure report v1 on the interpreter), M2 (MIR instrumentation), M3 (provenance in native dev builds), M4 (replay tooling).
 
 ---
 
@@ -1618,14 +1696,14 @@ Every language above solved *some* of Lagom's problem and paid a named price for
 
 Tracked in doc 10-roadmap.md with decision dates; summarized here:
 
-1. **`either` keyword:** reserved for exclusive-or or delete it? (v0.1 spec freeze)
+1. ~~`either` keyword~~ — **resolved:** deleted at v0.1 (it had no job; reserving unused words is how ambiguity creep starts — doc 11 REJECT list).
 2. **Flow-call fallback:** if the M0 corpus shows ambiguity trouble, does `bigger of a, b` become required for multi-arg flowing calls? (M0 review)
 3. **Type inference depth:** local-only (M0) vs HM-style (M2)? Ship whichever the corpus proves sufficient; HM is the fallback, not the default bet. (D-11)
 4. **Tail-call contract:** best-effort TCO (M0) vs `recursive` keyword guarantee? (M2)
 5. **`export` module re-export semantics** for packages (M3, ecosystem-driven).
 6. **Trademark/legal screening** for the name Lagom before 1.0 (M4).
 7. **String type at the expert layer:** is `text` an ARC'd immutable, or does the owning tier get a byte-buffer string? (M3–M4, memory-model spec doc 05)
-8. **Integer overflow in release:** trap, wrap, or UB-with-poison? Debug is checked either way; release default is the question. (M1, doc 03-semantics)
+8. **Integer overflow in release:** trap, wrap, or UB-with-poison? Debug is checked either way; release default is the question. **Recommendation (D-35):** trap in release too, with explicit wrapping ops at the expert layer — decide with the M1 benchmark datum (doc 03-semantics).
 9. **Package registry governance** (foundation vs single steward) before public launch (M3).
 10. **Windows ARM64 stdlib scope** at M2 (syscall layer breadth).
 11. **Derived capabilities menu** (`can be compared automatically` etc.): exact set at M2 (16.3).
@@ -1659,13 +1737,13 @@ Tracked in doc 10-roadmap.md with decision dates; summarized here:
 
 1. Install one binary (`lagom`) on Linux/macOS (Windows M1).
 2. `lagom new quiz && lagom run` — sub-second build, native binary.
-3. Write, in pure student layer: variables (both kinds), the four arithmetic operators + division words, all comparison words, `and/or/not`, `if/otherwise`, all three loops + `stop`/`next`, lists, maps, pairs, strings with interpolation, functions with `takes`/`returns` clauses, `say`/`ask`, basic `can fail` + `attempt`, `test` + `check that`, `use math for …`.
+3. Write, in pure student layer: variables (both kinds), the four arithmetic operators + division words, all comparison words, `and/or/not`, `if/otherwise`, all three loops + `stop`/`next`, lists, maps, pairs, **structs with `with`-construction and field access (7.11 — the student layer owns them)**, strings with interpolation, functions with `takes`/`returns` clauses, `say`/`ask`, `number from answer` text-parsing (D-39), **`random from 1 to N` (the kernel `random` module's teaching API — the guessing game needs it)**, basic `can fail` + `attempt`, `test` + `check that`, `use math for …`.
 4. Have every mistake answered by a student-mode diagnostic that passes the five-part test (what/where/why/fix/concept).
 5. Ship it: `lagom build` → a binary they can send a friend.
 
 **Explicitly not in M0** (and what M0 must *not* break to allow them later): classes, interfaces, generics beyond `anything`-inference, async/tasks, FFI, unsafe, comptime, packages beyond local modules. **Architecture slots reserved:** capability sets in signatures (7.8), MIR ARC insertion points (22.2), LIR backend interface (22.3), layer tags through HIR (22.1), query-based incrementality (24.2) — each slot has a written contract in the relevant spec doc.
 
-**M0 exit criteria:** the four validation projects (calculator, guessing game, quiz, text adventure) are written, *by non-authors*, in the student layer, with task-completion feedback captured; compile-time budget met (24.1); benchmark-vs-LLVM baseline recorded (D-8); corpus green (lexer/parser/sema/codegen/runtime).
+**M0 exit criteria:** the four validation projects (calculator, guessing game, quiz, text adventure) are written, *by non-authors*, in the student layer, with task-completion feedback captured; **the failure report ships at v1 on the interpreter backend (LOM tier 2, 26.5) and passes the LOM test on the validation projects' seeded failures**; compile-time budget met (24.1); benchmark-vs-LLVM baseline recorded (D-8); corpus green (lexer/parser/sema/codegen/runtime). **M0 is the milestone the consistency pass validated as fully expressible (doc 12): every required program derives from the frozen grammar with no M1+ features.**
 
 ### 33.2 The MVP discipline (brief §33, restated)
 
@@ -1708,6 +1786,16 @@ Every major decision: what was chosen, what was considered, why, and the accepte
 | D-27 | Self-hosting | M5, differential-tested, corpus-as-spec (29) | Self-host at M1 (grand, early); never self-host | Forces real capability exactly when the language is ready; bounded cost | Two compilers during transition (R7) |
 | D-28 | Validation | Real projects at every milestone, by non-authors (33, doc 10) | Benchmarks-only; demos-by-authors | The middle-language trap (R10) is only detectable with real users | Slower milestone cadence (user testing takes calendar time) |
 | D-29 | Data-pipeline chaining | No chaining word at v0.1; pipelines are nested combinator calls or intermediate variables | `applied to` chaining word; Unix-pipe operator | A third call syntax before the need is proven violates the anti-bloat rule (6.3); intermediate variables are readable and teachable | Deeply nested combinators can be harder to read — revisit via 31.13 with real student code |
+| D-30 | Equality semantics | One operator (`is equal to`): structural for values, identity for classes; `same as`/`different from` deleted | Four operators with a structural/identity split; `equal to`=structural + `same as`=identity | Four spellings for two meanings is accidental complexity in the most-used operator; Rust/Swift/Java all converged on this shape (review R-6) | Structural comparison of classes is opt-in via `does comparable` (accepted) |
+| D-31 | Channel send | Send **moves** ownership; `shareable` classes may be sent as shared references | Send shares ARC references (Go-style) | Race freedom must be structural, not disciplinary — shared mutable state through a channel must be explicit (review R-8) | Shared-state-via-channel designs must mark classes `shareable` with `shared`/`guard` fields (accepted; 14.4 is that path) |
+| D-32 | Observability | The Lagom Observability Model (26.5): dev-only structured events with value provenance + the failure report; release builds bit-identical to non-LOM builds | Print-debugging only; always-on tracing | The 90/10 debugging goal needs a runtime half with a testable definition, not an implementation afterthought (review R-22) | MIR instrumentation pass complexity (accepted); dev-build overhead (bounded ring, dev-only) |
+| D-33 | Comptime staging | Value-level comptime at M3 (over monomorphized MIR); type-level comptime at M4+ (over pre-monomorphization IR) | Type-level comptime at M3; comptime interpreter over MIR for everything | MIR is monomorphized and ARC-inserted — it cannot host type-generating programs; interleaving evaluation with type checking is the hardest machinery and waits for evidence of need (review R-19) | Type-generated APIs wait one milestone (accepted; derive clauses cover common boilerplate) |
+| D-34 | Option spelling | `T?` and `a T or nothing` are one type with two canonical costumes; printing an option shows the value or the word `nothing`; standalone `nothing?` deleted | `T?` only; word form only; `nothing?` as the annotation | Two *declared* spellings match the design's two-costumes pattern; the printing rule makes absence a visible lesson (review R-18) | Two spellings to teach as one concept (accepted, stated) |
+| D-35 | Release overflow | Recommendation: trap in release too (like debug), with explicit wrapping ops at the expert layer | Wrap in release (Rust); UB-with-poison | "Overflow honesty" must not be build-mode-dependent — semantics may differ between debug and release in checks, never in results (review R-17) | A branch on arithmetic in hot loops; escapable at the expert layer; confirmed by the M1 benchmark before freezing (31.8) |
+| D-36 | Method invocation | Methods are ordinary calls with the receiver as first argument (`bump c`); no dot syntax; `can` reserved for declarations | `.` member access; `can name of target` call spelling | No post-fix operator keeps the four-symbol operator table and kills chain-syntax pressure; the Go/Lua shape gives the honest transfer sentence "methods take the object first" (review R-2) | `bump c` reads less object-oriented than `c.bump` (accepted) |
+| D-37 | Call grammar | Unified flow-call production with **additive-level arguments**, `with`/`using`/`where` suffixes, bounded lambda bodies; boolean args need parentheses or `where` | Full-expression arguments with greedy `and` | The sentence a human reads and the sentence the compiler parses must be the same — divergence is the failure mode the syntax philosophy exists to prevent (review R-1/R-4) | Comparisons/booleans inside flowing arguments need parens or the `where` suffix (accepted; the ambiguous spelling is a teaching diagnostic, not a misparse) |
+| D-38 | Shared-state locking | Lock scope = the whole method body on classes with `shared` fields; outside-method field access is a compile error | Lock per field access; explicit lock blocks as the intermediate default | Per-statement locks admit the lost-update race inside the model that promises none; the method is the unit of atomicity — Java's `synchronized`-method model (review R-9) | Coarser locks may serialize more than necessary (accepted; experts have atomics and explicit locks) |
+| D-39 | Text↔number | Student-layer API: `number from text` / `decimal from text` (`can fail`) and `text from number`; no `as`-conversion syntax | `as number` conversion syntax; silent coercion | The calculator/guessing-game M0 projects need it; failing parsing composes with the error model the student already knows; `as` stays reserved for the `attempt … as problem` binding (review R-10) | Input handling is explicit from day one (accepted — it previews the error model) |
 
 ---
 

@@ -7,7 +7,8 @@
 
 1. **The `lagom` CLI** — full command reference (`run`, `build`, `test`, `check`, `fmt`, `doc`, `play`, `new`, `add`, `words`, `explain`, `profile`), output contracts, exit codes, and the single-binary distribution model ([§26.1 of 00](00-architecture.md#261-the-lagom-cli-one-binary)).
 2. **Teaching diagnostics specification** — the diagnostic data model (code, spans, labels, helps, notes, concept links), the three verbosity modes (`student`/`normal`/`expert`) with the exact student-mode five-part format (what / where / why / fix / concept — [§26.2 of 00](00-architecture.md#262-teaching-diagnostics-the-differentiator)), the diagnostic review process (content reviewed like API, snapshot-tested like code), and the `lagom explain` content model with its concepts glossary.
-3. **Formatter** — the canonical style (4-space, zero-config beyond indentation width, gofmt lesson), the lossless-AST round-trip contract, and idempotency guarantees ([§26.3 of 00](00-architecture.md#263-the-rest-of-the-faculty)).
+3. **The LOM failure report (D-32, R-22)** — the runtime half of the teaching system ([00 §26.5](00-architecture.md#265-the-lagom-observability-model-lom--the-9010-debugging-contract)): the report format (call chain in source words, per-frame argument values, the provenance chain of the failing values, the concept link via `lagom explain`) designed and snapshot-tested exactly like diagnostics; **the LOM test is the acceptance criterion — any unhandled failure in a dev build produces a report naming the failing value's origin, with zero programmer-added code**; ships at v1 on the interpreter backend (M0 gate item).
+4. **Formatter** — the canonical style (4-space, zero-config beyond indentation width, gofmt lesson), the lossless-AST round-trip contract, and idempotency guarantees ([§26.3 of 00](00-architecture.md#263-the-rest-of-the-faculty)).
 4. **LSP specification** — hover in student words (inferred types), layer-aware completions (student projects get no `unsafe` completions), diagnostics reuse (21.4), goto-def/find-refs/rename over multi-word names ([§7.0.3 of 00](00-architecture.md#703-multi-word-name-disambiguation-the-main-ambiguity-risk)), and incremental-sync strategy.
 5. **Debugger** — DAP server over Cranelift/LLVM debug info, the teaching pane (per-step change summaries), breakpoint/stepping semantics with async tasks and channels ([§26.3 of 00](00-architecture.md#263-the-rest-of-the-faculty), doc 06).
 6. **Profiler** — sampling profiler with per-task views (doc 06), allocation/ARC profiling at M4, perf/DTrace integration, `lagom bench` methodology and compile-time benchmarks ([§24.3 of 00](00-architecture.md#243-compile-speed-regression-is-a-release-blocker)).
@@ -19,6 +20,7 @@
 ## Decisions inherited from 00 (binding here)
 
 - D-22 (all tools are compiler-library clients), D-28 (diagnostics and tooling validated with real users from M0), the layers-as-checks rule applied to editor completions ([§0 of 00](00-architecture.md#0-how-to-read-this-document-layers)).
+- **From the design review (doc 11), applied 2026-09:** D-32 — the failure-report format is a designed, snapshot-tested artifact (LOM tier 2) and an M0 gate item; error-code examples unify on the `E0003`-style form (`E1024`-style examples are stale).
 
 ## Open questions
 

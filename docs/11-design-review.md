@@ -1,6 +1,7 @@
 # Lagom — Architecture Adversarial Review & Design Stress Test
 
 *Status: complete. Review of [00-architecture.md](00-architecture.md) v0.1.0-draft and phase stubs 01–10, performed before any implementation begins.*
+*Update (2026-09, post-review): the approved subset of §18 is **applied** — R-1, R-2, R-3, R-4, R-5, R-6, R-7, R-8, R-9, R-10, R-11, R-12, R-20, R-21, R-22, R-23 across 00 and docs 01–10, recorded as decisions D-30…D-39 in [§34 of 00](00-architecture.md#34-decision-log). The remaining §18 items and the INVESTIGATE list await the re-review/freeze step.*
 *Method: every criticism below was tested against the actual document text and the §7.15 grammar sketch. Examples marked **⚠** are quotations from the current documents that are *not derivable* from the grammar — they are cited as defects, not proposed syntax. Nothing here proposes AI parsing or natural-language freedom; every proposed fix is a small deterministic grammar or specification change.*
 
 Issue IDs (`R-1` … `R-24`) are referenced by the [verdict](#17-final-verdict) and the [recommended revisions](#18-recommended-architecture-revision).

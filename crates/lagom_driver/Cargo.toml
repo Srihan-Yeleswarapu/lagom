@@ -1,0 +1,16 @@
+[package]
+name = "lagom_driver"
+version.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+[dependencies]
+lagom_diagnostics.workspace = true
+lagom_parser.workspace = true
+lagom_sema.workspace = true
+lagom_hir.workspace = true
+lagom_mir.workspace = true
+lagom_lir.workspace = true
+lagom_codegen.workspace = true
+lagom_interp.workspace = true
+lagom_lom.workspace = true
