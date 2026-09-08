@@ -38,11 +38,15 @@ jobs:
 
       - name: Smoke-test the CLI
         shell: bash
+        # GITHUB_PATH does not apply within the writing step itself, so the
+        # freshly built binary is invoked by path here (the validate step
+        # below can rely on GITHUB_PATH — it is a separate step).
         run: |
-          echo "$(pwd)/target/release" >> "$GITHUB_PATH"
-          lagom version
-          lagom check validation/smoke.lagom
-          lagom fmt validation/smoke.lagom
+          LAGOM="$(pwd)/target/release/lagom"
+          [ "$RUNNER_OS" = "Windows" ] && LAGOM="$(pwd)/target/release/lagom.exe"
+          "$LAGOM" version
+          "$LAGOM" check validation/smoke.lagom
+          "$LAGOM" fmt validation/smoke.lagom
 
       - name: Stage the artifact (Windows)
         if: runner.os == 'Windows'
