@@ -1,0 +1,34 @@
+# Guessing game — an M0 validation program (00 §33.1).
+#
+# The computer picks a secret number; you guess until you find it. Too low or
+# too high tells you which way to move. `random from 1 to 100` seeds the game;
+# `number from` parses the guess and `attempt` keeps a typo from crashing it.
+
+function read guess
+    takes number called turn
+    returns a number
+    can fail
+    make answer equal to ask "guess {turn}: "
+    give back attempt number from answer
+
+make secret equal to random from 1 to 100
+make changing guesses equal to 0
+make changing found equal to false
+make changing guess equal to 0
+
+repeat while found is equal to false
+    increase guesses by 1
+    attempt read guess (guesses) if it fails then
+        say "that was not a number — try again"
+        decrease guesses by 1
+    otherwise
+        set guess to result
+        if guess is equal to secret
+            say "correct!"
+            set found to true
+        otherwise if guess is less than secret
+            say "too low"
+        otherwise
+            say "too high"
+
+say "you found it in {guesses} guesses!"

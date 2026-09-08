@@ -1,0 +1,42 @@
+# Text adventure — an M0 validation program (00 §33.1).
+#
+# Three rooms; you walk until you reach the treasure. Rooms are structures in
+# a map keyed by name; the lamp-oil meter bounds the game. `use math for
+# floor` brings in the module form the student layer owns.
+
+use math for floor
+
+structure room
+    has name of type text
+    has description of type text
+    has north of type text
+
+make halls equal to a map from "entrance" to a room with name "entrance" and description "a dusty entrance hall" and north "library", "library" to a room with name "library" and description "shelves and one creaky ladder" and north "vault", "vault" to a room with name "vault" and description "a locked iron door" and north ""
+
+make changing where equal to "entrance"
+make changing lamp oil equal to 10
+make changing treasure found equal to false
+
+repeat while treasure found is equal to false
+    make here equal to halls at where
+    say "you are in the {name of here} — {description of here}"
+    decrease lamp oil by 1
+    if lamp oil is at most 0
+        say "your lamp goes out. the dark wins."
+        stop
+    make move equal to ask "go north, or look? "
+    if move is equal to "north"
+        make going north equal to north of here
+        if going north is equal to ""
+            say "there is no door that way."
+        otherwise if going north is equal to "vault"
+            say "the vault! the treasure is yours."
+            set treasure found to true
+        otherwise
+            set where to going north
+    otherwise if move is equal to "look"
+        say "you see dust, and a door north."
+    otherwise
+        say "you cannot do that."
+
+say "the end."

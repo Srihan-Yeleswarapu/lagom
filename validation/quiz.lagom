@@ -1,0 +1,27 @@
+# Quiz — an M0 validation program (00 §33.1).
+#
+# Three questions; the score counts correct answers. Questions live in a list,
+# answers in a map — the collection shapes the student layer owns (7.6).
+
+structure question
+    has prompt of type text
+    has answer of type text
+
+function ask one
+    takes question called card
+    returns a boolean
+    make reply equal to ask "{prompt of card} "
+    give back reply is equal to answer of card
+
+make cards equal to a list of a question with prompt "What is 7 plus 5?" and answer "12", a question with prompt "Capital of France?" and answer "paris", a question with prompt "What is 3 times 4?" and answer "12"
+
+make changing score equal to 0
+
+repeat for each card in cards
+    if ask one card
+        increase score by 1
+        say "correct!"
+    otherwise
+        say "not quite."
+
+say "you scored {score} out of {size of cards}"

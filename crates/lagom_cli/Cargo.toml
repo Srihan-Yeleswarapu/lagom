@@ -1,0 +1,16 @@
+[package]
+name = "lagom_cli"
+version.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+[[bin]]
+name = "lagom"
+path = "src/main.rs"
+
+[dependencies]
+lagom_driver.workspace = true
+lagom_interp.workspace = true
+lagom_diagnostics.workspace = true
+lagom_parser.workspace = true
+lagom_ast.workspace = true

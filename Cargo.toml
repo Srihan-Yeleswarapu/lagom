@@ -1,0 +1,48 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/lagom_diagnostics",
+    "crates/lagom_lexer",
+    "crates/lagom_ast",
+    "crates/lagom_parser",
+    "crates/lagom_sema",
+    "crates/lagom_hir",
+    "crates/lagom_mir",
+    "crates/lagom_lom",
+    "crates/lagom_interp",
+    "crates/lagom_lir",
+    "crates/lagom_codegen",
+    "crates/lagom_rt",
+    "crates/lagom_driver",
+    "crates/lagom_cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+lagom_diagnostics = { path = "crates/lagom_diagnostics" }
+lagom_lexer = { path = "crates/lagom_lexer" }
+lagom_ast = { path = "crates/lagom_ast" }
+lagom_parser = { path = "crates/lagom_parser" }
+lagom_sema = { path = "crates/lagom_sema" }
+lagom_hir = { path = "crates/lagom_hir" }
+lagom_mir = { path = "crates/lagom_mir" }
+lagom_lom = { path = "crates/lagom_lom" }
+lagom_interp = { path = "crates/lagom_interp" }
+lagom_lir = { path = "crates/lagom_lir" }
+lagom_codegen = { path = "crates/lagom_codegen" }
+lagom_rt = { path = "crates/lagom_rt" }
+lagom_driver = { path = "crates/lagom_driver" }
+
+cranelift = "0.122"
+cranelift-module = "0.122"
+cranelift-object = "0.122"
+cranelift-native = "0.122"
+object = { version = "0.37", default-features = false, features = ["write_std", "read_core"] }
+target-lexicon = "0.13"
+
+[profile.release]
+debug = true

@@ -1,0 +1,10 @@
+[package]
+name = "lagom_rt"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+lagom_mir.workspace = true

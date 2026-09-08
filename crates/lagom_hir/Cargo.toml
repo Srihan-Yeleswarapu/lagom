@@ -1,0 +1,9 @@
+[package]
+name = "lagom_hir"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+lagom_ast.workspace = true
+lagom_sema.workspace = true
+lagom_diagnostics.workspace = true
