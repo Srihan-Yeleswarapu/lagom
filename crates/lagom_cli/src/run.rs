@@ -1,7 +1,7 @@
 //! `lagom run` and `lagom build`: the two native-backend commands. They
 //! share one helper for the source → (stem, dev) → executable plumbing.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::args::{
     has_flag, read_source, read_stdin_lines, render_failure, report_outcome, source_path, CliError,
