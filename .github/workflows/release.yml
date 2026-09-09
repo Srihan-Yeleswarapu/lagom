@@ -58,10 +58,12 @@ jobs:
           "$LAGOM" fmt validation/smoke.lagom
 
       - name: Stage the artifact (Windows)
-        # Bash, not pwsh: this runner's pwsh silently skipped the stamp
-        # write once already; the bash staging is byte-for-byte the same
-        # script the Unix jobs prove, and System32's bsdtar makes the zip
-        # (-a picks the format from the extension).
+        # Bash staging (pwsh silently skipped the stamp write once), but
+        # the *zip itself* must come from Compress-Archive: bsdtar's zip
+        # layout makes Windows Explorer's extractor reject the archive
+        # ("invalid"), while Info-ZIP unzip reads it fine — only half the
+        # users could open it. Compress-Archive is the .NET zipper Explorer
+        # itself uses, so it can't disagree with Explorer.
         if: runner.os == 'Windows'
         shell: bash
         run: |
@@ -74,7 +76,10 @@ jobs:
             mkdir -p stage/lib/lagom/src/$c
             cp crates/$c/src/lib.rs stage/lib/lagom/src/$c/lib.rs
           done
-          /c/Windows/System32/tar.exe -a -cf lagom-Windows.zip -C stage .
+      - name: Zip the staged artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path stage/* -DestinationPath lagom-Windows.zip -Force
 
       - name: Stage the artifact (Unix)
         if: runner.os != 'Windows'
