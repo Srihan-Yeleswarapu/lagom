@@ -106,7 +106,7 @@ fn workspace_rlib() -> Result<(PathBuf, PathBuf), String> {
         .map(|rm| runtime_sources().iter().any(|s| mtime(s).map(|sm| sm > rm).unwrap_or(true)))
         .unwrap_or(true);
     if !rlib.exists() || stale {
-        build_runtime(&workspace, &rt_dir);
+        build_runtime(&workspace, env!("LAGOM_RT_PROFILE"), &rt_dir)?;
     }
     if rlib.exists() {
         return Ok((rlib, rt_dir.join("deps")));
@@ -131,20 +131,68 @@ fn mtime(p: &Path) -> Option<std::time::SystemTime> {
     std::fs::metadata(p).and_then(|m| m.modified()).ok()
 }
 
-fn build_runtime(workspace: &Path, target_dir: &Path) {
-    // Quiet, best-effort; failures surface as the not-found error above.
-    // `CARGO_TARGET_DIR` already names the profile subdirectory
-    // (`target/lagom-rt/debug`), and cargo appends its own `debug`/`release`
-    // — so point it one level up and let cargo do the layout.
+/// Build the runtime rlib in the *matching* profile — a release `lagom`
+/// binary must never be handed a debug rlib, and vice versa. The build is
+/// quiet but not blind: on failure the compiler's own message surfaces in
+/// the driver error, so a broken toolchain is diagnosable from the CLI
+/// error alone. After a successful build the bundled copy next to the
+/// binary (`<exe dir>/lib/lagom/`, §26.1) is refreshed best-effort, so an
+/// installed `lagom` keeps working after the source checkout is deleted.
+fn build_runtime(workspace: &Path, profile: &str, target_dir: &Path) -> Result<(), String> {
+    // `CARGO_TARGET_DIR` names the profile subdirectory's parent and cargo
+    // appends its own `debug`/`release` — point it one level up.
     let parent = target_dir
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| target_dir.to_path_buf());
-    let _ = Command::new("cargo")
-        .args(["build", "-p", "lagom_rt"])
+    let mut cmd = Command::new("cargo");
+    cmd.args(["build", "-p", "lagom_rt"]);
+    if profile == "release" {
+        cmd.arg("--release");
+    }
+    let output = cmd
         .env("CARGO_TARGET_DIR", parent)
         .current_dir(workspace)
-        .output();
+        .output()
+        .map_err(|e| format!("could not run cargo to build the runtime: {e}"))?;
+    if !output.status.success() {
+        let tail = String::from_utf8_lossy(&output.stderr);
+        let tail: Vec<&str> = tail.lines().rev().take(6).collect();
+        let tail = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
+        return Err(format!(
+            "the Lagom runtime library could not be built (cargo build -p lagom_rt failed):\n{tail}"
+        ));
+    }
+    refresh_bundle(target_dir);
+    Ok(())
+}
+
+/// Copy a freshly built runtime into the bundle next to this binary,
+/// best-effort: the workspace build keeps working if the exe dir is not
+/// writable or the layout is unexpected.
+fn refresh_bundle(rt_dir: &Path) {
+    let Some(exe_dir) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+    else {
+        return;
+    };
+    if exe_dir.starts_with(rt_dir.parent().unwrap_or(rt_dir)) {
+        // Inside our own target dir (a workspace run) — no bundle needed.
+        return;
+    }
+    let lib_dir = exe_dir.join("lib/lagom");
+    let Ok(_) = std::fs::create_dir_all(lib_dir.join("deps")) else {
+        return;
+    };
+    let _ = std::fs::copy(rt_dir.join("liblagom_rt.rlib"), lib_dir.join("liblagom_rt.rlib"));
+    if let Ok(entries) = std::fs::read_dir(rt_dir.join("deps")) {
+        for entry in entries.flatten() {
+            if entry.path().extension().is_some_and(|e| e == "rlib") {
+                let _ = std::fs::copy(entry.path(), lib_dir.join("deps").join(entry.file_name()));
+            }
+        }
+    }
 }
 
 /// Link a Lagom object into an executable. `build_dir` receives the shim
@@ -172,7 +220,7 @@ pub fn link(build_dir: &Path, object: &[u8], out: &Path, no_pdb: bool) -> Result
         .args(["-L", &format!("dependency={}", deps_dir.display())])
         .args(["-C", "opt-level=2"])
         .args(["-C", "debuginfo=0"])
-        .args(if no_pdb {
+        .args(if no_pdb && cfg!(windows) {
             ["-C", "link-arg=/DEBUG:NONE"].as_slice()
         } else {
             &[][..]
