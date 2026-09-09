@@ -197,8 +197,11 @@ jobs:
         run: |
           ROOT="$HOME/lagom"
           [ "$RUNNER_OS" = "Windows" ] && L="$ROOT/lagom.exe" || L="$ROOT/lagom"
+          # Exactly the page's flow: from any scratch directory the user
+          # happens to be in (steps don't share cwd — like a fresh shell).
+          mkdir -p "$HOME/projects" && cd "$HOME/projects"
           "$L" new hello
-          cd "$ROOT/hello"
+          cd hello
           echo you | "$L" run | grep "Hello, you!"
 
       - name: A rustc that didn't build the package (snapshot rebuild)
