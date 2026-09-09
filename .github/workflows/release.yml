@@ -134,6 +134,13 @@ jobs:
           sha256sum lagom-Windows.zip lagom-Linux.tar.gz lagom-macOS.tar.gz > sha256sums.txt
           cat sha256sums.txt
 
+      - name: Build the release notes
+        # Stamp the template with the tag name (the template's __VERSION__
+        # marker) so every release ships the same install guide.
+        run: |
+          sed 's/__VERSION__/'"$GITHUB_REF_NAME"'/g' \
+            .github/release-notes-template.md > release-notes.md
+
       - name: Create the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -141,5 +148,5 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" \
             --title "Lagom $GITHUB_REF_NAME" \
-            --notes "Packages for Windows (zip), Linux and macOS (tar.gz). Each archive contains the lagom binary plus the bundled runtime in lib/lagom — unpack, put it on your PATH, and run. sha256sums.txt verifies the downloads." \
+            --notes-file release-notes.md \
             || gh release upload "$GITHUB_REF_NAME" dist/* --clobber --repo "$GITHUB_REPOSITORY"
