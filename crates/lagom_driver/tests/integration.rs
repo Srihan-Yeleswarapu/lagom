@@ -407,3 +407,27 @@ fn assert_says_release(name: &str, src: &str, want: &[&str]) {
     let lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(lines, want);
 }
+
+// The friend flow (33.1's day-one gate): the runtime self-build must produce
+// a rlib in the *matching* profile. A release-compiled driver with a cold
+// `target/lagom-rt/release` cache used to build a debug rlib and then fail
+// to find it, breaking every `cargo install`-style use of the compiler.
+#[test]
+fn release_driver_self_builds_the_runtime_from_a_cold_cache() {
+    // Prove the release rlib really is absent, so the test exercises the
+    // self-build rather than a warm cache.
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let rt_rlib = Path::new(manifest)
+        .join("../../target/lagom-rt/release/liblagom_rt.rlib");
+    let saved = std::fs::rename(&rt_rlib, rt_rlib.with_extension("rlib.saved"));
+    let result = std::panic::catch_unwind(|| {
+        assert_says_release("cold_release", "say 5 plus 5", &["10"]);
+    });
+    // Restore whatever we moved, even on failure.
+    if saved.is_ok() {
+        let _ = std::fs::rename(rt_rlib.with_extension("rlib.saved"), &rt_rlib);
+    }
+    if let Err(e) = result {
+        std::panic::resume_unwind(e);
+    }
+}
