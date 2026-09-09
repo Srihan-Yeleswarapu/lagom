@@ -1,9 +1,14 @@
 name: release
 
-# Build the `lagom` CLI release artifacts: on every push to main (smoke —
-# Windows only, the fast path) and full matrix on tags and manual dispatch.
-# On a `v*` tag the publish job attaches the three validated packages plus
-# sha256 checksums to a GitHub Release (doc 09's tooling story).
+# Build the `lagom` CLI release artifacts: full matrix on every push to
+# main, tags, and manual dispatch. On a `v*` tag the publish job attaches
+# the three validated packages plus sha256 checksums to a GitHub Release
+# (doc 09's tooling story).
+#
+# install-test then plays the user: nothing but the downloaded package (no
+# checkout, no Rust toolchain), executing the release page's printed
+# instructions step by step on all three OSes. Publishing waits for it, so
+# a release only appears once its own install guide has been run by CI.
 
 on:
   push:
@@ -68,6 +73,15 @@ jobs:
           cp target/lagom-rt/release/deps/*.rlib stage/lib/lagom/deps/
           tar czf lagom-${{ runner.os }}.tar.gz -C stage .
 
+      - name: Checksum the package (sha256)
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Windows) sha256sum lagom-Windows.zip > lagom-Windows.zip.sha256 ;;
+            macOS)   sha256sum lagom-macOS.tar.gz > lagom-macOS.tar.gz.sha256 ;;
+            Linux)   sha256sum lagom-Linux.tar.gz > lagom-Linux.tar.gz.sha256 ;;
+          esac
+
       - name: Validate the staged artifact
         shell: bash
         # GITHUB_PATH applies to later steps, not the one writing it — so
@@ -96,6 +110,7 @@ jobs:
             lagom-Windows.zip
             lagom-Linux.tar.gz
             lagom-macOS.tar.gz
+            lagom-*.sha256
           if-no-files-found: error
 
   test:
@@ -111,12 +126,106 @@ jobs:
       - name: Run the test suite
         run: cargo test --workspace
 
+  install-test:
+    name: release-page install (${{ matrix.os }})
+    # Play the user from the release page with nothing but the package: no
+    # checkout, no Rust toolchain. Every printed instruction is executed —
+    # sha256 verify, unpack anywhere, run from the folder, the day-one
+    # `lagom new` flow, the warned-about exe-without-lib mistake, and the
+    # optional PATH step ("reopen the terminal" = the next step's env).
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Download the package for this OS
+        uses: actions/download-artifact@v4
+        with:
+          name: lagom-${{ matrix.os }}
+
+      - name: Verify the download (sha256)
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Windows) PKG=lagom-Windows.zip ;;
+            macOS)   PKG=lagom-macOS.tar.gz ;;
+            Linux)   PKG=lagom-Linux.tar.gz ;;
+          esac
+          sha256sum -c "$PKG.sha256"
+
+      - name: Unpack anywhere (keep lagom and lib together)
+        shell: bash
+        run: |
+          mkdir -p "$HOME/lagom"
+          case "$RUNNER_OS" in
+            Windows) unzip -q lagom-Windows.zip -d "$HOME/lagom" ;;
+            macOS)   tar xzf lagom-macOS.tar.gz -C "$HOME/lagom" ;;
+            Linux)   tar xzf lagom-Linux.tar.gz -C "$HOME/lagom" ;;
+          esac
+          ls "$HOME/lagom"
+
+      - name: Run from the folder (before any PATH)
+        shell: bash
+        run: |
+          cd "$HOME/lagom"
+          [ "$RUNNER_OS" = "Windows" ] && L=./lagom.exe || L=./lagom
+          "$L" version
+          printf 'say "hello from the package"\n' > smoke.lagom
+          "$L" run smoke.lagom | grep "hello from the package"
+          "$L" build smoke.lagom -o smoke-built
+          ./smoke-built
+
+      - name: Day one (lagom new → cd → lagom run)
+        shell: bash
+        run: |
+          ROOT="$HOME/lagom"
+          [ "$RUNNER_OS" = "Windows" ] && L="$ROOT/lagom.exe" || L="$ROOT/lagom"
+          "$L" new hello
+          cd "$ROOT/hello"
+          echo you | "$L" run | grep "Hello, you!"
+
+      - name: The warned-about mistake (exe without its lib)
+        shell: bash
+        run: |
+          mkdir -p "$HOME/lagom-bare"
+          [ "$RUNNER_OS" = "Windows" ] && BIN=lagom.exe || BIN=lagom
+          cp "$HOME/lagom/$BIN" "$HOME/lagom-bare/"
+          printf 'say "hi"\n' > "$HOME/lagom-bare/t.lagom"
+          if "$HOME/lagom-bare/$BIN" run "$HOME/lagom-bare/t.lagom"; then
+            echo "native run worked without the bundled runtime — the lib rule is not enforced"
+            exit 1
+          fi
+          # the interpreter path needs no runtime at all
+          "$HOME/lagom-bare/$BIN" run --trace "$HOME/lagom-bare/t.lagom" > /dev/null
+
+      - name: Add the folder to PATH (the page's optional step)
+        shell: bash
+        run: |
+          if command -v cygpath >/dev/null 2>&1; then
+            DIR="$(cygpath -w "$HOME/lagom")"
+          else
+            DIR="$HOME/lagom"
+          fi
+          echo "$DIR" >> "$GITHUB_PATH"
+
+      - name: Plain lagom from anywhere (the reopened terminal)
+        shell: bash
+        run: |
+          cd "$HOME"
+          lagom version
+          lagom new hello2
+          cd hello2
+          echo you | lagom run | grep "Hello, you!"
+
   publish:
     name: publish (GitHub Release)
     # Only a tag publishes. Every package was already machine-validated by
-    # the build job's "Validate the staged artifact" step, so what lands on
-    # the release page is proven to compile and run Lagom programs.
-    needs: build
+    # the build job's "Validate the staged artifact" step, and install-test
+    # has executed the release page's instructions end to end on all three
+    # OSes — so what lands on the page is proven to work exactly as printed.
+    needs: [build, install-test]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -145,8 +254,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* \
+          # Explicit assets: the per-OS *.sha256 files stay out of the page
+          # (the combined sha256sums.txt is the one checksum file users see).
+          gh release create "$GITHUB_REF_NAME" \
+            dist/lagom-Windows.zip dist/lagom-Linux.tar.gz dist/lagom-macOS.tar.gz dist/sha256sums.txt \
             --repo "$GITHUB_REPOSITORY" \
             --title "Lagom $GITHUB_REF_NAME" \
             --notes-file release-notes.md \
-            || gh release upload "$GITHUB_REF_NAME" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+            || gh release upload "$GITHUB_REF_NAME" \
+              dist/lagom-Windows.zip dist/lagom-Linux.tar.gz dist/lagom-macOS.tar.gz dist/sha256sums.txt \
+              --clobber --repo "$GITHUB_REPOSITORY"
