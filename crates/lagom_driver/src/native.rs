@@ -149,7 +149,7 @@ fn build_runtime(workspace: &Path, target_dir: &Path) {
 
 /// Link a Lagom object into an executable. `build_dir` receives the shim
 /// and the object; the result is the executable path.
-pub fn link(build_dir: &Path, object: &[u8], out: &Path) -> Result<PathBuf, String> {
+pub fn link(build_dir: &Path, object: &[u8], out: &Path, no_pdb: bool) -> Result<PathBuf, String> {
     std::fs::create_dir_all(build_dir).map_err(|e| format!("build dir: {e}"))?;
     // The `-o` path's parent may not exist yet (`lagom build -o out/x`).
     if let Some(parent) = out.parent() {
@@ -172,6 +172,11 @@ pub fn link(build_dir: &Path, object: &[u8], out: &Path) -> Result<PathBuf, Stri
         .args(["-L", &format!("dependency={}", deps_dir.display())])
         .args(["-C", "opt-level=2"])
         .args(["-C", "debuginfo=0"])
+        .args(if no_pdb {
+            ["-C", "link-arg=/DEBUG:NONE"].as_slice()
+        } else {
+            &[][..]
+        })
         .arg("-o")
         .arg(out)
         .status()
@@ -226,5 +231,5 @@ pub fn build_native(src: &str, out: &Path, dev: bool, no_pdb: bool) -> Result<Pa
         .to_string();
     let dir = NativeBuild::new(&label)
         .map_err(|e| FrontendError::Tool(format!("preparing the build: {e}")))?;
-    link(&dir.dir, &object, out).map_err(FrontendError::Tool)
+    link(&dir.dir, &object, out, no_pdb).map_err(FrontendError::Tool)
 }
