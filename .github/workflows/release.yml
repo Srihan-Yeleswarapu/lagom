@@ -65,7 +65,7 @@ jobs:
           Copy-Item target/release/lagom.exe stage/
           Copy-Item target/lagom-rt/release/liblagom_rt.rlib stage/lib/lagom/
           Copy-Item target/lagom-rt/release/deps/*.rlib stage/lib/lagom/deps/
-          Set-Content -Encoding ascii -NoNewline stage/lib/lagom/rustc.txt (rustc --version)
+          Set-Content -Encoding ascii -NoNewline stage/lib/lagom/rustc.txt "$(rustc --version)"
           New-Item -ItemType Directory -Force -Path stage/lib/lagom/src | Out-Null
           foreach ($c in 'lagom_diagnostics','lagom_ast','lagom_sema','lagom_hir','lagom_mir','lagom_rt') {
             New-Item -ItemType Directory -Force -Path stage/lib/lagom/src/$c | Out-Null
