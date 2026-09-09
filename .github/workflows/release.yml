@@ -37,6 +37,10 @@ jobs:
         run: cargo build --release -p lagom_cli
 
       - name: Build the runtime rlib for bundling
+        # The rlib is rustc-version-specific (E0514 under any other rustc),
+        # so the staged runtime also carries its stamp and the snapshot
+        # sources — a user whose rustc differs gets a one-time rebuild from
+        # the sources (see install-test below for the proof).
         run: cargo build --release -p lagom_rt
         env:
           CARGO_TARGET_DIR: target/lagom-rt
@@ -61,6 +65,12 @@ jobs:
           Copy-Item target/release/lagom.exe stage/
           Copy-Item target/lagom-rt/release/liblagom_rt.rlib stage/lib/lagom/
           Copy-Item target/lagom-rt/release/deps/*.rlib stage/lib/lagom/deps/
+          Set-Content -Encoding ascii -NoNewline stage/lib/lagom/rustc.txt (rustc --version)
+          New-Item -ItemType Directory -Force -Path stage/lib/lagom/src | Out-Null
+          foreach ($c in 'lagom_diagnostics','lagom_ast','lagom_sema','lagom_hir','lagom_mir','lagom_rt') {
+            New-Item -ItemType Directory -Force -Path stage/lib/lagom/src/$c | Out-Null
+            Copy-Item crates/$c/src/lib.rs stage/lib/lagom/src/$c/lib.rs
+          }
           Compress-Archive -Path stage/* -DestinationPath lagom-Windows.zip
 
       - name: Stage the artifact (Unix)
@@ -71,6 +81,11 @@ jobs:
           cp target/release/lagom stage/
           cp target/lagom-rt/release/liblagom_rt.rlib stage/lib/lagom/
           cp target/lagom-rt/release/deps/*.rlib stage/lib/lagom/deps/
+          rustc --version | tr -d '\r\n' > stage/lib/lagom/rustc.txt
+          for c in lagom_diagnostics lagom_ast lagom_sema lagom_hir lagom_mir lagom_rt; do
+            mkdir -p stage/lib/lagom/src/$c
+            cp crates/$c/src/lib.rs stage/lib/lagom/src/$c/lib.rs
+          done
           tar czf lagom-${{ runner.os }}.tar.gz -C stage .
 
       - name: Checksum the package (sha256)
@@ -185,6 +200,26 @@ jobs:
           "$L" new hello
           cd "$ROOT/hello"
           echo you | "$L" run | grep "Hello, you!"
+
+      - name: A rustc that didn't build the package (snapshot rebuild)
+        # The E0514 scenario: the bundled rlib was built by CI's rustc. If
+        # this runner's rustc differs, the first run above already rebuilt
+        # from the shipped snapshot sources — assert that happened. If the
+        # rustcs matched, force the same path by removing the stamp (exactly
+        # what a version mismatch makes the driver conclude), rerun, and
+        # assert the self-built runtime appears and the run still works.
+        shell: bash
+        run: |
+          cd "$HOME/lagom"
+          [ "$RUNNER_OS" = "Windows" ] && L=./lagom.exe || L=./lagom
+          if [ ! -f lib/lagom/built/release/liblagom_rt.rlib ]; then
+            rm lib/lagom/rustc.txt
+            "$L" run smoke.lagom | grep "hello from the package"
+          fi
+          test -f lib/lagom/built/release/liblagom_rt.rlib
+          test -f lib/lagom/built/release/rustc.txt
+          # now instant: the self-built runtime is reused
+          "$L" run smoke.lagom | grep "hello from the package"
 
       - name: The warned-about mistake (exe without its lib)
         shell: bash
