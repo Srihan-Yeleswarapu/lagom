@@ -63,7 +63,7 @@ pub fn cmd_run(rest: &[String]) -> CliResult {
     let object = compiled.object;
     let exe_name = if cfg!(windows) { format!("{}.exe", req.stem) } else { req.stem };
     let exe = build.dir.join(exe_name);
-    lagom_driver::link(&build.dir, &object, &exe)
+    lagom_driver::link(&build.dir, &object, &exe, !req.want_pdb)
         .map_err(|e| CliError::Message(format!("linking failed: {e}")))?;
 
     let status = std::process::Command::new(&exe)

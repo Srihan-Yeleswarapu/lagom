@@ -52,6 +52,7 @@ use cranelift::codegen::Context;
 use cranelift::codegen::isa::CallConv;
 use cranelift::prelude::*;
 use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
+use cranelift_object::ObjectBuilder;
 use cranelift_object::ObjectModule;
 
 use lagom_lir::{
@@ -82,6 +83,13 @@ fn verify_flags() -> &'static settings::Flags {
 ///
 /// PDB generation is controlled at the object-backend level, not by a
 /// Cranelift codegen setting.
+///
+/// The default for end-user builds is `no_pdb = true`: users should not see
+/// debug-info files unless they explicitly ask for them with `--pdb`.
+///
+/// PDB generation is controlled at the link step via the `/DEBUG:NONE` linker
+/// flag on Windows when `no_pdb = true`; the object backend leaves debug-info
+/// flags at their default on all platforms.
 pub fn compile(lir: &LirProgram, source: &str, dev: bool, _no_pdb: bool) -> Result<Vec<u8>, String> {
     let mut sb = settings::builder();
     // Position-independent code: the object is linked by the platform linker
@@ -97,12 +105,15 @@ pub fn compile(lir: &LirProgram, source: &str, dev: bool, _no_pdb: bool) -> Resu
         .finish(flags)
         .map_err(|e| format!("Cranelift ISA setup failed: {e}"))?;
     let call_conv = isa.default_call_conv();
-    let builder = cranelift_object::ObjectBuilder::new(
+
+    let mut builder = ObjectBuilder::new(
         isa.clone(),
         "lagom_module.o".to_string(),
         cranelift_module::default_libcall_names(),
     )
     .map_err(|e| e.to_string())?;
+    builder.per_function_section(true);
+    builder.per_data_object_section(true);
     let mut module = ObjectModule::new(builder);
     let rt = RtFns::declare(&mut module, call_conv);
 
@@ -159,6 +170,7 @@ pub fn compile(lir: &LirProgram, source: &str, dev: bool, _no_pdb: bool) -> Resu
     bx.define_lagom_main()?;
 
     let product = bx.module.finish();
+
     product
         .emit()
         .map_err(|e| format!("object emission failed: {e}"))
