@@ -163,33 +163,45 @@ fn build_runtime(workspace: &Path, profile: &str, target_dir: &Path) -> Result<(
             "the Lagom runtime library could not be built (cargo build -p lagom_rt failed):\n{tail}"
         ));
     }
-    refresh_bundle(target_dir);
+    refresh_bundle(workspace, target_dir);
     Ok(())
 }
 
 /// Copy a freshly built runtime into the bundle next to this binary,
 /// best-effort: the workspace build keeps working if the exe dir is not
 /// writable or the layout is unexpected.
-fn refresh_bundle(rt_dir: &Path) {
+fn refresh_bundle(workspace: &Path, rt_dir: &Path) {
     let Some(exe_dir) = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
     else {
         return;
     };
-    if exe_dir.starts_with(rt_dir.parent().unwrap_or(rt_dir)) {
-        // Inside our own target dir (a workspace run) — no bundle needed.
+    // Never write a bundle inside the workspace's target tree — target dirs
+    // participate in link resolution (`-L dependency=…`) and a copy landing
+    // there races concurrently-linking rustc processes (they mmap the rlib
+    // mid-write). This is exactly where test binaries run from.
+    if exe_dir.starts_with(workspace.join("target")) {
         return;
     }
     let lib_dir = exe_dir.join("lib/lagom");
     let Ok(_) = std::fs::create_dir_all(lib_dir.join("deps")) else {
         return;
     };
-    let _ = std::fs::copy(rt_dir.join("liblagom_rt.rlib"), lib_dir.join("liblagom_rt.rlib"));
+    // Atomic per file: copy to a temp name, then rename over the target, so
+    // a concurrent reader never sees a partial rlib.
+    let bundle_file = |src: &Path, dst: &Path| {
+        let tmp = dst.with_extension("rlib.tmp");
+        if std::fs::copy(src, &tmp).is_ok() {
+            let _ = std::fs::rename(&tmp, dst);
+        }
+        let _ = std::fs::remove_file(&tmp);
+    };
+    bundle_file(&rt_dir.join("liblagom_rt.rlib"), &lib_dir.join("liblagom_rt.rlib"));
     if let Ok(entries) = std::fs::read_dir(rt_dir.join("deps")) {
         for entry in entries.flatten() {
             if entry.path().extension().is_some_and(|e| e == "rlib") {
-                let _ = std::fs::copy(entry.path(), lib_dir.join("deps").join(entry.file_name()));
+                bundle_file(&entry.path(), &lib_dir.join("deps").join(entry.file_name()));
             }
         }
     }
