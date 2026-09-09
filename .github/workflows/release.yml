@@ -2,8 +2,8 @@ name: release
 
 # Build the `lagom` CLI release artifacts: on every push to main (smoke —
 # Windows only, the fast path) and full matrix on tags and manual dispatch.
-# Artifacts are uploaded as workflow artifacts; attaching them to a GitHub
-# release is a later step (doc 09 tooling story).
+# On a `v*` tag the publish job attaches the three validated packages plus
+# sha256 checksums to a GitHub Release (doc 09's tooling story).
 
 on:
   push:
@@ -110,3 +110,36 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Run the test suite
         run: cargo test --workspace
+
+  publish:
+    name: publish (GitHub Release)
+    # Only a tag publishes. Every package was already machine-validated by
+    # the build job's "Validate the staged artifact" step, so what lands on
+    # the release page is proven to compile and run Lagom programs.
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download the validated packages
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksum the packages
+        run: |
+          cd dist
+          sha256sum lagom-Windows.zip lagom-Linux.tar.gz lagom-macOS.tar.gz > sha256sums.txt
+          cat sha256sums.txt
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Lagom $GITHUB_REF_NAME" \
+            --notes "Packages for Windows (zip), Linux and macOS (tar.gz). Each archive contains the lagom binary plus the bundled runtime in lib/lagom — unpack, put it on your PATH, and run. sha256sums.txt verifies the downloads." \
+            || gh release upload "$GITHUB_REF_NAME" dist/* --clobber --repo "$GITHUB_REPOSITORY"
