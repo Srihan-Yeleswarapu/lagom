@@ -58,20 +58,23 @@ jobs:
           "$LAGOM" fmt validation/smoke.lagom
 
       - name: Stage the artifact (Windows)
+        # Bash, not pwsh: this runner's pwsh silently skipped the stamp
+        # write once already; the bash staging is byte-for-byte the same
+        # script the Unix jobs prove, and System32's bsdtar makes the zip
+        # (-a picks the format from the extension).
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: bash
         run: |
-          New-Item -ItemType Directory -Force -Path stage/lib/lagom/deps | Out-Null
-          Copy-Item target/release/lagom.exe stage/
-          Copy-Item target/lagom-rt/release/liblagom_rt.rlib stage/lib/lagom/
-          Copy-Item target/lagom-rt/release/deps/*.rlib stage/lib/lagom/deps/
-          Set-Content -Encoding ascii -NoNewline stage/lib/lagom/rustc.txt "$(rustc --version)"
-          New-Item -ItemType Directory -Force -Path stage/lib/lagom/src | Out-Null
-          foreach ($c in 'lagom_diagnostics','lagom_ast','lagom_sema','lagom_hir','lagom_mir','lagom_rt') {
-            New-Item -ItemType Directory -Force -Path stage/lib/lagom/src/$c | Out-Null
-            Copy-Item crates/$c/src/lib.rs stage/lib/lagom/src/$c/lib.rs
-          }
-          Compress-Archive -Path stage/* -DestinationPath lagom-Windows.zip
+          mkdir -p stage/lib/lagom/deps
+          cp target/release/lagom.exe stage/
+          cp target/lagom-rt/release/liblagom_rt.rlib stage/lib/lagom/
+          cp target/lagom-rt/release/deps/*.rlib stage/lib/lagom/deps/
+          rustc --version | tr -d '\r\n' > stage/lib/lagom/rustc.txt
+          for c in lagom_diagnostics lagom_ast lagom_sema lagom_hir lagom_mir lagom_rt; do
+            mkdir -p stage/lib/lagom/src/$c
+            cp crates/$c/src/lib.rs stage/lib/lagom/src/$c/lib.rs
+          done
+          /c/Windows/System32/tar.exe -a -cf lagom-Windows.zip -C stage .
 
       - name: Stage the artifact (Unix)
         if: runner.os != 'Windows'
@@ -112,6 +115,11 @@ jobs:
           echo "$(pwd)/clean" >> "$GITHUB_PATH"
           LAGOM="$(pwd)/clean/lagom"
           [ "$RUNNER_OS" = "Windows" ] && LAGOM="$(pwd)/clean/lagom.exe"
+          # Packaging invariants: the rustc stamp and the snapshot sources
+          # must ship, or the fast path silently degrades to a rebuild.
+          test -f clean/lib/lagom/rustc.txt
+          test -f clean/lib/lagom/liblagom_rt.rlib
+          test -f clean/lib/lagom/src/lagom_rt/lib.rs
           "$LAGOM" version
           "$LAGOM" run validation/smoke.lagom
           "$LAGOM" build validation/smoke.lagom -o built-smoke
