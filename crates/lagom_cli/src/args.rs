@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use lagom_driver::{render_diagnostics, FrontendError};
+use lagom_driver::{render_diagnostics_in, Verbosity, FrontendError};
 
 /// A command's failure, and how `main` turns it into an exit code.
 pub enum CliError {
@@ -56,13 +56,55 @@ pub fn read_source(path: &Path) -> Result<String, CliError> {
 pub fn render_failure(path: &Path, src: &str, e: &FrontendError) -> CliError {
     match e {
         FrontendError::Diagnostics(diags) => {
-            CliError::Compile(render_diagnostics(&path.display().to_string(), src, diags))
+            let mode = diagnostics_mode(&rest_flags());
+            CliError::Compile(render_diagnostics_in(
+                &path.display().to_string(),
+                src,
+                diags,
+                mode,
+            ))
         }
         FrontendError::Internal { stage, message } => CliError::Message(format!(
             "internal compiler error in {stage}: {message}\nThis is a compiler bug, not your fault — please report it."
         )),
         FrontendError::Tool(message) => CliError::Tool(message.clone()),
     }
+}
+
+/// The diagnostics verbosity mode for this invocation (00 §26.2, docs/14
+/// G-23): a `--student`/`--normal`/`--expert` flag wins, else the project's
+/// `Lagom.toml` `diagnostics = "…"` line, else student (the default for new
+/// projects). Unknown spellings fall back to student — a config typo must
+/// not hide the fix/concept footers from a learner.
+pub fn diagnostics_mode(rest: &[String]) -> Verbosity {
+    for flag in ["--student", "--normal", "--expert"] {
+        if rest.iter().any(|a| a == flag) {
+            return Verbosity::parse(flag.trim_start_matches('-')).unwrap_or(Verbosity::Student);
+        }
+    }
+    Verbosity::parse(&project_diagnostics_setting().unwrap_or_default())
+        .unwrap_or(Verbosity::Student)
+}
+
+/// The raw command tail for `diagnostics_mode` (the CLI passes `rest`
+/// through everywhere else; `render_failure` is reached from many sites).
+fn rest_flags() -> Vec<String> {
+    std::env::args().skip(2).collect()
+}
+
+/// `diagnostics = "mode"` from `Lagom.toml` in the working directory.
+fn project_diagnostics_setting() -> Option<String> {
+    let text = std::fs::read_to_string("Lagom.toml").ok()?;
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(value) = line.strip_prefix("diagnostics") {
+            let value = value.trim_start();
+            let value = value.strip_prefix('=').map(str::trim_start).unwrap_or(value);
+            let value = value.trim_matches('"').trim();
+            return Some(value.to_string());
+        }
+    }
+    None
 }
 
 /// `--release` and friends: simple boolean flags.

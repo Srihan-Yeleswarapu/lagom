@@ -1,0 +1,144 @@
+# CSV parser — an M1 validation project (00 §33.1).
+#
+# A genuine M1 program over the frozen M1 surface only. It parses real CSV
+# rows with a quote-parity state machine: splitting a row on commas gives
+# pieces, and splitting a piece on `"` gives one fragment more than the
+# quotes it holds — so an EVEN fragment count means the piece straddles a
+# quote boundary. Inside quotes a comma belongs to the field; outside, it
+# ends a field. Fields are re-marked with tab separators (a character CSV
+# data never contains) so the render pass can split them apart again, which
+# keeps empty fields intact. Rows are then validated against the header's
+# width, so ragged rows are reported as refusals, not silently rendered.
+# The same program must produce the same output through the interpreter and
+# the native backend.
+
+use files
+
+kind field outcome
+  is a good with cells of type a list of text and tally of type number
+  is a bad with reason of type text
+
+# ----- split one CSV row into its fields ---------------------------------------
+
+function csv fields
+  takes text called row
+  returns a field outcome
+  make parts equal to split row and ","
+  make changing seen equal to ""
+  make changing open equal to false
+  make changing out equal to ""
+  make changing started equal to false
+  make changing n equal to 0
+  repeat for each part in parts
+    make marks equal to split part and "\""
+    make width equal to size of marks
+    make changing halved equal to width divided evenly by 2
+    make changing twice equal to 2 times halved
+    make toggles equal to twice is equal to width
+    if open
+      make changing joined equal to "{seen},{part}"
+      set seen to joined
+      if toggles
+        set open to false
+        if started
+          make changing done equal to "{out}\t{seen}"
+          set out to done
+        otherwise
+          set out to seen
+        set started to true
+        set seen to ""
+        increase n by 1
+    otherwise
+      if toggles
+        set seen to part
+        set open to true
+      otherwise
+        if started
+          make changing flat equal to "{out}\t{part}"
+          set out to flat
+        otherwise
+          set out to part
+        set started to true
+        increase n by 1
+  if open
+    gives back a bad with reason "unterminated quoted field"
+  make picked equal to split out and "\t"
+  gives back a good with cells picked and tally (n)
+
+# ----- validate one row against the header's width ------------------------------
+
+function validate row
+  takes text called raw
+  takes number called want
+  returns a field outcome
+  make outcome equal to csv fields of raw
+  match outcome
+    when a good with cells cs and tally t
+      if t is equal to want
+        gives back a good with cells cs and tally (t)
+      otherwise
+        make changing note equal to "expected {want} fields, found {t}"
+        gives back a bad with reason note
+    when a bad with reason r
+      gives back a bad with reason r
+
+# ----- render one row ------------------------------------------------------------
+
+function render cells
+  takes a list of text called cells
+  returns a text
+  # `join` concatenates (the frozen text module's one join), so the table
+  # renderer walks the cells and interposes the separator itself.
+  make changing n equal to 0
+  make changing line equal to ""
+  repeat while n is less than size of cells
+    if n is greater than 0
+      make changing gap equal to "{line} | "
+      set line to gap
+    make cell equal to cells at n
+    make changing line2 equal to "{line}{cell}"
+    set line to line2
+    increase n by 1
+  gives back line
+
+# ----- the main pipeline: read, parse, validate, render ---------------------
+
+attempt open file "csv_input.csv" if it fails then
+  say "cannot read the input: {problem}"
+otherwise
+  make all csv equal to result
+  make raw rows equal to split all csv and "\n"
+  make rows equal to keep raw rows using size of it is greater than 0
+  say "records: {size of rows}"
+
+  make header outcome equal to csv fields of (rows at 0)
+  make changing want equal to 0
+  make changing header bad equal to ""
+  match header outcome
+    when a good with cells cs and tally t
+      set want to t
+    when a bad with reason r
+      set header bad to r
+
+  if header bad is not equal to ""
+    say "bad header: {header bad}"
+  otherwise
+    make changing rendered equal to ""
+    make changing good count equal to 0
+    make changing bad count equal to 0
+
+    repeat for each r in rows
+      make outcome equal to validate row of r and want
+      match outcome
+        when a good with cells cs and tally t
+          make changing line equal to render cells of cs
+          make changing marked equal to "{rendered}{line}\n"
+          set rendered to marked
+          increase good count by 1
+        when a bad with reason reason
+          say "bad row: {reason}"
+          increase bad count by 1
+
+    say rendered
+    say "good rows: {good count}"
+    say "bad rows: {bad count}"

@@ -3,7 +3,7 @@
 //! the expert mode. Every diagnostic the compiler emits must render
 //! source-aware: never a crash, never an unexplained failure.
 
-use lagom_diagnostics::{render_expert, render_student, Diagnostic, SourceFile, Span};
+use lagom_diagnostics::{render_expert, render_student, Diagnostic, SourceFile, Span, Verbosity};
 
 fn rendered(src: &str, d: &Diagnostic) -> String {
     render_student(&SourceFile::new("prog.lagom", src), d)
@@ -113,18 +113,20 @@ fn sema_errors_carry_codes_and_teaching_text() {
     let d = first_diagnostic("say mystery");
     assert_eq!(d.code, "E0344");
     assert!(d.message.contains("mystery"), "{}", d.message);
-    // Unhandled can-fail call (E0333): names the fix shapes.
+    // Unhandled can-fail call (E0302): names the fix shapes. (E0333 is the
+    // missing-`gives back` rule; the unhandled-failure rule has always been
+    // E0302 — see sema's `unhandled_can_fail_call_is_compile_error`.)
     let d = first_diagnostic(
         "function f\n    takes number called n\n    returns a number\n    can fail\n    fail with \"no\"\n\nmake x equal to f 1",
     );
-    assert_eq!(d.code, "E0333");
-    assert!(d.explanation.is_some(), "E0333 explains why");
+    assert_eq!(d.code, "E0302");
+    assert!(d.explanation.is_some(), "E0302 explains why");
     // `fail with` without `can fail` (E0337).
     let d = first_diagnostic("function f\n    fail with \"no\"");
     assert_eq!(d.code, "E0337");
     // Wrong arity (E0354).
     let d = first_diagnostic(
-        "function add\n    takes number called a\n    takes number called b\n    returns a number\n    give back a plus b\n\nsay add 1",
+        "function add\n    takes number called a\n    takes number called b\n    returns a number\n    gives back a plus b\n\nsay add 1",
     );
     assert_eq!(d.code, "E0354");
 }
@@ -139,7 +141,7 @@ fn every_diagnostic_renders_without_panicking() {
         "say (",
         "if 1\n    say 1",
         "repeat times using i\n    say i",
-        "function f\n    takes number called n\n    give back n\n\nsay f 1, 2, 3",
+        "function f\n    takes number called n\n    gives back n\n\nsay f 1, 2, 3",
         "make x equal to a list of 1\nsay x at \"no\"",
         "structure s\n    has n of type unknown",
         "make x equal to mystery plus 1",
@@ -169,4 +171,45 @@ fn renderer_survives_multibyte_characters() {
     let d = Diagnostic::error("E0344", "unknown name", Span::new(44, 51));
     let out = rendered(src, &d); // must not panic
     assert!(out.contains("line 2"), "{out}");
+}
+
+#[test]
+fn verbosity_modes_render_the_same_diagnostic_three_ways() {
+    // docs/14 G-23: the three §26.2 modes are selectable, and the shapes are
+    // distinct — student carries the fix/concept footers, normal drops them,
+    // expert is the terse code-first one-liner.
+    let src = "make x equal to mystery\n";
+    let (program, parse_diags) = lagom_parser::parse(src);
+    assert!(parse_diags.is_empty());
+    let checked = lagom_sema::check(&program, src);
+    let d = checked
+        .diags
+        .items
+        .iter()
+        .find(|d| d.severity == lagom_diagnostics::Severity::Error)
+        .expect("unknown name must be an error");
+    let file = SourceFile::new("p.lagom", src);
+
+    let student = Verbosity::Student.render(&file, d);
+    let normal = Verbosity::Normal.render(&file, d);
+    let expert = Verbosity::Expert.render(&file, d);
+
+    // Student: full teaching format (what/where/why, then fix and concept).
+    assert!(student.contains("ERROR on line"), "{student}");
+    assert!(student.contains("Make it first"), "{student}");
+    // Normal: the teaching what/where/why, no fix footer, no concept link.
+    assert!(normal.contains("ERROR on line"), "{normal}");
+    assert!(!normal.contains("To fix, write:"), "{normal}");
+    assert!(!normal.contains("Learn more"), "{normal}");
+    // Expert: terse, code-first.
+    assert!(expert.starts_with(d.code), "{expert}");
+    assert!(expert.contains("p.lagom:1:"), "{expert}");
+
+    // The parser helper resolves the flag spellings (and nothing else).
+    assert_eq!(Verbosity::parse("student"), Some(Verbosity::Student));
+    assert_eq!(Verbosity::parse("normal"), Some(Verbosity::Normal));
+    assert_eq!(Verbosity::parse("expert"), Some(Verbosity::Expert));
+    assert_eq!(Verbosity::parse("loud"), None);
+    // Student is the default (§26.2: default for new projects).
+    assert_eq!(Verbosity::default(), Verbosity::Student);
 }

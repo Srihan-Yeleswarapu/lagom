@@ -89,7 +89,9 @@ Everything works from any directory on a single `.lagom` file — no project man
 
 ## Status
 
-**M0: the compiler exists.** `lagom run`, `build`, `test`, `check`, `fmt`, `new`, `explain`, and `words` work today (Rust bootstrap; lexer → parser → sema → HIR → MIR → LIR → Cranelift, scoped in [00 §33](docs/00-architecture.md#33-mvp-proposal) and [doc 10](docs/10-roadmap.md)). `doc`, `play`, `add`, and `profile` are M1+ (doc 09/10).
+**M1: data and safety.** Everything from M0 — `lagom run`, `build`, `test`, `check`, `fmt`, `new`, `explain`, `words` — plus the M1 feature set: kinds and `match` with patterns (including pair destructuring), the full option/result model (`text?`, `a T or nothing`, `when something with value`, `attempt … if it fails then … otherwise …`), closures (`taking … giving back`, `it`, `where`) with `map`/`keep`/`combine`, file reading and writing, and JSON — each verified to behave identically on the interpreter (`--trace`) and the native Cranelift backend. Validation programs ([file organizer](validation/file_organizer.lagom), [CSV parser](validation/csv_parser.lagom)) run on both backends, and every diagnostic on the M1 surface has a `lagom explain` write-up.
+
+M0 details: Rust bootstrap; lexer → parser → sema → HIR → MIR → LIR → Cranelift, scoped in [00 §33](docs/00-architecture.md#33-mvp-proposal) and [doc 10](docs/10-roadmap.md). `doc`, `play`, `add`, and `profile` are M2+ (doc 09/10).
 
 ## Reference notes
 
