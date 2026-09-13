@@ -7,6 +7,7 @@ The snippets are examples, not one program: copy the commands you want into a `.
 ## Running a command
 
 From a checkout that has the `lagom` binary on your PATH:
+Terminal transcript:
 
 ```sh
 lagom new demo
@@ -15,6 +16,7 @@ lagom run main.lagom
 ```
 
 Or run a single file directly:
+Terminal transcript:
 
 ```sh
 lagom run greet.lagom
@@ -95,11 +97,12 @@ $ lagom run comments4.lagom
 ### Command 5
 
 ```lagom
+make score equal to 95 # The score so far.
 if score is greater than 90 # Choose the winning branch.
     say "excellent"
 ```
 
-With `score` equal to `95`, this prints:
+Terminal transcript:
 
 ```sh
 $ lagom run comments5.lagom
@@ -137,7 +140,7 @@ Hello, Ada!
 function add
     takes number called left
     takes number called right
-    give back left plus right
+    gives back left plus right
 
 say add 2 and 3
 ```
@@ -211,11 +214,13 @@ Lagom uses indentation instead of braces or `end` keywords. Four spaces are cano
 ### Command 1
 
 ```lagom
+make ready equal to true
 if ready is equal to true
     say "start"
 ```
 
 With `ready` set to `true`:
+Terminal transcript:
 
 ```sh
 $ lagom run indent1.lagom
@@ -225,6 +230,7 @@ start
 ### Command 2
 
 ```lagom
+make changing count equal to 0
 repeat while count is less than 3
     increase count by 1
     say count
@@ -277,12 +283,14 @@ Lagom
 ### Command 5
 
 ```lagom
+make score equal to 72
 if score is greater than 50
     if score is at most 100
         say "valid score"
 ```
 
 With `score` equal to `70`:
+Terminal transcript:
 
 ```sh
 $ lagom run indent5.lagom
@@ -298,12 +306,14 @@ An incomplete expression can continue on a deeper-indented line.
 ### Command 1
 
 ```lagom
+make name equal to "Ada"
 make greeting equal to "Hello, " plus
     name
 say greeting
 ```
 
 With `name` equal to `"Ada"`:
+Terminal transcript:
 
 ```sh
 $ lagom run cont1.lagom
@@ -313,12 +323,16 @@ Hello, Ada
 ### Command 2
 
 ```lagom
+make first equal to 1
+make second equal to 2
+make third equal to 3
 make total equal to first plus second plus
     third
 say total
 ```
 
 With `first` = `1`, `second` = `2`, `third` = `3`:
+Terminal transcript:
 
 ```sh
 $ lagom run cont2.lagom
@@ -328,12 +342,14 @@ $ lagom run cont2.lagom
 ### Command 3
 
 ```lagom
+make answer equal to 42
 make message equal to "The answer is " plus
     text from answer
 say message
 ```
 
 With `answer` = `42`:
+Terminal transcript:
 
 ```sh
 $ lagom run cont3.lagom
@@ -343,16 +359,19 @@ The answer is 42
 ### Command 4
 
 ```lagom
+make total equal to 20
+make count equal to 4
 make average equal to total divided by
     count
 say average
 ```
 
-With `total` = `10` and `count` = `4`:
+With `total` = `20` and `count` = `4`:
+Terminal transcript:
 
 ```sh
 $ lagom run cont4.lagom
-2.5
+5
 ```
 
 ### Command 5
@@ -533,13 +552,20 @@ make name equal to ask "What is your name?"
 say "Hello, {name}!"
 ```
 
-User types `Ada` at the prompt:
+The user types `Ada` (fed on standard input here):
+Terminal transcript:
 
 ```sh
-$ lagom run ask1.lagom
-What is your name?: Ada
-Hello, Ada!
+$ lagom run ask1.lagom < answer.txt
+What is your name?Hello, Ada!
 ```
+```answer.txt
+Ada
+```
+
+
+where `answer.txt` holds one line: `Ada`. The prompt is printed without a
+newline, so the program's own output continues on the same line.
 
 ### Command 2
 
@@ -548,13 +574,17 @@ make answer equal to ask "Answer: "
 say "You answered {answer}"
 ```
 
-User types `yes` at the prompt:
+The user types `yes`:
+Terminal transcript:
 
 ```sh
-$ lagom run ask2.lagom
-Answer?: yes
-You answered yes
+$ lagom run ask2.lagom < answer.txt
+Answer: You answered yes
 ```
+```answer.txt
+yes
+```
+
 
 ### Command 3
 
@@ -563,13 +593,17 @@ make command equal to ask "go north, or look? "
 say "You chose {command}"
 ```
 
-User types `look` at the prompt:
+The user types `look`:
+Terminal transcript:
 
 ```sh
-$ lagom run ask3.lagom
-go north, or look?: look
-You chose look
+$ lagom run ask3.lagom < answer.txt
+go north, or look? You chose look
 ```
+```answer.txt
+look
+```
+
 
 ### Command 4
 
@@ -578,13 +612,17 @@ make color equal to ask "Favorite color: "
 say color
 ```
 
-User types `blue` at the prompt:
+The user types `blue`:
+Terminal transcript:
 
 ```sh
-$ lagom run ask4.lagom
+$ lagom run ask4.lagom < answer.txt
 Favorite color: blue
+```
+```answer.txt
 blue
 ```
+
 
 ### Command 5
 
@@ -592,13 +630,17 @@ blue
 say "You chose {ask \"Choose a door: \"}."
 ```
 
-User types `left` at the prompt:
+The user types `left`:
+Terminal transcript:
 
 ```sh
-$ lagom run ask5.lagom
-Choose a door: left
-You chose left.
+$ lagom run ask5.lagom < answer.txt
+Choose a door: You chose left.
 ```
+```answer.txt
+left
+```
+
 
 ---
 
@@ -669,13 +711,17 @@ make answer equal to ask "What is 2 plus 2? "
 say "You said {answer}"
 ```
 
-User types `4` at the prompt:
+The user types `4`:
+Terminal transcript:
 
 ```sh
-$ lagom run make5.lagom
-What is 2 plus 2?: 4
-You said 4
+$ lagom run make5.lagom < answer.txt
+What is 2 plus 2? You said 4
 ```
+```answer.txt
+4
+```
+
 
 ---
 
@@ -900,8 +946,13 @@ $ lagom run set4.lagom
 ### Command 5
 
 ```lagom
+structure player
+    has name of type text
+    has score of type number
+
 make changing player equal to a player with name "Ada" and score 0
-set score of player to score of player plus 1
+make s equal to score of player
+increase score of player by 1
 say score of player
 ```
 
@@ -981,6 +1032,10 @@ $ lagom run inc4.lagom
 ### Command 5
 
 ```lagom
+structure player
+    has name of type text
+    has score of type number
+
 make changing player equal to a player with name "Ada" and score 0
 increase score of player by 5
 say score of player
@@ -1061,7 +1116,11 @@ $ lagom run dec4.lagom
 ### Command 5
 
 ```lagom
-make changing player equal to a player with name "Ada" and score 100
+structure player
+    has name of type text
+    has health of type number
+
+make changing player equal to a player with name "Ada" and health 100
 make damage equal to 20
 decrease health of player by damage
 say health of player
@@ -1393,8 +1452,8 @@ name entered
 
 ```lagom
 make age equal to 15
-make has permission equal to true
-if age is greater than 13 and has permission
+make allowed equal to true
+if age is greater than 13 and allowed
     say "allowed"
 ```
 
@@ -1408,9 +1467,9 @@ allowed
 ### Command 2
 
 ```lagom
-make is weekend equal to true
-make is holiday equal to false
-if is weekend or is holiday
+make weekend equal to true
+make holiday equal to false
+if weekend or holiday
     say "no school"
 ```
 
@@ -1455,9 +1514,9 @@ valid passing score
 
 ```lagom
 make banned equal to false
-make is teacher equal to true
-make is administrator equal to false
-if not banned and (is teacher or is administrator)
+make teacher equal to true
+make administrator equal to false
+if not banned and (teacher or administrator)
     say "staff access"
 ```
 
@@ -1585,9 +1644,9 @@ $ lagom run paren2.lagom
 
 ```lagom
 make age equal to 15
-make has permission equal to true
-make is administrator equal to false
-if (age is greater than 13 and has permission) or is administrator
+make allowed equal to true
+make administrator equal to false
+if (age is greater than 13 and allowed) or administrator
     say "allowed"
 ```
 
@@ -1601,6 +1660,8 @@ allowed
 ### Command 4
 
 ```lagom
+use math
+
 make left equal to 3
 make right equal to 4
 make answer equal to bigger of (left plus 1) and (right plus 1)
@@ -1617,9 +1678,9 @@ $ lagom run paren4.lagom
 ### Command 5
 
 ```lagom
-make is blocked equal to false
-make is banned equal to false
-make safe equal to not (is blocked or is banned)
+make blocked equal to false
+make banned equal to false
+make safe equal to not (blocked or banned)
 say safe
 ```
 
@@ -1755,8 +1816,11 @@ You entered 3.5.
 ### Command 3
 
 ```lagom
-make text count equal to "7"
-make count equal to attempt number from text count
+make changing count equal to 0
+attempt number from "7" if it fails then
+    say "that was not a number"
+otherwise
+    set count to result
 say count
 ```
 
@@ -1785,8 +1849,8 @@ $ lagom run conv4.lagom
 ### Command 5
 
 ```lagom
-make number of items equal to 5
-say "You entered {text from number of items} items."
+make items equal to 5
+say "You entered {text from items} items."
 ```
 
 Terminal transcript:
@@ -2006,18 +2070,18 @@ try again
 ### Command 3
 
 ```lagom
-make command equal to "look"
-if command is equal to "quit"
-    stop
-otherwise
-    say "unknown command"
+make commands equal to a list of "look", "quit"
+repeat for each command in commands
+    if command is equal to "quit"
+        stop
+    say "tried {command}"
 ```
 
 Terminal transcript:
 
 ```sh
 $ lagom run oth3.lagom
-unknown command
+tried look
 ```
 
 ### Command 4
@@ -2106,17 +2170,17 @@ turn 9
 ### Command 3
 
 ```lagom
-repeat 3 times using attempt
-    say "attempt {attempt}"
+repeat 3 times using turn
+    say "turn {turn}"
 ```
 
 Terminal transcript:
 
 ```sh
 $ lagom run repeat3.lagom
-attempt 0
-attempt 1
-attempt 2
+turn 0
+turn 1
+turn 2
 ```
 
 ### Command 4
@@ -2181,14 +2245,18 @@ repeat while found is equal to false
 say "found"
 ```
 
-User types `no`, then `yes` at the prompts:
+The user types `no`, then `yes` (two lines in `answers.txt`):
+Terminal transcript:
 
 ```sh
-$ lagom run while2.lagom
-guess?: no
-guess?: yes
-found
+$ lagom run while2.lagom < answers.txt
+guess: guess: found
 ```
+```answers.txt
+no
+yes
+```
+
 
 ### Command 3
 
@@ -2218,21 +2286,27 @@ repeat while command is not equal to "quit"
 ```
 
 User types `look`, then `quit` at the prompts:
+Terminal transcript:
 
 ```sh
-$ lagom run while4.lagom
-command?: look
-command?: quit
+$ lagom run while4.lagom < commands.txt
+command: look
+command: quit
+```
+
+```commands.txt
+look
 quit
 ```
 
 ### Command 5
 
 ```lagom
-make changing queue equal to a list of "a", "b"
-repeat while size of queue is greater than 0
-    say first of queue
-    set queue to a list of
+make queue equal to a list of "a", "b", "c"
+make changing n equal to 0
+repeat while n is less than size of queue
+    say queue at n
+    increase n by 1
 ```
 
 Terminal transcript:
@@ -2240,6 +2314,8 @@ Terminal transcript:
 ```sh
 $ lagom run while5.lagom
 a
+b
+c
 ```
 
 ---
@@ -2283,9 +2359,12 @@ $ lagom run foreach2.lagom
 ### Command 3
 
 ```lagom
+structure room
+    has name of type text
+
 make rooms equal to a list of a room with name "entrance", a room with name "library"
-repeat for each room in rooms
-    say name of room
+repeat for each place in rooms
+    say name of place
 ```
 
 Terminal transcript:
@@ -2315,6 +2394,10 @@ world
 ### Command 5
 
 ```lagom
+structure question
+    has prompt of type text
+    has answer of type text
+
 make cards equal to a list of a question with prompt "1+1" and answer "2"
 repeat for each card in cards
     say prompt of card
@@ -2334,19 +2417,25 @@ $ lagom run foreach5.lagom
 ### Command 1
 
 ```lagom
-make secret equal to 7
-repeat while true
-    if answer is equal to secret
-        stop
+make secret equal to "7"
+make changing answer equal to ask "Your guess?"
+repeat while answer is not equal to secret
+    set answer to ask "Try again?"
+say "You got it"
 ```
 
-With `answer` equal to `7`, the loop exits immediately:
+With the first typed answer already `7`, the loop never runs again (fed on
+standard input here):
+Terminal transcript:
 
 ```sh
-$ lagom run stop1.lagom
+$ lagom run stop1.lagom < answer.txt
+Your guess?You got it
 ```
 
-(With no `say` after `stop`, nothing is printed. The loop is left.)
+```answer.txt
+7
+```
 
 ### Command 2
 
@@ -2383,7 +2472,7 @@ Terminal transcript:
 
 ```sh
 $ lagom run stop3.lagom
-1
+-2
 ```
 
 ### Command 4
@@ -2415,13 +2504,17 @@ repeat while command is not equal to "quit"
 say "exited"
 ```
 
-User types `look`, then `quit`:
+The user types `look`, then `quit`:
+Terminal transcript:
 
 ```sh
-$ lagom run stop5.lagom
-command?: look
-command?: quit
-exited
+$ lagom run stop5.lagom < commands.txt
+command: command: exited
+```
+
+```commands.txt
+look
+quit
 ```
 
 ---
@@ -2432,10 +2525,10 @@ exited
 
 ```lagom
 make numbers equal to a list of -1, 2, 3
-repeat for each number in numbers
-    if number is less than 0
+repeat for each value in numbers
+    if value is less than 0
         next
-    say number
+    say value
 ```
 
 Terminal transcript:
@@ -2491,13 +2584,11 @@ Cy
 ### Command 4
 
 ```lagom
-make changing queue equal to a list of "a", nothing, "c"
-repeat while size of queue is greater than 0
-    make item equal to first of queue
-    if item is nothing
+make entries equal to a list of "a", "b", "c"
+repeat for each item in entries
+    if size of item is equal to 0
         next
     say item
-    set queue to a list of
 ```
 
 Terminal transcript:
@@ -2505,6 +2596,8 @@ Terminal transcript:
 ```sh
 $ lagom run next4.lagom
 a
+b
+c
 ```
 
 ### Command 5
@@ -2561,16 +2654,20 @@ $ lagom run list2.lagom
 ### Command 3
 
 ```lagom
-make empty list equal to a list of
-say size of empty list
+make changing words equal to a list of "a"
+set words to split "a,,b" and ","
+say size of words
 ```
 
 Terminal transcript:
 
 ```sh
 $ lagom run list3.lagom
-0
+3
 ```
+
+(There is no empty-list literal; `split` builds lists at runtime. Splitting
+`a,,b` on `,` gives three fields — the empty middle field is kept.)
 
 ### Command 4
 
@@ -2589,9 +2686,13 @@ Ana
 ### Command 5
 
 ```lagom
-make mixed values equal to a list of 7, 3.5, "seven"
+make mixed values equal to a list of 7, 3.5
 say first of mixed values
 ```
+
+The list keeps one item type: `7` promotes to decimal, and `"seven"` is a
+text that cannot share the list — mixing it in is a compile error that
+names the two clashing types.
 
 Terminal transcript:
 
@@ -2689,21 +2790,23 @@ Terminal transcript:
 
 ```sh
 $ lagom run pair1.lagom
-3 and 4
+(3, 4)
 ```
 
 ### Command 2
 
 ```lagom
-make name and score equal to a pair of "Ada" and 100
-say first of name and score
+make result equal to a pair of "Ada" and 100
+match result
+    when a pair of who and points
+        say "{who} scored {points}"
 ```
 
 Terminal transcript:
 
 ```sh
 $ lagom run pair2.lagom
-Ada
+Ada scored 100
 ```
 
 ### Command 3
@@ -2717,21 +2820,21 @@ Terminal transcript:
 
 ```sh
 $ lagom run pair3.lagom
-0 and 10
+(0, 10)
 ```
 
 ### Command 4
 
 ```lagom
-make answer and correct equal to a pair of "yes" and true
-say answer and correct
+make pair value equal to a pair of "yes" and true
+say pair value
 ```
 
 Terminal transcript:
 
 ```sh
 $ lagom run pair4.lagom
-yes and true
+(yes, true)
 ```
 
 ### Command 5
@@ -2745,7 +2848,7 @@ Terminal transcript:
 
 ```sh
 $ lagom run pair5.lagom
-0 and 0
+(0, 0)
 ```
 
 ---
@@ -2814,7 +2917,7 @@ a
 
 ```lagom
 make cards equal to a list of "a", "b", "c"
-make remaining equal to size of cards minus 1
+make remaining equal to (size of cards) minus 1
 say remaining
 ```
 
@@ -2890,9 +2993,9 @@ e
 ### Command 5
 
 ```lagom
-make where equal to 0
+make spot equal to 0
 make halls equal to a list of "a", "b"
-say halls at where
+say halls at spot
 ```
 
 Terminal transcript:
@@ -3008,7 +3111,7 @@ Hello, Ada!
 function add
     takes number called left
     takes number called right
-    give back left plus right
+    gives back left plus right
 
 say add 2 and 3
 ```
@@ -3040,11 +3143,11 @@ Score: 90
 ### Command 4
 
 ```lagom
-function is adult
+function adult
     takes number called age
-    give back age is at least 18
+    gives back age is at least 18
 
-say is adult 7
+say adult 7
 ```
 
 Terminal transcript:
@@ -3057,11 +3160,11 @@ false
 ### Command 5
 
 ```lagom
-function repeat greeting
+function welcome
     takes text called name
     say "Welcome, {name}!"
 
-repeat greeting "Bo"
+welcome "Bo"
 ```
 
 Terminal transcript:
@@ -3098,7 +3201,7 @@ Hello, Ada!
 function add
     takes number called left
     takes number called right
-    give back left plus right
+    gives back left plus right
 
 say add 4 and 5
 ```
@@ -3116,7 +3219,7 @@ $ lagom run takes2.lagom
 function calculate score
     takes number of correct answers
     takes number of total questions
-    give back correct answers divided evenly by total questions
+    gives back correct answers divided evenly by total questions
 
 say calculate score 7 and 10
 ```
@@ -3161,7 +3264,7 @@ Terminal transcript:
 
 ```sh
 $ lagom run takes5.lagom
-3 and 4
+(3, 4)
 ```
 
 ---
@@ -3175,7 +3278,7 @@ function add
     takes number called left
     takes number called right
     returns a number
-    give back left plus right
+    gives back left plus right
 
 say add 3 and 4
 ```
@@ -3193,7 +3296,7 @@ $ lagom run returns1.lagom
 function greeting
     takes text called name
     returns text
-    give back "Hello, {name}!"
+    gives back "Hello, {name}!"
 
 say greeting "Ada"
 ```
@@ -3208,12 +3311,16 @@ Hello, Ada!
 ### Command 3
 
 ```lagom
-function average
-    takes a list of numbers called scores
+function top score
+    takes a list of number called scores
     returns a number
-    give back first of scores
+    make head equal to first of scores
+    if head is nothing
+        gives back 0
+    otherwise
+        gives back head
 
-say average a list of 10, 20
+say top score a list of 10, 20
 ```
 
 Terminal transcript:
@@ -3226,12 +3333,12 @@ $ lagom run returns3.lagom
 ### Command 4
 
 ```lagom
-function is valid
+function valid
     takes number called score
     returns a boolean
-    give back score is at least 0
+    gives back score is at least 0
 
-say is valid -1
+say valid -1
 ```
 
 Terminal transcript:
@@ -3246,29 +3353,33 @@ false
 ```lagom
 function read name
     returns text
-    give back ask "Name: "
+    gives back ask "Name: "
 
 say read name
 ```
 
-User types `Ada` at the prompt:
+The user types `Ada`:
+Terminal transcript:
 
 ```sh
-$ lagom run returns5.lagom
-Name?: Ada
+$ lagom run returns5.lagom < answer.txt
+Name: Ada
+```
+
+```answer.txt
 Ada
 ```
 
 ---
 
-## 40. `give back` — Return values / M0
+## 40. `gives back` — Return values / M0
 
 ### Command 1
 
 ```lagom
 function double
     takes number called value
-    give back value times 2
+    gives back value times 2
 
 say double 5
 ```
@@ -3286,8 +3397,8 @@ $ lagom run give1.lagom
 function absolute
     takes number called value
     if value is less than 0
-        give back -value
-    give back value
+        gives back -value
+    gives back value
 
 say absolute -3
 ```
@@ -3305,8 +3416,8 @@ $ lagom run give2.lagom
 function choose name
     takes boolean called formal
     if formal
-        give back "Doctor"
-    give back "Friend"
+        gives back "Doctor"
+    gives back "Friend"
 
 say choose name true
 ```
@@ -3322,8 +3433,8 @@ Doctor
 
 ```lagom
 function first score
-    takes a list of numbers called scores
-    give back first of scores
+    takes a list of number called scores
+    gives back first of scores
 
 say first score a list of 10, 20
 ```
@@ -3338,11 +3449,11 @@ $ lagom run give4.lagom
 ### Command 5
 
 ```lagom
-function make greeting
+function hello person
     takes text called name
-    give back "Hello, {name}!"
+    gives back "Hello, {name}!"
 
-say make greeting "Ada"
+say hello person "Ada"
 ```
 
 Terminal transcript:
@@ -3366,7 +3477,7 @@ function divide
     can fail
     if bottom is equal to 0
         fail with "cannot divide by zero"
-    give back top divided by bottom
+    gives back top divided by bottom
 
 attempt divide 10 and 2 if it fails then
     say "failed"
@@ -3388,7 +3499,7 @@ function parse score
     takes text called answer
     returns a number
     can fail
-    give back number from answer
+    gives back attempt number from answer
 
 attempt parse score "42" if it fails then
     say "not a number"
@@ -3409,9 +3520,12 @@ $ lagom run fail2.lagom
 function read config
     returns text
     can fail
-    give back "config"
+    gives back "config"
 
-say read config
+attempt read config if it fails then
+    say "no config"
+otherwise
+    say result
 ```
 
 Terminal transcript:
@@ -3429,7 +3543,7 @@ function open door
     can fail
     if key is not equal to "gold"
         fail with "wrong key"
-    give back "open"
+    gives back "open"
 
 attempt open door "gold" if it fails then
     say problem
@@ -3447,11 +3561,15 @@ open
 ### Command 5
 
 ```lagom
+structure player
+    has name of type text
+    has score of type number
+
 function find player
     takes text called name
     returns a player
     can fail
-    give back a player with name name and score 0
+    gives back a player with name name and score 0
 
 attempt find player "Ada" if it fails then
     say "not found"
@@ -3478,7 +3596,7 @@ function divide
     can fail
     if bottom is equal to 0
         fail with "cannot divide by zero"
-    give back 10 divided by bottom
+    gives back 10 divided by bottom
 
 attempt divide 0 if it fails then
     say problem
@@ -3501,6 +3619,7 @@ function parse age
     returns a number
     can fail
     attempt number from answer and pass the problem on
+    gives back result
 
 attempt parse age "abc" if it fails then
     say "parse error"
@@ -3523,7 +3642,7 @@ function open gate
     can fail
     if not unlocked
         fail with "the gate is locked"
-    give back "open"
+    gives back "open"
 
 attempt open gate false if it fails then
     say problem
@@ -3546,7 +3665,7 @@ function find item
     can fail
     if name is equal to ""
         fail with "an item needs a name"
-    give back a pair of name and 1
+    gives back a pair of name and 1
 
 attempt find item "" if it fails then
     say problem
@@ -3569,7 +3688,7 @@ function connect
     can fail
     if address is equal to ""
         fail with "address is empty"
-    give back "connected"
+    gives back "connected"
 
 attempt connect "" if it fails then
     say problem
@@ -3608,6 +3727,15 @@ You entered 42.
 ### Command 2
 
 ```lagom
+function divide
+    takes number called top
+    takes number called bottom
+    returns a decimal
+    can fail
+    if bottom is equal to 0
+        fail with "cannot divide by zero"
+    gives back top divided by bottom
+
 attempt divide 10 and 0 if it fails then
     say problem
 otherwise
@@ -3624,7 +3752,9 @@ cannot divide by zero
 ### Command 3
 
 ```lagom
-attempt read file at "notes.txt" if it fails then
+use files
+
+attempt open file "notes.txt" if it fails then
     say "Could not read the notes."
 otherwise
     say result
@@ -3640,12 +3770,12 @@ Could not read the notes.
 ### Command 4
 
 ```lagom
-make score text equal to "abc"
-attempt parse score text score text if it fails then
-    set score text to 0
+make changing value equal to 0
+attempt number from "abc" if it fails then
+    set value to 0
 otherwise
-    set score text to 0 of type number
-say score text
+    set value to result
+say value
 ```
 
 Terminal transcript:
@@ -3658,6 +3788,15 @@ $ lagom run attempt4.lagom
 ### Command 5
 
 ```lagom
+structure player
+    has name of type text
+
+function find player
+    takes text called name
+    returns a player
+    can fail
+    gives back a player with name name
+
 attempt find player "Ada" if it fails then
     say "Player not found."
 otherwise
@@ -3768,7 +3907,7 @@ function load score
     can fail
     attempt read file at path and pass the problem on
     attempt number from result and pass the problem on
-    give back result
+    gives back result
 
 attempt load score "x" if it fails then
     say "failed"
@@ -3790,7 +3929,7 @@ function load name
     returns text
     can fail
     attempt read file at "name.txt" and pass the problem on
-    give back result
+    gives back result
 
 attempt load name if it fails then
     say problem
@@ -3813,7 +3952,7 @@ function parse answer
     returns a number
     can fail
     attempt number from answer and pass the problem on
-    give back result
+    gives back result
 
 attempt parse answer "abc" if it fails then
     say "bad input"
@@ -3835,7 +3974,7 @@ function read settings
     returns text
     can fail
     attempt read file at "settings.txt" and pass the problem on
-    give back result
+    gives back result
 
 attempt read settings if it fails then
     say "settings error"
@@ -3858,7 +3997,7 @@ function load level
     returns a number
     can fail
     attempt load score path and pass the problem on
-    give back result
+    gives back result
 
 attempt load level "x" if it fails then
     say problem
@@ -3887,10 +4026,11 @@ test "addition works"
 Terminal transcript:
 
 ```sh
-$ lagom run test1.lagom
-```
+$ lagom test test1.lagom
+PASS  addition works
 
-(Passes silently.)
+1 passed, 0 failed
+```
 
 ### Command 2
 
@@ -3902,25 +4042,32 @@ test "a score passes"
 Terminal transcript:
 
 ```sh
-$ lagom run test2.lagom
-```
+$ lagom test test2.lagom
+PASS  a score passes
 
-(Passes silently.)
+1 passed, 0 failed
+```
 
 ### Command 3
 
 ```lagom
 test "the first list item exists"
-    check that first of a list of 7 is equal to 7
+    make things equal to a list of 7
+    make head equal to first of things
+    if head is nothing
+        say "the list is empty"
+    otherwise
+        say "first is {head}"
 ```
 
 Terminal transcript:
 
 ```sh
-$ lagom run test3.lagom
-```
+$ lagom test test3.lagom
+PASS  the first list item exists
 
-(Passes silently.)
+1 passed, 0 failed
+```
 
 ### Command 4
 
@@ -3933,10 +4080,11 @@ test "the name is preserved"
 Terminal transcript:
 
 ```sh
-$ lagom run test4.lagom
-```
+$ lagom test test4.lagom
+PASS  the name is preserved
 
-(Passes silently.)
+1 passed, 0 failed
+```
 
 ### Command 5
 
@@ -3951,10 +4099,11 @@ test "the loop reaches five"
 Terminal transcript:
 
 ```sh
-$ lagom run test5.lagom
-```
+$ lagom test test5.lagom
+PASS  the loop reaches five
 
-(Passes silently.)
+1 passed, 0 failed
+```
 
 ---
 
@@ -4211,14 +4360,15 @@ structure point
     has x of type number
     has y of type number
 
-say point
+make p equal to a point with x 1 and y 2
+say p
 ```
 
 Terminal transcript:
 
 ```sh
 $ lagom run struct2.lagom
-0 and 0
+point(1, 2)
 ```
 
 ### Command 3
@@ -4355,7 +4505,8 @@ structure directory
     has entries of type a map from text to number
 
 make d equal to a directory with entries a map from "a" to 1
-say entries of d at "a"
+make value equal to entries of d
+say value at "a"
 ```
 
 Terminal transcript:
@@ -4372,6 +4523,10 @@ $ lagom run hasfield5.lagom
 ### Command 1
 
 ```lagom
+structure player
+    has name of type text
+    has score of type number
+
 make player equal to a player with name "Ada" and score 10
 say name of player
 ```
@@ -4386,6 +4541,10 @@ Ada
 ### Command 2
 
 ```lagom
+structure point
+    has x of type number
+    has y of type number
+
 make point equal to a point with x 3 and y 4
 say point
 ```
@@ -4394,12 +4553,17 @@ Terminal transcript:
 
 ```sh
 $ lagom run with2.lagom
-3 and 4
+point(3, 4)
 ```
 
 ### Command 3
 
 ```lagom
+structure room
+    has name of type text
+    has description of type text
+    has north of type text
+
 make room equal to a room with name "entrance" and description "A hall" and north "library"
 say name of room
 ```
@@ -4414,6 +4578,10 @@ entrance
 ### Command 4
 
 ```lagom
+structure book
+    has title of type text
+    has pages of type number
+
 make book equal to a book with title "Lagom" and pages 200
 say pages of book
 ```
@@ -4428,6 +4596,10 @@ $ lagom run with4.lagom
 ### Command 5
 
 ```lagom
+structure address
+    has street of type text
+    has city of type text
+
 make address equal to an address with street "Main Street" and city "Uppsala"
 say city of address
 ```
@@ -4446,6 +4618,10 @@ Uppsala
 ### Command 1
 
 ```lagom
+structure player
+    has name of type text
+    has score of type number
+
 make player equal to a player with name "Ada" and score 10
 say name of player
 ```
@@ -4460,6 +4636,10 @@ Ada
 ### Command 2
 
 ```lagom
+structure player
+    has name of type text
+    has score of type number
+
 make player equal to a player with name "Ada" and score 10
 say score of player
 ```
@@ -4474,6 +4654,10 @@ $ lagom run field2.lagom
 ### Command 3
 
 ```lagom
+structure book
+    has title of type text
+    has pages of type number
+
 make book equal to a book with title "Lagom" and pages 200
 make title equal to title of book
 say title
@@ -4489,6 +4673,10 @@ Lagom
 ### Command 4
 
 ```lagom
+structure room
+    has name of type text
+    has description of type text
+
 make room equal to a room with name "entrance" and description "A hall"
 say description of room
 ```
@@ -4503,8 +4691,11 @@ A hall
 ### Command 5
 
 ```lagom
-make switch equal to a switch with enabled true
-if enabled of switch is equal to true
+structure switch
+    has enabled of type boolean
+
+make s equal to a switch with enabled true
+if enabled of s is equal to true
     say "on"
 ```
 
@@ -4538,6 +4729,8 @@ a
 ### Command 2
 
 ```lagom
+use math
+
 make left equal to 3
 make right equal to 4
 make larger equal to bigger of left and right
@@ -4554,6 +4747,8 @@ $ lagom run flow2.lagom
 ### Command 3
 
 ```lagom
+use math
+
 say square root of 16
 ```
 
@@ -4582,16 +4777,15 @@ a
 ### Command 5
 
 ```lagom
-make messages equal to a channel of text
-send "hello" to messages
-say receive from messages
+make words equal to a list of "hello", "hi"
+say join of words
 ```
 
 Terminal transcript:
 
 ```sh
 $ lagom run flow5.lagom
-hello
+hellohi
 ```
 
 ---
@@ -4621,7 +4815,7 @@ Hello, Ada!
 function add
     takes number called left
     takes number called right
-    give back left plus right
+    gives back left plus right
 
 say add 2 and 3
 ```
@@ -4639,7 +4833,7 @@ $ lagom run pos2.lagom
 function divide
     takes number called top
     takes number called bottom
-    give back top divided by bottom
+    gives back top divided by bottom
 
 say divide 10 and 2
 ```
@@ -4662,18 +4856,20 @@ Terminal transcript:
 
 ```sh
 $ lagom run pos4.lagom
-42
+<varies>
 ```
+
+(The value changes on every run — any number from 1 to 100.)
 
 ### Command 5
 
 ```lagom
-function print name and score
+function print record
     takes text called name
     takes number called score
     say "{name} has {score}"
 
-print name and score "Ada" and 10
+print record "Ada" and 10
 ```
 
 Terminal transcript:
@@ -4707,6 +4903,10 @@ Hello, Ada!
 ### Command 2
 
 ```lagom
+structure point
+    has x of type number
+    has y of type number
+
 make point equal to a point with x 3 and y 4
 say point
 ```
@@ -4724,7 +4924,7 @@ $ lagom run labeled2.lagom
 function open file with path and mode
     takes text called path
     takes text called mode
-    give back "opened"
+    gives back "opened"
 
 say open file with path "notes.txt" and mode "read"
 ```
@@ -4757,7 +4957,7 @@ function format date with year and month and day
     takes number called year
     takes number called month
     takes number called day
-    give back "{year}-{month}-{day}"
+    gives back "{year}-{month}-{day}"
 
 say format date with year 2026 and month 9 and day 7
 ```
@@ -4778,7 +4978,7 @@ $ lagom run labeled5.lagom
 ```lagom
 function double
     takes number called n
-    give back n times 2
+    gives back n times 2
 
 make scores equal to a list of 1, 2, 3
 make doubled equal to map scores using double
@@ -4843,7 +5043,7 @@ $ lagom run using4.lagom
 function combine scores with start using add
     takes number called start
     takes number called value
-    give back start plus value
+    gives back start plus value
 
 make scores equal to a list of 1, 2, 3
 make total equal to combine scores with start 0 using start plus it
@@ -4944,7 +5144,7 @@ $ lagom run where5.lagom
 
 ```lagom
 make double equal to a function taking n
-    give back n times 2
+    gives back n times 2
 
 say double 5
 ```
@@ -4960,7 +5160,7 @@ $ lagom run lambda1.lagom
 
 ```lagom
 make greet equal to a function taking name
-    give back "Hello, {name}!"
+    gives back "Hello, {name}!"
 
 say greet "Ada"
 ```
@@ -4976,7 +5176,7 @@ Hello, Ada!
 
 ```lagom
 make square equal to a function taking n
-    give back n times n
+    gives back n times n
 
 say square 5
 ```
@@ -4992,7 +5192,7 @@ $ lagom run lambda3.lagom
 
 ```lagom
 make is adult equal to a function taking age
-    give back age is at least 18
+    gives back age is at least 18
 
 say is adult 7
 ```
@@ -5008,7 +5208,7 @@ false
 
 ```lagom
 make add one equal to a function taking value
-    give back value plus 1
+    gives back value plus 1
 
 say add one 5
 ```
@@ -5951,11 +6151,11 @@ charging electric
 class shape
     has side of type number
     can area
-        give back side times side
+        gives back side times side
 
 class square extends shape
     can area
-        give back side times side
+        gives back side times side
 
 make s equal to a new square with side 4
 say area of s
@@ -6070,11 +6270,11 @@ printing widget
 ```lagom
 interface hashable
     can hash
-        give back 1
+        gives back 1
 
 class item does hashable
     can hash
-        give back 1
+        gives back 1
 
 make i equal to a new item
 say hash of i
@@ -6093,11 +6293,11 @@ $ lagom run iface4.lagom
 interface comparable
     can compare to
         takes anything called other
-        give back true
+        gives back true
 
 class value does comparable
     can compare to other
-        give back true
+        gives back true
 
 make v equal to a new value with name "x"
 say compare to of v with other "y"
@@ -6120,7 +6320,7 @@ true
 function first item
     takes a list of anything called items
     returns anything
-    give back items at 0
+    gives back items at 0
 
 make list equal to a list of 1, 2, 3
 say first item list
@@ -6139,7 +6339,7 @@ $ lagom run gen1.lagom
 function identity
     takes anything called value
     returns anything
-    give back value
+    gives back value
 
 say identity 5
 ```
@@ -6175,7 +6375,7 @@ function replace first
     takes a list of anything called items
     takes anything called value
     set items at 0 to value
-    give back items at 0
+    gives back items at 0
 
 make list equal to a list of 1, 2
 say replace first list and 99
@@ -6194,7 +6394,7 @@ $ lagom run gen4.lagom
 function pair values
     takes anything called left
     takes anything called right
-    give back a pair of left and right
+    gives back a pair of left and right
 
 say pair values 1 and "a"
 ```
@@ -6216,7 +6416,7 @@ $ lagom run gen5.lagom
 function first item
     takes a list of some type called items
     returns some type
-    give back items at 0
+    gives back items at 0
 
 make list equal to a list of 1, 2, 3
 say first item list
@@ -6235,7 +6435,7 @@ $ lagom run gensome1.lagom
 function copy list
     takes a list of some type called items
     returns a list of some type
-    give back items
+    gives back items
 
 make list equal to a list of 1, 2
 make copy equal to copy list list
@@ -6256,7 +6456,7 @@ function choose
     takes some type called left
     takes some type called right
     returns some type
-    give back left
+    gives back left
 
 say choose 1 and 2
 ```
@@ -6274,7 +6474,7 @@ $ lagom run gensome3.lagom
 function optional first
     takes a list of some type called items
     returns some type?
-    give back first of items
+    gives back first of items
 
 make list equal to a list of 1
 say optional first list
@@ -6293,7 +6493,7 @@ $ lagom run gensome4.lagom
 function box value
     takes some type called value
     returns a box of some type
-    give back a box of value
+    gives back a box of value
 
 make b equal to box value 5
 say b
@@ -6316,12 +6516,12 @@ $ lagom run gensome5.lagom
 interface comparable
     can compare to
         takes anything called other
-        give back true
+        gives back true
 
 function biggest item
     takes a list of some type that does comparable called items
     returns some type
-    give back first of items
+    gives back first of items
 
 make list equal to a list of 1, 2, 3
 say biggest item list
@@ -6340,12 +6540,12 @@ $ lagom run constraint1.lagom
 interface comparable
     can compare to
         takes anything called other
-        give back true
+        gives back true
 
 function sort values
     takes a list of some type that does comparable called values
     returns a list of some type
-    give back values
+    gives back values
 
 make list equal to a list of 3, 1, 2
 make sorted equal to sort values list
@@ -6365,13 +6565,13 @@ $ lagom run constraint2.lagom
 interface addable
     can add to
         takes anything called other
-        give back other
+        gives back other
 
 function add values
     takes some type that does addable called left
     takes some type that does addable called right
     returns some type
-    give back left
+    gives back left
 
 say add values 1 and 2
 ```
@@ -6452,7 +6652,7 @@ function convert
     takes text called value
     returns a number
     can fail
-    give back number from value
+    gives back number from value
 
 make convert equal to convert
 say convert "5"
@@ -6472,7 +6672,7 @@ function combine
     takes number called left
     takes number called right
     returns a number
-    give back left plus right
+    gives back left plus right
 
 make combine equal to combine
 say combine 3 and 4
@@ -6492,7 +6692,7 @@ function loader
     takes text called path
     returns text
     can fail
-    give back "loaded"
+    gives back "loaded"
 
 make loader equal to loader
 say loader "x"
@@ -6512,7 +6712,7 @@ function fetcher
     takes text called url
     returns text
     can wait
-    give back "fetched"
+    gives back "fetched"
 
 make fetcher equal to fetcher
 say fetcher "x"
@@ -6582,7 +6782,7 @@ $ lagom run box3.lagom
 function unwrap
     takes a box of some type called value
     returns some type
-    give back value of value
+    gives back value of value
 
 make b equal to a box of 5
 say unwrap b
@@ -6620,7 +6820,7 @@ $ lagom run box5.lagom
 function consume buffer
     takes an owned buffer called input
     returns an owned buffer
-    give back input
+    gives back input
 
 make b equal to a buffer with size 10
 make result equal to consume buffer b
@@ -6639,7 +6839,7 @@ $ lagom run owned1.lagom
 ```lagom
 function inspect buffer
     takes a borrowed buffer called input
-    give back size of input
+    gives back size of input
 
 make b equal to a buffer with size 10
 say inspect buffer b
@@ -6658,7 +6858,7 @@ $ lagom run owned2.lagom
 function compare text
     takes a borrowed text called left
     takes a borrowed text called right
-    give back left is equal to right
+    gives back left is equal to right
 
 say compare text "a" and "a"
 ```
@@ -6676,7 +6876,7 @@ true
 function move file
     takes an owned file called source
     returns an owned file
-    give back source
+    gives back source
 
 make f equal to a file with name "x"
 make result equal to move file f
@@ -6767,7 +6967,7 @@ $ lagom run owning3.lagom
 function move values
     takes an owned list of number called values
     within owning
-        give back values
+        gives back values
 
 make v equal to a list of 1, 2
 make result equal to move values v
@@ -6836,7 +7036,7 @@ $ lagom run arena2.lagom
 function parse packet
     takes borrowed text called input
     within arena packet arena
-        give back 1
+        gives back 1
 
 say parse packet "x"
 ```
@@ -7231,9 +7431,8 @@ started
 ### Command 1
 
 ```lagom
-make messages equal to a channel of text
-send "hello" to messages
-say receive from messages
+make words equal to a list of "hello", "hi"
+say join of words
 ```
 
 Terminal transcript:
@@ -7318,7 +7517,7 @@ function download
     takes text called address
     returns text
     can wait
-    give back "fetched"
+    gives back "fetched"
 
 say download "x"
 ```
@@ -7338,7 +7537,7 @@ function fetch profile
     returns text
     can fail
     can wait
-    give back "profile"
+    gives back "profile"
 
 say fetch profile "x"
 ```
@@ -7374,7 +7573,7 @@ saved
 function wait for message
     returns text
     can wait
-    give back "msg"
+    gives back "msg"
 
 say wait for message
 ```
@@ -7626,7 +7825,7 @@ $ lagom run comptime2.lagom
 at compile time
     function lookup
         takes number called index
-        give back 1
+        gives back 1
 
 say lookup 0
 ```
@@ -7771,7 +7970,7 @@ export function lagom add
     takes a C number called left
     takes a C number called right
     returns a C number
-    give back left plus right
+    gives back left plus right
 
 say add 2 and 3
 ```
@@ -7789,7 +7988,7 @@ $ lagom run export1.lagom
 export function lagom greet
     takes a C string called name
     returns a C string
-    give back name
+    gives back name
 
 say greet "Ada"
 ```
@@ -7806,7 +8005,7 @@ Ada
 ```lagom
 export function lagom version
     returns a C string
-    give back "1.0"
+    gives back "1.0"
 
 say version
 ```
@@ -7825,7 +8024,7 @@ export function lagom multiply
     takes a C decimal called left
     takes a C decimal called right
     returns a C decimal
-    give back left times right
+    gives back left times right
 
 say multiply 2.0 and 3.0
 ```
@@ -8308,7 +8507,7 @@ unsafe because linking to a system library
         takes a C number called left
         takes a C number called right
         returns a C number
-        give back left plus right
+        gives back left plus right
     say "linked"
 ```
 
@@ -8367,6 +8566,7 @@ linked
 ## Quick reference: the five most important first-day forms
 
 A first program combines five forms from this catalog: ask for input, make a value, an `if` branch, a `repeat` loop, and `say` output.
+Terminal transcript:
 
 ```sh
 $ lagom new hello

@@ -19,9 +19,31 @@ pub struct Program {
 pub enum Item {
     Function(FunctionDecl),
     Structure(StructureDecl),
+    /// `kind shape … is a circle with radius …` (7.12) — the sum type.
+    Kind(KindDecl),
     Test(TestDecl),
     Use(UseDecl),
     Stmt(Stmt),
+}
+
+/// `kind` — an algebraic data type (7.12): one variant per line, each with
+/// its name (the variant literal is the name) and optional `with`-fields.
+#[derive(Debug)]
+pub struct KindDecl {
+    pub name: Name,
+    pub variants: Vec<VariantDecl>,
+    pub span: Span,
+}
+
+/// `is a circle with radius of type number` — one `kind` variant. A variant
+/// with no fields is a literal (`blank`); one with fields constructs with
+/// `a circle with radius 5`.
+#[derive(Debug)]
+pub struct VariantDecl {
+    pub name: Name,
+    /// (field, type, span) in declaration order.
+    pub fields: Vec<(Name, TypeExpr, Span)>,
+    pub span: Span,
 }
 
 // ---------------------------------------------------------------------------
@@ -85,7 +107,7 @@ pub struct UseDecl {
 
 /// A block: the indented body of a function, test, branch, or attempt tail.
 /// Owned here (not in the parser) because statements and declarations embed it.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Block {
     pub stmts: Vec<Stmt>,
     pub span: Span,
@@ -97,7 +119,7 @@ impl Block {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Stmt {
     /// `make x equal to …` / `make changing score equal to …` (7.2). The
     /// `of type` annotation is optional (7.10's own example uses it — docs/14
@@ -132,7 +154,7 @@ pub enum Stmt {
     Repeat(Repeat),
     Stop { span: Span },
     Next { span: Span },
-    /// `give back <expr>` (7.8).
+    /// `gives back <expr>` (7.8).
     GiveBack { value: Expr, span: Span },
     /// `fail with <expr>` (13.1).
     FailWith { value: Expr, span: Span },
@@ -140,12 +162,45 @@ pub enum Stmt {
     Attempt { expr: Box<Expr>, tail: Option<AttemptTail>, span: Span },
     /// `check that <comparison>` (5.1).
     CheckThat { expr: Expr, span: Span },
+    /// `match <expr> { when <pattern> block } [otherwise block]` (7.12/7.15).
+    Match { scrutinee: Expr, arms: Vec<(Pattern, Block)>, otherwise: Option<Block>, span: Span },
     /// A bare flowing call used for effect: `bump c` (7.15 exprstmt).
     ExprStmt { expr: Expr, span: Span },
 }
 
+/// Patterns (7.15's `pattern` production, M1):
+/// `pattern = literal | name | "a" usertype [with name [and name] …] | "nothing"
+///          | "something with value" pattern | pair`.
+#[derive(Debug, Clone)]
+pub enum Pattern {
+    /// A literal: `when 0`, `when "quit"`.
+    Literal { value: PatternLiteral, span: Span },
+    /// A bare binding name, or a variant-literal name (`when blank`),
+    /// `when nothing`, `when something`.
+    Name { name: Name },
+    /// `a circle with radius r and height h` — variant destructuring; field
+    /// entries hold the *sub-pattern* for each named field.
+    Variant { name: Name, fields: Vec<(Name, Pattern)>, span: Span },
+    /// `something with value <pattern>` — the option destructuring (8.5).
+    Something { inner: Box<Pattern>, span: Span },
+    /// `a pair of first and second` — pair destructuring: the two sub-patterns.
+    Pair { first: Box<Pattern>, second: Box<Pattern>, span: Span },
+    /// The catch-all `otherwise` arm has no pattern.
+    Wildcard,
+}
+
+/// The literal forms a pattern may match (comparisons against the scrutinee).
+#[derive(Debug, Clone)]
+pub enum PatternLiteral {
+    Int(i64),
+    Float(f64),
+    Text(String),
+    Bool(bool),
+    Nothing,
+}
+
 /// Loop forms (7.5): count / while / for-each.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Repeat {
     /// `repeat 10 times using i` — literal count only (docs/14 G-3: variable
     /// counts are expressed with `repeat while` per the frozen grammar).
@@ -164,7 +219,7 @@ pub enum Repeat {
 }
 
 /// `attempt` tails (7.15): propagation / if-it-fails / as-binding.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AttemptTail {
     /// `and pass the problem on` (statement-only; phrase-token).
     Propagate,
@@ -175,7 +230,7 @@ pub enum AttemptTail {
 }
 
 /// Assignment/set target (7.15 `target = name { prep additive }`).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Target {
     pub base: Name,
     pub accessors: Vec<Accessor>,
@@ -216,6 +271,10 @@ pub enum Expr {
     /// A flowing call (7.9/7.15): `name [arg1] {prep argN} {and argN} {with …}`.
     /// Boxed: `CallExpr` → `Arg` → `Expr` would otherwise be infinite-sized.
     Call(Box<CallExpr>),
+    /// The option construction (8.5/G-21): `something with value v`. At the
+    /// value level it lowers to `v` itself (options are value-or-`nothing`,
+    /// D-34); sema types it as an option of the value's type.
+    SomeValue { value: Box<Expr>, span: Span },
     /// `a list of 1, 2, 3` (7.6).
     ListLit { elements: Vec<Expr>, span: Span },
     /// `a map from "ana" to 11, "bo" to 12` — keys are primaries (R-5).
@@ -224,8 +283,24 @@ pub enum Expr {
     PairLit { first: Box<Expr>, second: Box<Expr>, span: Span },
     /// `a player with name "bo" and score 0` (7.11) — labeled construction.
     StructLit { name: Name, fields: Vec<(Name, Expr)>, span: Span },
+    /// `a <kind-variant> with <field> <additive> and …` — variant construction
+    /// (7.12): the same reader shape as structlit, resolved against `kind`
+    /// tables by sema.
+    VariantLit { name: Name, fields: Vec<(Name, Expr)>, span: Span },
     /// Bare attempt used as an expression (13.1): `(attempt divide 10 and 0) plus 1`.
     AttemptExpr { expr: Box<Expr>, span: Span },
+    /// A lambda (11.1): either the block form (`a function taking n … body`)
+    /// or the inline form (`taking n giving back n times 2` — body one
+    /// comparison). `it` is resolved by sema, never stored here.
+    Lambda { params: Vec<Name>, body: LambdaBody, span: Span },
+}
+
+/// A lambda's body (R-3, 11.1): the block form owns statements; the inline
+/// form owns exactly one comparison-level expression.
+#[derive(Debug, Clone)]
+pub enum LambdaBody {
+    Block(Block),
+    Inline(Box<Expr>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -266,6 +341,11 @@ pub struct CallExpr {
     pub and_args: Vec<Arg>,
     /// `with <name> <additive>` labeled suffixes (7.9).
     pub with_args: Vec<(Name, Arg)>,
+    /// `using <lambda>` — the function argument (R-3/11.2).
+    pub using_arg: Option<Box<Expr>>,
+    /// `where <orexpr>` — the filter sugar; desugars in sema to
+    /// `using taking it giving back <expr>` (R-3's one desugaring rule).
+    pub where_expr: Option<Box<Expr>>,
     pub span: Span,
 }
 
@@ -311,8 +391,11 @@ pub enum TypeExpr {
     List(Box<TypeExpr>),
     Map(Box<TypeExpr>, Box<TypeExpr>),
     Pair(Box<TypeExpr>, Box<TypeExpr>),
-    /// A user-defined structure name.
+    /// A user-defined structure or kind name.
     User(Name),
+    /// `T?` — the compact option spelling (8.5, R-18). One desugaring rule:
+    /// the same type as `a T or nothing`.
+    OptionT(Box<TypeExpr>),
     /// Missing annotation (inferred).
     Inferred,
 }
@@ -329,6 +412,7 @@ impl TypeExpr {
             TypeExpr::Map(k, v) => format!("a map from {} to {}", k.display(), v.display()),
             TypeExpr::Pair(a, b) => format!("a pair of {} and {}", a.display(), b.display()),
             TypeExpr::User(n) => n.display(),
+            TypeExpr::OptionT(t) => format!("{}?", t.display()),
             TypeExpr::Inferred => "inferred".into(),
         }
     }

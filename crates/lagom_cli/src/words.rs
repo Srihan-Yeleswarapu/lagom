@@ -8,7 +8,7 @@ reserved words (user names may not use these):
 declarations & statements
   make  changing  equal to  of type  set  to  increase  decrease  by
   if  otherwise if  otherwise  repeat  times  using  while  for each  in
-  stop  next  function  takes  called  returns  give back  fail with
+  stop  next  function  takes  called  returns  gives back  fail with
   can fail  attempt  and pass the problem on  if it fails  then  as
   test  check that  use  for  structure  has
 

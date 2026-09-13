@@ -54,6 +54,7 @@ use lagom_mir::{failure_report, BinOp as MirBinOp, EventRing, LomEvent};
 use std::cell::RefCell;
 use std::io::Write as _;
 use std::rc::Rc;
+use std::sync::Mutex;
 
 // ---------------------------------------------------------------------------
 // The boxed value (8.2's single data language)
@@ -80,6 +81,9 @@ pub enum Value {
     Map(MapRef),
     Pair(Box<Value>, Box<Value>),
     Struct(StructRef),
+    /// A closure value (11.1): the synthetic function's interned name plus
+    /// its captured values. Calling one goes through `rt_call_closure`.
+    Closure(Rc<(String, Vec<Value>)>),
 }
 
 impl Value {
@@ -106,6 +110,7 @@ impl Value {
             Value::Map(_) => Self::TAG_MAP,
             Value::Pair(..) => Self::TAG_PAIR,
             Value::Struct(_) => Self::TAG_STRUCT,
+            Value::Closure(_) => Self::TAG_STRUCT,
         }
     }
 }
@@ -177,6 +182,7 @@ pub fn format_value(v: &Value) -> String {
             let inner: Vec<String> = s.1.iter().map(format_value).collect();
             format!("{}({})", s.0, inner.join(", "))
         }
+        Value::Closure(_) => "a function".to_string(),
     }
 }
 
@@ -341,6 +347,9 @@ fn deep_clone(v: &Value) -> Value {
         Value::Struct(s) => {
             Value::Struct(Rc::new((s.0.clone(), s.1.iter().map(deep_clone).collect())))
         }
+        Value::Closure(c) => {
+            Value::Closure(Rc::new((c.0.clone(), c.1.iter().map(deep_clone).collect())))
+        }
     }
 }
 
@@ -417,9 +426,23 @@ fn write_out(out: *mut i64, v: &Value) {
     }
 }
 
+/// Encode a value into the (tag, payload) calling convention: scalars
+/// ride in the payload directly, heap values are boxed (the exact
+/// inverse of `unbox` — a mismatch corrupts every closure call's
+/// arguments).
+fn encode_pair(v: &Value) -> (i64, i64) {
+    match v {
+        Value::Number(n) => (Value::TAG_NUMBER, *n),
+        Value::Decimal(d) => (Value::TAG_DECIMAL, d.to_bits() as i64),
+        Value::Boolean(b) => (Value::TAG_BOOLEAN, *b as i64),
+        Value::Nothing => (Value::TAG_NOTHING, 0),
+        other => (other.tag(), box_value(other.clone())),
+    }
+}
+
 fn num_to_binop(op: i64) -> Option<MirBinOp> {
     // The discriminant order of `lagom_mir::BinOp` (its derive order).
-    const ALL: [MirBinOp; 14] = [
+    const ALL: [MirBinOp; 17] = [
         MirBinOp::Add,
         MirBinOp::Sub,
         MirBinOp::Mul,
@@ -434,6 +457,9 @@ fn num_to_binop(op: i64) -> Option<MirBinOp> {
         MirBinOp::Less,
         MirBinOp::AtLeast,
         MirBinOp::AtMost,
+        MirBinOp::Contains,
+        MirBinOp::Max,
+        MirBinOp::Min,
     ];
     ALL.get(op as usize).copied()
 }
@@ -503,6 +529,27 @@ fn binop(op: MirBinOp, l: Value, r: Value, line: i64) -> Result<Value, String> {
         (Rem, Value::Decimal(a), Value::Number(b)) => Ok(Value::Decimal(a % b as f64)),
         (And, Value::Boolean(a), Value::Boolean(b)) => Ok(Value::Boolean(a && b)),
         (Or, Value::Boolean(a), Value::Boolean(b)) => Ok(Value::Boolean(a || b)),
+        // G-27: max/min of two numbers (§7.8's `bigger of a and b`).
+        (Max, Value::Number(a), Value::Number(b)) => Ok(Value::Number(a.max(b))),
+        (Max, Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Decimal(a.max(b))),
+        (Max, Value::Number(a), Value::Decimal(b)) => {
+            let d = a as f64;
+            if d >= b { Ok(Value::Decimal(d)) } else { Ok(Value::Decimal(b)) }
+        }
+        (Max, Value::Decimal(a), Value::Number(b)) => {
+            let d = b as f64;
+            if a >= d { Ok(Value::Decimal(a)) } else { Ok(Value::Decimal(d)) }
+        }
+        (Min, Value::Number(a), Value::Number(b)) => Ok(Value::Number(a.min(b))),
+        (Min, Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Decimal(a.min(b))),
+        (Min, Value::Number(a), Value::Decimal(b)) => {
+            let d = a as f64;
+            if d <= b { Ok(Value::Decimal(d)) } else { Ok(Value::Decimal(b)) }
+        }
+        (Min, Value::Decimal(a), Value::Number(b)) => {
+            let d = b as f64;
+            if a <= d { Ok(Value::Decimal(a)) } else { Ok(Value::Decimal(d)) }
+        }
         (op, l, r) => match compare(op, &l, &r) {
             Some(b) => Ok(Value::Boolean(b)),
             None => Err(format!(
@@ -577,6 +624,7 @@ pub fn values_equal(a: &Value, b: &Value) -> bool {
                 && s1.1.len() == s2.1.len()
                 && s1.1.iter().zip(s2.1.iter()).all(|(x, y)| values_equal(x, y))
         }
+        (Value::Closure(c1), Value::Closure(c2)) => c1.0 == c2.0,
         _ => false,
     }
 }
@@ -901,6 +949,23 @@ pub unsafe extern "C" fn rt_index_get(
                 1
             }
         },
+        (Value::Text(s), Value::Number(n)) => {
+            // §7.7: `greeting at 2` — the Unicode code point by position
+            // (0-based, like list indexing); out-of-range is a failure like
+            // the list case.
+            let chars: Vec<char> = s.chars().collect();
+            match index_of(chars.len(), n) {
+                Ok(ix) => {
+                    write_out(out, &Value::Text(Rc::new(chars[ix].to_string())));
+                    0
+                }
+                Err(msg) => {
+                    rt_set_fail_text(msg);
+                    let _ = line;
+                    1
+                }
+            }
+        }
         (Value::Map(entries), key) => {
             // A map read of a missing key gives `nothing` (S-13/D-34).
             let found = entries
@@ -913,7 +978,7 @@ pub unsafe extern "C" fn rt_index_get(
         }
         (b, i) => {
             rt_set_fail_text(format!(
-                "`at` reads a list or a map, but {} at {} is not one.",
+                "`at` reads a list, a map, or text, but {} at {} is not one.",
                 format_value(&b),
                 format_value(&i)
             ));
@@ -1253,6 +1318,9 @@ fn cmp_text(op: MirBinOp) -> &'static str {
         MirBinOp::Less => "is less than",
         MirBinOp::AtLeast => "is at least",
         MirBinOp::AtMost => "is at most",
+        MirBinOp::Contains => "contains",
+        MirBinOp::Max => "bigger of",
+        MirBinOp::Min => "smaller of",
     }
 }
 
@@ -1389,6 +1457,705 @@ pub extern "C" fn rt_lom_fail(m_tag: i64, m_pay: i64) {
         r.borrow_mut()
             .push(LomEvent::Failure { message: format_value(&m) })
     });
+}
+
+// ---------------------------------------------------------------------------
+// M1: kinds/match, closures, combinators, files, JSON (7.12/8.5/11/19.1)
+// ---------------------------------------------------------------------------
+
+/// `match`'s scrutinee tag (7.12): the variant name of a variant value (a
+/// struct box shares its name), the text `nothing` for the option sentinel,
+/// and a panic for anything else (sema makes that unreachable).
+/// # Safety
+/// `out` must point at 16 writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn rt_variant_tag(out: *mut i64, v_tag: i64, v_pay: i64, _line: i64) -> i64 {
+    let v = unbox(v_tag, v_pay);
+    let tag = match v {
+        Value::Struct(s) => s.0.clone(),
+        Value::Nothing => "nothing".to_string(),
+        // D-34: options are value-or-`nothing` — any plain value IS the
+        // `something` case (the value level keeps no wrapper box).
+        _ => "something".to_string(),
+    };
+    write_out(out, &Value::Text(Rc::new(tag)));
+    0
+}
+
+/// Pair destructure (7.15's pair pattern).
+/// # Safety
+/// `out` must point at 16 writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn rt_pair_get(
+    out: *mut i64,
+    p_tag: i64,
+    p_pay: i64,
+    second: i64,
+    line: i64,
+) -> i64 {
+    let v = unbox(p_tag, p_pay);
+    let result = match v {
+        Value::Pair(a, b) => deep_clone(if second != 0 { &b } else { &a }),
+        other => rt_panic_at(
+            &format!(
+                "this destructure needs a pair, but this is {}.",
+                format_value(&other)
+            ),
+            line,
+        ),
+    };
+    write_out(out, &result);
+    0
+}
+
+/// Build a closure value: `(function name bytes, captures…)`. The captures
+/// arrive through the caller's out-area convention: one call with the count,
+/// then `rt_closure_push` per capture.
+/// # Safety
+/// `out` must point at 16 writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn rt_closure_new(out: *mut i64, n_ptr: *const u8, n_len: i64) -> i64 {
+    let name = read_str(n_ptr, n_len);
+    let v = Value::Closure(Rc::new((name, Vec::new())));
+    write_out(out, &v);
+    0
+}
+
+/// Push one captured value onto the closure being built (the struct-new
+/// chaining convention).
+#[no_mangle]
+pub unsafe extern "C" fn rt_closure_push(c_pay: i64, v_tag: i64, v_pay: i64) {
+    let captured = unbox(v_tag, v_pay);
+    match &mut *unbox_mut(c_pay) {
+        Value::Closure(c) => {
+            let inner = Rc::get_mut(c).expect("a fresh closure box has one owner");
+            inner.1.push(captured);
+        }
+        _ => rt_panic("internal: closure capture on a non-closure box."),
+    }
+}
+
+/// The user-function registry the closure ABI calls through: generated code
+/// registers every synthetic `%lambda N` function's address at init.
+static LAMBDA_FNS: Mutex<Vec<(String, LambdaFn)>> = Mutex::new(Vec::new());
+
+/// The uniform closure ABI (the out-pointer ABI's closure row, docs/14):
+/// one argument — the packed args list `[formals…, captures…]` (formals
+/// first, so a zero-capture closure is positionally identical to a direct
+/// call) — plus the
+/// user-call return triple `(tag, payload, failed)` through the out pointer.
+pub type LambdaFn = unsafe extern "C" fn(out: *mut i64, args_tag: i64, args_pay: i64) -> i64;
+
+/// Generated init registers one synthetic function by name.
+/// # Safety
+/// `name_ptr/name_len` must be valid UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn rt_register_lambda(
+    f: LambdaFn,
+    name_ptr: *const u8,
+    name_len: i64,
+) {
+    let name = read_str(name_ptr, name_len);
+    let mut t = LAMBDA_FNS.lock().unwrap_or_else(|e| e.into_inner());
+    if !t.iter().any(|(n, _)| *n == name) {
+        t.push((name, f));
+    }
+}
+
+/// Apply a closure value (11.1): pack `[captures…, args…]` into a list and
+/// call the registered synthetic function. Status 1 = failed (the message
+/// rides the fail slot, like a user call).
+/// # Safety
+/// `out` must point at 24 writable bytes; `f_pay` a live closure box.
+#[no_mangle]
+pub unsafe extern "C" fn rt_call_closure(
+    out: *mut i64,
+    f_tag: i64,
+    f_pay: i64,
+    args: *const i64,
+    argc: i64,
+    line: i64,
+) -> i64 {
+    let fv = unbox(f_tag, f_pay);
+    let Value::Closure(c) = fv else {
+        rt_panic_at(
+            &format!(
+                "`call` applies a function value, but this is {}.",
+                format_value(&fv)
+            ),
+            line,
+        );
+    };
+    // Formals first, captures after (uniform closure ABI).
+    let mut packed: Vec<Value> = Vec::new();
+    for i in 0..argc as usize {
+        let t = *args.add(i * 2);
+        let p = *args.add(i * 2 + 1);
+        packed.push(unbox(t, p));
+    }
+    packed.extend(c.1.iter().map(deep_clone));
+    let list = Value::List(Rc::new(packed));
+    let (l_tag, l_pay) = (Value::TAG_LIST, box_value(list));
+    let entry = LAMBDA_FNS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find(|(n, _)| *n == c.0)
+        .map(|(_, f)| *f);
+    let Some(f) = entry else {
+        rt_panic_at(&format!("internal: closure function `{}` was not registered.", c.0), line);
+    };
+    // Call through the uniform ABI: (out, args tag, args pay). The status
+    // is the `failed` slot of the out triple (docs/14's closure row) — the
+    // generated function writes the full triple before returning, so the
+    // register return carries nothing.
+    f(out, l_tag, l_pay);
+    unsafe { *out.add(2) }
+}
+
+/// `map`/`keep` (11.2): one loop in the runtime; `is_map` selects. The
+/// predicate runs via `rt_call_closure` per element; a failing element call
+/// propagates (status 1).
+/// # Safety
+/// `out` must point at 24 writable bytes; `args` at `2*argc` i64s.
+#[no_mangle]
+pub unsafe extern "C" fn rt_map_list(
+    out: *mut i64,
+    l_tag: i64,
+    l_pay: i64,
+    f_tag: i64,
+    f_pay: i64,
+    is_map: i64,
+    line: i64,
+) -> i64 {
+    let l = unbox(l_tag, l_pay);
+    let f = unbox(f_tag, f_pay);
+    let Value::List(items) = l else {
+        rt_panic_at(&format!("`map` needs a list, but this is {}.", format_value(&l)), line);
+    };
+    let mut result: Vec<Value> = Vec::with_capacity(items.len());
+    for item in items.iter() {
+        let (it, ip) = encode_pair(item);
+        let (ft, fp) = encode_pair(&f);
+        let mut slot = [0i64; 3];
+        let status = rt_call_closure(slot.as_mut_ptr(), ft, fp, [it, ip].as_ptr(), 1, line);
+        if status != 0 {
+            return status;
+        }
+        let v = unbox(slot[0], slot[1]);
+        if is_map != 0 {
+            result.push(v);
+        } else if matches!(v, Value::Boolean(true)) {
+            result.push(deep_clone(item));
+        }
+    }
+    write_out(out, &Value::List(Rc::new(result)));
+    0
+}
+
+/// `combine` (11.2): the fold. Same failure propagation as `map`.
+/// # Safety
+/// `out` must point at 24 writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn rt_combine_list(
+    out: *mut i64,
+    l_tag: i64,
+    l_pay: i64,
+    s_tag: i64,
+    s_pay: i64,
+    f_tag: i64,
+    f_pay: i64,
+    line: i64,
+) -> i64 {
+    let l = unbox(l_tag, l_pay);
+    let mut acc = unbox(s_tag, s_pay);
+    let f = unbox(f_tag, f_pay);
+    let Value::List(items) = l else {
+        rt_panic_at(&format!("`combine` needs a list, but this is {}.", format_value(&l)), line);
+    };
+    for item in items.iter() {
+        let (at, ap) = encode_pair(&acc);
+        let (it, ip) = encode_pair(item);
+        let (ft, fp) = encode_pair(&f);
+        let mut slot = [0i64; 3];
+        let status = rt_call_closure(slot.as_mut_ptr(), ft, fp, [at, ap, it, ip].as_ptr(), 2, line);
+        if status != 0 {
+            return status;
+        }
+        acc = unbox(slot[0], slot[1]);
+    }
+    write_out(out, &acc);
+    0
+}
+
+/// `split text and separator` (docs/07's student text set).
+/// # Safety
+/// `out` must point at 16 writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn rt_split_text(
+    out: *mut i64,
+    t_tag: i64,
+    t_pay: i64,
+    s_tag: i64,
+    s_pay: i64,
+    line: i64,
+) -> i64 {
+    let t = unbox(t_tag, t_pay);
+    let s = unbox(s_tag, s_pay);
+    let result = match (t, s) {
+        (Value::Text(t), Value::Text(sep)) => {
+            if sep.is_empty() {
+                rt_panic_at("`split` needs a non-empty separator.", line);
+            }
+            Value::List(Rc::new(
+                t.split(sep.as_ref()).map(|p| Value::Text(Rc::new(p.to_string()))).collect(),
+            ))
+        }
+        _ => rt_panic_at("`split` needs two texts.", line),
+    };
+    write_out(out, &result);
+    0
+}
+
+/// `sort` — the same total order as the interpreter (mixed kinds rank by
+/// tag rather than crashing: a teaching sort stays total).
+/// # Safety
+/// `out` must point at 16 writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn rt_sort_list(out: *mut i64, l_tag: i64, l_pay: i64, line: i64) -> i64 {
+    let l = unbox(l_tag, l_pay);
+    let result = match l {
+        Value::List(items) => {
+            let mut sorted: Vec<Value> = items.iter().map(deep_clone).collect();
+            sorted.sort_by(value_order);
+            Value::List(Rc::new(sorted))
+        }
+        other => rt_panic_at(
+            &format!("`sort` needs a list, but this is {}.", format_value(&other)),
+            line,
+        ),
+    };
+    write_out(out, &result);
+    0
+}
+
+fn value_order(a: &Value, b: &Value) -> std::cmp::Ordering {
+    fn rank(v: &Value) -> u8 {
+        match v {
+            Value::Boolean(_) => 0,
+            Value::Number(_) | Value::Decimal(_) => 1,
+            Value::Text(_) => 2,
+            _ => 3,
+        }
+    }
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => x.cmp(y),
+        (Value::Number(x), Value::Decimal(y)) => {
+            (*x as f64).partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal)
+        }
+        (Value::Decimal(x), Value::Number(y)) => {
+            x.partial_cmp(&(*y as f64)).unwrap_or(std::cmp::Ordering::Equal)
+        }
+        (Value::Decimal(x), Value::Decimal(y)) => {
+            x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal)
+        }
+        (Value::Text(x), Value::Text(y)) => x.as_ref().cmp(y.as_ref()),
+        (Value::Boolean(x), Value::Boolean(y)) => x.cmp(y),
+        _ => rank(a).cmp(&rank(b)),
+    }
+}
+
+// ----- JSON (§19.1) -----
+
+/// `json from text` — parse (can fail; the message rides the fail slot).
+/// The value surface: objects→maps, arrays→lists, null→nothing.
+/// # Safety
+/// `out` must point at 16 writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn rt_json_parse(out: *mut i64, t_tag: i64, t_pay: i64, line: i64) -> i64 {
+    let t = unbox(t_tag, t_pay);
+    let Value::Text(s) = t else {
+        rt_panic_at(
+            &format!("`json from` needs text, but got text expected.",),
+            line,
+        );
+    };
+    let mut pos = 0usize;
+    let chars: Vec<char> = s.as_ref().chars().collect();
+    match json_value(&chars, &mut pos) {
+        Ok(v) => {
+            json_skip_ws(&chars, &mut pos);
+            if pos != chars.len() {
+                rt_set_fail_text(format!(
+                    "this text is not valid JSON: unexpected text after the value"
+                ));
+                return 1;
+            }
+            write_out(out, &v);
+            0
+        }
+        Err(msg) => {
+            rt_set_fail_text(format!("this text is not valid JSON: {msg}"));
+            1
+        }
+    }
+}
+
+/// `json text from value` — format (cannot fail).
+/// # Safety
+/// `out` must point at 16 writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn rt_json_format(out: *mut i64, v_tag: i64, v_pay: i64) -> i64 {
+    let v = unbox(v_tag, v_pay);
+    write_out(out, &Value::Text(Rc::new(json_format_value(&v))));
+    0
+}
+
+fn json_format_value(v: &Value) -> String {
+    match v {
+        Value::Number(n) => n.to_string(),
+        Value::Decimal(d) => format_decimal(*d),
+        Value::Text(s) => json_string_lit(s),
+        Value::Boolean(b) => (if *b { "true" } else { "false" }).to_string(),
+        Value::Nothing => "null".to_string(),
+        Value::List(items) => {
+            let inner: Vec<String> = items.iter().map(json_format_value).collect();
+            format!("[{}]", inner.join(", "))
+        }
+        Value::Map(entries) => {
+            let inner: Vec<String> = entries
+                .iter()
+                .map(|(k, v)| format!("{}: {}", json_string_lit(&format_value(k)), json_format_value(v)))
+                .collect();
+            format!("{{{}}}", inner.join(", "))
+        }
+        Value::Pair(a, b) => format!("[{}, {}]", json_format_value(a), json_format_value(b)),
+        Value::Struct(s) => {
+            let inner: Vec<String> = s
+                .1
+                .iter()
+                .map(|f| format!("{}: {}", json_string_lit(&s.0), json_format_value(f)))
+                .collect();
+            format!("{{{}}}", inner.join(", "))
+        }
+        Value::Closure(_) => "null".to_string(),
+    }
+}
+
+fn json_string_lit(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn json_skip_ws(b: &[char], pos: &mut usize) {
+    while *pos < b.len() && b[*pos].is_whitespace() {
+        *pos += 1;
+    }
+}
+
+fn json_value(b: &[char], pos: &mut usize) -> Result<Value, String> {
+    json_skip_ws(b, pos);
+    match b.get(*pos) {
+        Some('{') => {
+            *pos += 1;
+            let mut entries: Vec<(Value, Value)> = Vec::new();
+            json_skip_ws(b, pos);
+            if b.get(*pos) == Some(&'}') {
+                *pos += 1;
+                return Ok(Value::Map(Rc::new(entries)));
+            }
+            loop {
+                json_skip_ws(b, pos);
+                let key = json_string(b, pos)?;
+                json_skip_ws(b, pos);
+                if b.get(*pos) != Some(&':') {
+                    return Err(format!("expected ':' in the object at character {pos}"));
+                }
+                *pos += 1;
+                let val = json_value(b, pos)?;
+                entries.push((Value::Text(Rc::new(key)), val));
+                json_skip_ws(b, pos);
+                match b.get(*pos) {
+                    Some(',') => *pos += 1,
+                    Some('}') => {
+                        *pos += 1;
+                        return Ok(Value::Map(Rc::new(entries)));
+                    }
+                    _ => return Err(format!("expected ',' or '}}' at character {pos}")),
+                }
+            }
+        }
+        Some('[') => {
+            *pos += 1;
+            let mut items = Vec::new();
+            json_skip_ws(b, pos);
+            if b.get(*pos) == Some(&']') {
+                *pos += 1;
+                return Ok(Value::List(Rc::new(items)));
+            }
+            loop {
+                let v = json_value(b, pos)?;
+                items.push(v);
+                json_skip_ws(b, pos);
+                match b.get(*pos) {
+                    Some(',') => *pos += 1,
+                    Some(']') => {
+                        *pos += 1;
+                        return Ok(Value::List(Rc::new(items)));
+                    }
+                    _ => return Err(format!("expected ',' or ']' at character {pos}")),
+                }
+            }
+        }
+        Some('"') => Ok(Value::Text(Rc::new(json_string(b, pos)?))),
+        Some('t') => {
+            json_expect(b, pos, "true")?;
+            Ok(Value::Boolean(true))
+        }
+        Some('f') => {
+            json_expect(b, pos, "false")?;
+            Ok(Value::Boolean(false))
+        }
+        Some('n') => {
+            json_expect(b, pos, "null")?;
+            Ok(Value::Nothing)
+        }
+        Some(c) if *c == '-' || c.is_ascii_digit() => {
+            let start = *pos;
+            if b.get(*pos) == Some(&'-') {
+                *pos += 1;
+            }
+            while *pos < b.len() && (b[*pos].is_ascii_digit() || b[*pos] == '.') {
+                *pos += 1;
+            }
+            if *pos < b.len() && (b[*pos] == 'e' || b[*pos] == 'E') {
+                *pos += 1;
+                if *pos < b.len() && (b[*pos] == '+' || b[*pos] == '-') {
+                    *pos += 1;
+                }
+                while *pos < b.len() && b[*pos].is_ascii_digit() {
+                    *pos += 1;
+                }
+            }
+            let text: String = b[start..*pos].iter().collect();
+            if text.contains('.') || text.contains('e') || text.contains('E') {
+                text.parse::<f64>()
+                    .map(Value::Decimal)
+                    .map_err(|_| format!("bad number \"{text}\""))
+            } else {
+                text.parse::<i64>()
+                    .map(Value::Number)
+                    .map_err(|_| format!("bad number \"{text}\""))
+            }
+        }
+        _ => Err(format!("unexpected character at position {pos}")),
+    }
+}
+
+fn json_expect(b: &[char], pos: &mut usize, word: &str) -> Result<(), String> {
+    for c in word.chars() {
+        if b.get(*pos) != Some(&c) {
+            return Err(format!("expected '{word}' at character {pos}"));
+        }
+        *pos += 1;
+    }
+    Ok(())
+}
+
+fn json_string(b: &[char], pos: &mut usize) -> Result<String, String> {
+    if b.get(*pos) != Some(&'"') {
+        return Err(format!("expected a string at character {pos}"));
+    }
+    *pos += 1;
+    let mut out = String::new();
+    while let Some(&c) = b.get(*pos) {
+        *pos += 1;
+        match c {
+            '"' => return Ok(out),
+            '\\' => match b.get(*pos) {
+                Some('"') => {
+                    out.push('"');
+                    *pos += 1;
+                }
+                Some('\\') => {
+                    out.push('\\');
+                    *pos += 1;
+                }
+                Some('/') => {
+                    out.push('/');
+                    *pos += 1;
+                }
+                Some('n') => {
+                    out.push('\n');
+                    *pos += 1;
+                }
+                Some('t') => {
+                    out.push('\t');
+                    *pos += 1;
+                }
+                Some('r') => {
+                    out.push('\r');
+                    *pos += 1;
+                }
+                Some('u') => {
+                    *pos += 1;
+                    let hex: String = b[*pos..(*pos + 4).min(b.len())].iter().collect();
+                    *pos += 4;
+                    let code = u32::from_str_radix(&hex, 16)
+                        .map_err(|_| format!("bad \\u escape \"{hex}\""))?;
+                    out.push(char::from_u32(code).unwrap_or('\u{FFFD}'));
+                }
+                _ => return Err(format!("bad escape at character {pos}")),
+            },
+            c => out.push(c),
+        }
+    }
+    Err("the string never closed".to_string())
+}
+
+// ----- Files (§19.1): every op but `exists`/`size`-ok can fail (13.1). -----
+
+/// `op`: 0 read, 1 write, 2 append, 3 delete, 4 exists, 5 size. `a` is the
+/// path; `b` (write/append) the content. Status 1 = failed.
+/// # Safety
+/// `out` must point at 16 writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn rt_file_op(
+    out: *mut i64,
+    op: i64,
+    a_tag: i64,
+    a_pay: i64,
+    b_tag: i64,
+    b_pay: i64,
+    _has_b: i64,
+    line: i64,
+) -> i64 {
+    let pathv = unbox(a_tag, a_pay);
+    let Value::Text(first) = pathv else {
+        rt_panic_at("file operations need text paths.", line);
+    };
+    // `write file <content> at <path>` carries the content first (the call's
+    // first argument); every other op's first argument is the path.
+    let (path, content): (Rc<String>, Option<Rc<String>>) = if op == 1 || op == 2 {
+        let pv = unbox(b_tag, b_pay);
+        let Value::Text(p) = pv else {
+            rt_panic_at("file operations need text paths.", line);
+        };
+        (p, Some(first))
+    } else {
+        (first, None)
+    };
+    let full = match std::env::var("LAGOM_WORKDIR") {
+        Ok(dir) => std::path::PathBuf::from(dir).join(path.as_ref()),
+        Err(_) => std::path::PathBuf::from(path.as_ref()),
+    };
+    let fail = |m: String| {
+        rt_set_fail_text(m);
+    };
+    match op {
+        0 => match std::fs::read_to_string(&full) {
+            Ok(s) => {
+                write_out(out, &Value::Text(Rc::new(s)));
+                0
+            }
+            Err(e) => {
+                fail(format!("could not open \"{}\": {}.", path, e.kind()));
+                1
+            }
+        },
+        1 | 2 => {
+            // The content was extracted up front (first argument); the path
+            // is the `at` argument.
+            let Some(text) = content else {
+                rt_panic_at("internal: a write needs content", line);
+            };
+            let result = if op == 1 {
+                std::fs::write(&full, text.as_ref().as_bytes())
+            } else {
+                use std::io::Write as _;
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&full)
+                    .and_then(|mut f| f.write_all(text.as_ref().as_bytes()))
+            }
+            .or_else(|e| {
+                // A write into a not-yet-existing folder creates the folder
+                // (the files module's teaching rule; the file-organizer
+                // project's shape). Identical in both backends.
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    if let Some(parent) = std::path::Path::new(&full).parent() {
+                        if std::fs::create_dir_all(parent).is_ok() {
+                            return if op == 1 {
+                                std::fs::write(&full, text.as_ref().as_bytes())
+                            } else {
+                                use std::io::Write as _;
+                                std::fs::OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open(&full)
+                                    .and_then(|mut f| f.write_all(text.as_ref().as_bytes()))
+                            };
+                        }
+                    }
+                }
+                Err(e)
+            });
+            match result {
+                Ok(()) => {
+                    write_out(out, &Value::Text(text));
+                    0
+                }
+                Err(e) => {
+                    fail(format!("could not write \"{}\": {}.", path, e.kind()));
+                    1
+                }
+            }
+        }
+        3 => match std::fs::remove_file(&full) {
+            Ok(()) => {
+                write_out(out, &Value::Boolean(true));
+                0
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // Deleting an absent file already did the job.
+                write_out(out, &Value::Boolean(true));
+                0
+            }
+            Err(e) => {
+                fail(format!("could not delete \"{}\": {}.", path, e.kind()));
+                1
+            }
+        },
+        4 => {
+            write_out(out, &Value::Boolean(full.exists()));
+            0
+        }
+        5 => match std::fs::metadata(&full) {
+            Ok(m) => {
+                write_out(out, &Value::Number(m.len() as i64));
+                0
+            }
+            Err(e) => {
+                fail(format!("could not measure \"{}\": {}.", path, e.kind()));
+                1
+            }
+        },
+        _ => rt_panic_at("internal: unknown file operation.", line),
+    }
 }
 
 // ---------------------------------------------------------------------------

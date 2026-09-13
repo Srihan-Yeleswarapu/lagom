@@ -15,6 +15,9 @@ mod interp;
 mod native;
 mod pipeline;
 
-pub use pipeline::{frontend, render_diagnostics, Frontend, FrontendError};
+pub use pipeline::{
+    frontend, render_diagnostics, render_diagnostics_in, Frontend, FrontendError,
+};
+pub use lagom_diagnostics::Verbosity;
 pub use interp::{needs_input, run_interpreted, run_tests_interpreted};
 pub use native::{build_native, compile_object, link, CompiledObject, NativeBuild};

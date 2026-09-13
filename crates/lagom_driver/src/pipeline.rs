@@ -4,7 +4,7 @@
 //! tests — consumes the same output, so diagnostics and semantics cannot
 //! drift.
 
-use lagom_diagnostics::{render_student, Diagnostic, SourceFile};
+use lagom_diagnostics::{Diagnostic, SourceFile, Verbosity};
 use lagom_mir::MirProgram;
 
 /// Everything the back ends consume, produced by the shared front end.
@@ -69,10 +69,20 @@ fn is_error(d: &Diagnostic) -> bool {
 
 /// Render diagnostics the way the student CLI shows them (00 §26.2).
 pub fn render_diagnostics(file_name: &str, src: &str, diags: &[Diagnostic]) -> String {
+    render_diagnostics_in(file_name, src, diags, Verbosity::Student)
+}
+
+/// Render diagnostics in a chosen verbosity mode (00 §26.2, docs/14 G-23).
+pub fn render_diagnostics_in(
+    file_name: &str,
+    src: &str,
+    diags: &[Diagnostic],
+    mode: Verbosity,
+) -> String {
     let file = SourceFile::new(file_name, src);
     let mut out = String::new();
     for d in diags {
-        out.push_str(&render_student(&file, d));
+        out.push_str(&mode.render(&file, d));
         out.push('\n');
     }
     out

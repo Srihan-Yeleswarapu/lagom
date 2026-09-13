@@ -65,7 +65,7 @@ fn all_three_loops_with_stop_and_next() {
 #[test]
 fn functions_with_parameters_and_returns() {
     assert_compiles(
-        "function add\n    takes number called a\n    takes number called b\n    returns a number\n    give back a plus b\n\nsay add (2), 3\n",
+        "function add\n    takes number called a\n    takes number called b\n    returns a number\n    gives back a plus b\n\nsay add 2 and 3\n",
     );
 }
 
@@ -93,7 +93,7 @@ fn strings_with_interpolation_and_text_ops() {
 #[test]
 fn can_fail_and_attempt_with_conversion() {
     assert_compiles(
-        "function halve\n    takes number called n\n    returns a decimal\n    can fail\n    if n is equal to 0\n        fail with \"cannot halve zero\"\n    give back n divided by 2\n\nattempt halve (4) if it fails then\n    say problem\notherwise\n    say result\n\nattempt number from \"nope\" if it fails then\n    say \"caught\"\n",
+        "function halve\n    takes number called n\n    returns a decimal\n    can fail\n    if n is equal to 0\n        fail with \"cannot halve zero\"\n    gives back n divided by 2\n\nattempt halve (4) if it fails then\n    say problem\notherwise\n    say result\n\nattempt number from \"nope\" if it fails then\n    say \"caught\"\n",
     );
 }
 
@@ -108,7 +108,7 @@ fn module_imports_and_builtins() {
 #[test]
 fn test_blocks_are_excluded_from_native_code() {
     assert_compiles(
-        "function double\n    takes number called n\n    returns a number\n    give back n times 2\n\ntest \"doubling\"\n    check that double 2 is equal to 4\n",
+        "function double\n    takes number called n\n    returns a number\n    gives back n times 2\n\ntest \"doubling\"\n    check that double 2 is equal to 4\n",
     );
 }
 
@@ -117,7 +117,7 @@ fn test_blocks_are_excluded_from_native_code() {
 #[test]
 fn library_without_script_builds() {
     assert_compiles(
-        "function double\n    takes number called n\n    returns a number\n    give back n times 2\n",
+        "function double\n    takes number called n\n    returns a number\n    gives back n times 2\n",
     );
 }
 

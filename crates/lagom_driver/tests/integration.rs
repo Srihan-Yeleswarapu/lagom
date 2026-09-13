@@ -90,9 +90,9 @@ function total
     takes a list of item called items
     returns a number
     make changing sum equal to 0
-    repeat for each it in items
-        set sum to sum plus price of it
-    give back sum
+    repeat for each entry in items
+        set sum to sum plus price of entry
+    gives back sum
 
 make changing n equal to total cart
 say "total {n}"
@@ -146,7 +146,7 @@ fn nested_call_with_name_argument_prints_value() {
 function greet
     takes text called name
     returns a text
-    give back "Hello, {name}!"
+    gives back "Hello, {name}!"
 
 make who equal to "bo"
 say greet who
@@ -171,25 +171,75 @@ say "{rest} {also}"
 #[test]
 fn comma_call_form_is_the_seven_nine_shape() {
     // 7.9: flowing calls bind at the additive level; the frozen forms for a
-    // two-argument call are the flowing form (`bigger of a and b`), the
-    // mixed comma form (`bigger of a, b`), and the paren form (`bigger (a), b`).
+    // two-argument call are the flowing form (`most of a and b`), the
+    // mixed comma form (`most of a, b`), and the paren form (`most (a), b`).
+    // (G-27 made `bigger`/`smaller` math-module builtins, so the student
+    // function here uses a free name.)
     let src = r#"
-function bigger
+function biggest
     takes number called a
     takes number called b
     returns a number
     if a is greater than b
-        give back a
-    give back b
+        gives back a
+    gives back b
 
-say "flowing {bigger of 3 and 9}"
-say "mixed {bigger of 3, 9}"
-say "paren {bigger (3), 9}"
+say "flowing {biggest of 3 and 9}"
+say "mixed {biggest of 3, 9}"
+say "paren {biggest (3), 9}"
 "#;
     assert_says(
         "comma",
         src,
         &["flowing 9", "mixed 9", "paren 9"],
+    );
+}
+
+// ---------------------------------------------------------------------------
+// G-26/G-27 and text-`at`: the M0 surface the demo and corpus pin
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pass_on_binds_result() {
+    // G-26: the readable `?` forwards the success value — statements after
+    // `attempt … and pass the problem on` read it as `result`; the failure
+    // short-circuits to the caller.
+    let fail_src = r#"
+function parse age
+    takes text called answer
+    returns a number
+    can fail
+    attempt number from answer and pass the problem on
+    gives back result
+
+attempt parse age "abc" if it fails then
+    say problem
+otherwise
+    say result
+"#;
+    let ok_src = fail_src.replace("\"abc\"", "\"21\"");
+    assert_says("passon_fail", fail_src, &["\"abc\" is not a number — a number is digits, maybe starting with a minus."]);
+    assert_says("passon_ok", &ok_src, &["21"]);
+}
+
+#[test]
+fn bigger_and_smaller_of_two_numbers() {
+    // G-27: §7.8's `bigger of a and b` — the maximum — and its `smaller`
+    // sibling, in the math module, riding the closed call grammar.
+    assert_says(
+        "bigger_smaller",
+        "use math\nsay bigger of 3 and 4\nsay smaller of 3 and 4\nsay bigger of 9 and 2",
+        &["4", "3", "9"],
+    );
+}
+
+#[test]
+fn text_at_reads_a_code_point() {
+    // §7.7: `greeting at 2` — the Unicode code point by position, 0-based.
+    assert_says(
+        "text_at",
+        "make greeting equal to \"hello\"\nsay greeting at 1\nsay greeting at 0",
+        &["e", "h"],
     );
 }
 
@@ -206,7 +256,7 @@ function parse raw
     takes text called raw
     returns a number
     can fail
-    give back attempt number from raw
+    gives back attempt number from raw
 
 attempt parse raw "not a number" if it fails then
     say "caught the problem"
@@ -267,7 +317,7 @@ fn test_blocks_report_pass_fail_and_explanation() {
 function double
     takes number called n
     returns a number
-    give back n times 2
+    gives back n times 2
 
 test "doubling two gives four"
     check that double 2 is equal to 4
@@ -371,10 +421,11 @@ fn invalid_programs_get_source_aware_diagnostics() {
     );
     // Unknown name (the checker's "make it first" lesson).
     expect_diagnostic("say mystery", "E0344", "mystery");
-    // A can-fail call that is not handled (E0333).
+    // A can-fail call that is not handled (E0302; E0333 is the
+    // missing-`gives back` rule).
     expect_diagnostic(
         "function f\n    takes number called n\n    returns a number\n    can fail\n    fail with \"no\"\n\nmake x equal to f 1",
-        "E0333",
+        "E0302",
         "f 1",
     );
     // `fail with` in a function that does not say `can fail` (E0337).
@@ -385,7 +436,7 @@ fn invalid_programs_get_source_aware_diagnostics() {
     );
     // Arity: too few values for the parameters (E0354).
     expect_diagnostic(
-        "function add\n    takes number called a\n    takes number called b\n    returns a number\n    give back a plus b\n\nsay add 1",
+        "function add\n    takes number called a\n    takes number called b\n    returns a number\n    gives back a plus b\n\nsay add 1",
         "E0354",
         "add",
     );

@@ -11,8 +11,9 @@
 
 use lagom_ast as ast;
 use lagom_ast::{
-    Arg, AttemptTail, BinOp, Block, CallExpr, Expr, FieldDecl, FunctionDecl, InterpPart, Name,
-    Param, Prep, Program, Repeat, Stmt, StructureDecl, Target, TestDecl, TypeExpr, UseDecl,
+    Arg, AttemptTail, BinOp, Block, CallExpr, Expr, FieldDecl, FunctionDecl, InterpPart, KindDecl,
+    LambdaBody, Name, Param, Pattern, PatternLiteral, Prep, Program, Repeat, Stmt, StructureDecl,
+    Target, TestDecl, TypeExpr, UseDecl, VariantDecl,
 };
 use lagom_diagnostics::{Diagnostic, Span};
 use lagom_lexer::{lex, Item, Kw, Tok};
@@ -30,6 +31,7 @@ pub fn parse(src: &str) -> (Program, Vec<Diagnostic>) {
         sentinel: (Item::Tok(Tok::Eof), Span::default()),
         pos: 0,
         errors: lexed.errors,
+        closing_dedent: false,
     };
     let program = p.program();
     (program, p.errors)
@@ -43,6 +45,11 @@ struct Parser<'src> {
     sentinel: (Item, Span),
     pos: usize,
     errors: Vec<Diagnostic>,
+    /// Set while a layout block's closing Dedent is being consumed (block
+    /// lambdas: 11.1). A `gives back` body statement eats its own trailing
+    /// newline, so after the Dedent there is no Newline left for the enclosing
+    /// statement's `end_of_line` — it may legitimately end at the Dedent.
+    closing_dedent: bool,
 }
 
 /// Sentinel for error recovery: parse functions return `Err(())` after pushing a
@@ -177,6 +184,10 @@ impl<'src> Parser<'src> {
                     Ok(s) => items.push(AstItem::Structure(s)),
                     Err(()) => self.skip_decl(),
                 },
+                Item::Kw(Kw::Kind) => match self.kind_decl() {
+                    Ok(k) => items.push(AstItem::Kind(k)),
+                    Err(()) => self.skip_decl(),
+                },
                 Item::Kw(Kw::Test) => match self.test_decl() {
                     Ok(t) => items.push(AstItem::Test(t)),
                     Err(()) => self.skip_decl(),
@@ -234,19 +245,19 @@ impl<'src> Parser<'src> {
         match self.peek_kw() {
             Some(Kw::Number) => {
                 self.bump();
-                Ok(TypeExpr::Number)
+                self.parse_option_suffix(TypeExpr::Number)
             }
             Some(Kw::Decimal) => {
                 self.bump();
-                Ok(TypeExpr::Decimal)
+                self.parse_option_suffix(TypeExpr::Decimal)
             }
             Some(Kw::Text) => {
                 self.bump();
-                Ok(TypeExpr::Text)
+                self.parse_option_suffix(TypeExpr::Text)
             }
             Some(Kw::Boolean) => {
                 self.bump();
-                Ok(TypeExpr::Boolean)
+                self.parse_option_suffix(TypeExpr::Boolean)
             }
             Some(Kw::AListOf) => {
                 self.bump();
@@ -270,7 +281,11 @@ impl<'src> Parser<'src> {
             _ => {
                 // usertype: any name word run
                 match self.peek_tok() {
-                    Some(Tok::WordRun(_)) => Ok(TypeExpr::User(self.parse_name(expecting)?)),
+                    Some(Tok::WordRun(_)) => {
+                        let name = self.parse_name(expecting)?;
+                        let ty = TypeExpr::User(name);
+                        self.parse_option_suffix(ty)
+                    }
                     _ => {
                         let (item, span) = self.peek();
                         self.errors.push(
@@ -282,6 +297,22 @@ impl<'src> Parser<'src> {
                 }
             }
         }
+    }
+
+    /// The option-type suffixes (8.5, R-18): after a type, `?` or the word
+    /// form `or nothing` spells the same optional type. Applied to atomic
+    /// heads (number?, text?) and user types (shape? / a shape or nothing);
+    /// the compound heads (`a list of …`) carry their own option tail inside
+    /// their element type.
+    fn parse_option_suffix(&mut self, ty: TypeExpr) -> PResult<TypeExpr> {
+        if self.eat_tok(&Tok::QuestionMark).is_some() {
+            return Ok(TypeExpr::OptionT(Box::new(ty)));
+        }
+        if self.peek_kw() == Some(Kw::OrNothing) {
+            self.bump();
+            return Ok(TypeExpr::OptionT(Box::new(ty)));
+        }
+        Ok(ty)
     }
 
     // ------------------------------------------------------------------
@@ -430,6 +461,54 @@ impl<'src> Parser<'src> {
         Ok(fields)
     }
 
+    /// `kind name ⏎ INDENT { is a variant [with f of type T …] ⏎ } DEDENT`
+    /// (7.12) — the sum-type declaration. One variant per line; field lines
+    /// mirror `structure`'s `of type` annotations.
+    fn kind_decl(&mut self) -> PResult<KindDecl> {
+        let start = self.expect_kw(Kw::Kind, "the word `kind`")?;
+        let name = self.parse_name("`kind` must be followed by a name")?;
+        self.end_of_line("the kind header")?;
+        let Some(_is) = self.eat_tok(&Tok::Indent) else {
+            let (_, span) = self.peek();
+            self.errors.push(Diagnostic::error(
+                "E0202",
+                "This kind needs its variants indented under the header.",
+                span,
+            ));
+            return Err(());
+        };
+        let mut variants = Vec::new();
+        loop {
+            if self.at_dedent() || self.at_eof() {
+                break;
+            }
+            if self.at_newline() {
+                self.bump();
+                continue;
+            }
+            let vstart = self.peek().1;
+            self.expect_kw(Kw::IsA, "the words `is a` (each kind variant starts with `is a`)")?;
+            let vname = self.parse_name("`is a` must be followed by the variant's name")?;
+            let mut fields = Vec::new();
+            // `with radius of type number and height of type number` — the
+            // same with/and spelling as construction (7.12's own example).
+            while self.peek_kw() == Some(Kw::With) || self.peek_kw() == Some(Kw::And) {
+                self.bump();
+                let fname = self.parse_name("the variant field needs a name")?;
+                self.expect_kw(Kw::OfType, "the words `of type`")?;
+                let ty = self.parse_type("After `of type`, write the field's type.")?;
+                let tspan = ty_span(&ty);
+                fields.push((fname, ty, tspan));
+            }
+            self.end_of_line("the variant line")?;
+            let end = fields.last().map(|(_, _, s)| *s).unwrap_or(vname.span);
+            variants.push(VariantDecl { name: vname, fields, span: vstart.to(end) });
+        }
+        self.expect_tok(Tok::Dedent, "the end of this kind's variant list (un-dent)")?;
+        let end = variants.last().map(|v| v.span).unwrap_or(start);
+        Ok(KindDecl { name, variants, span: start.to(end) })
+    }
+
     /// `test "name" block` (5.1, 26.3).
     fn test_decl(&mut self) -> PResult<TestDecl> {
         let start = self.expect_kw(Kw::Test, "the word `test`")?;
@@ -501,6 +580,12 @@ impl<'src> Parser<'src> {
                 Err(()) => self.skip_to_line_end(),
             }
         }
+        // Layout (7.0.2): a block's last statement eats its own trailing
+        // newline, so after the Dedent there may be no Newline left for the
+        // enclosing statement's `end_of_line`. Leave the flag set so that
+        // `end_of_line` accepts this position (11.1's block lambda:
+        // `make f equal to a function taking n …` followed by more lines).
+        self.closing_dedent = true;
         self.expect_tok(Tok::Dedent, "the end of this block (un-dent)")?;
         let span = is.to(self.peek().1);
         Ok(Block { stmts, span })
@@ -519,6 +604,11 @@ impl<'src> Parser<'src> {
             self.bump();
             Ok(())
         } else if self.at_dedent() || self.at_eof() {
+            Ok(())
+        } else if self.closing_dedent {
+            // Just closed an indented block inside an expression — the
+            // newline was the body's last statement's own. The line ends here.
+            self.closing_dedent = false;
             Ok(())
         } else if self.peek_tok() == Some(&Tok::Comma) {
             // 7.9: a comma is an argument separator inside a call, so a stray
@@ -552,6 +642,9 @@ impl<'src> Parser<'src> {
 
     /// Parse one statement. Returns Ok(None) for skipped trivia.
     fn statement(&mut self) -> PResult<Option<Stmt>> {
+        // Scope the just-closed-block flag to one statement: it is consumed
+        // by this statement's own `end_of_line`, never leaks to the next.
+        self.closing_dedent = false;
         let (item, span) = self.peek();
         match item {
             Item::Tok(Tok::Newline) => {
@@ -583,7 +676,7 @@ impl<'src> Parser<'src> {
             Item::Kw(Kw::GiveBack) => {
                 self.bump();
                 let value = self.expr()?;
-                self.end_of_line("`give back`")?;
+                self.end_of_line("`gives back`")?;
                 Ok(Some(Stmt::GiveBack { value, span }))
             }
             Item::Kw(Kw::FailWith) => {
@@ -593,6 +686,7 @@ impl<'src> Parser<'src> {
                 Ok(Some(Stmt::FailWith { value, span }))
             }
             Item::Kw(Kw::Attempt) => self.attempt_stmt().map(Some),
+            Item::Kw(Kw::Match) => self.match_stmt().map(Some),
             Item::Kw(Kw::CheckThat) => {
                 self.bump();
                 let expr = self.expr()?;
@@ -849,6 +943,178 @@ impl<'src> Parser<'src> {
         }
     }
 
+    /// `match expr ⏎ INDENT { when pattern ⏎ block } [otherwise ⏎ block] DEDENT`
+    /// (7.12/7.15). Patterns and their bodies are block-structured: each
+    /// `when` line is followed by its indented block.
+    fn match_stmt(&mut self) -> PResult<Stmt> {
+        let start = self.expect_kw(Kw::Match, "the word `match`")?;
+        let scrutinee = self.expr()?;
+        self.end_of_line("the `match` header")?;
+        let Some(_is) = self.eat_tok(&Tok::Indent) else {
+            let (_, span) = self.peek();
+            self.errors.push(Diagnostic::error(
+                "E0202",
+                "This `match` needs its `when` arms indented under the header.",
+                span,
+            ));
+            return Err(());
+        };
+        let mut arms = Vec::new();
+        let mut otherwise = None;
+        loop {
+            if self.at_dedent() || self.at_eof() {
+                break;
+            }
+            if self.at_newline() {
+                self.bump();
+                continue;
+            }
+            match self.peek_kw() {
+                Some(Kw::When) => {
+                    self.bump();
+                    let pattern = self.parse_pattern()?;
+                    self.end_of_line("the `when` line")?;
+                    let body = self.block("The `when` arm needs a body indented under it.")?;
+                    arms.push((pattern, body));
+                }
+                Some(Kw::Otherwise) => {
+                    self.bump();
+                    otherwise = Some(self.block("The `otherwise` arm needs a body indented under it.")?);
+                }
+                _ => {
+                    let (item, span) = self.peek();
+                    self.errors.push(
+                        Diagnostic::error("E0201", "Inside a `match`, each arm starts with `when`.", span)
+                            .with_note(format!("found: {}", item_text(item))),
+                    );
+                    return Err(());
+                }
+            }
+        }
+        self.expect_tok(Tok::Dedent, "the end of this match (un-dent)")?;
+        let end = otherwise
+            .as_ref()
+            .map(|b| b.span)
+            .or_else(|| arms.last().map(|(_, b)| b.span))
+            .unwrap_or(start);
+        Ok(Stmt::Match { scrutinee, arms, otherwise, span: start.to(end) })
+    }
+
+    /// One `match` pattern (7.15's `pattern` production):
+    /// literal | name | `a <usertype> [with <field> <pattern> and …]`
+    /// | `nothing` | `something with value <pattern>` | `a pair of <pattern> and <pattern>`.
+    fn parse_pattern(&mut self) -> PResult<Pattern> {
+        let (item, span) = self.peek();
+        match item {
+            // `when nothing` (8.5).
+            Item::Kw(Kw::Nothing) => {
+                self.bump();
+                Ok(Pattern::Literal { value: PatternLiteral::Nothing, span })
+            }
+            // `when something` / `when something with value <pattern>` (8.5).
+            // The phrase-token `something with value` lexes as ONE item, so it
+            // is matched before the bare `something` word.
+            Item::Kw(Kw::SomethingWithValue) => {
+                self.bump();
+                let inner = self.parse_pattern()?;
+                let end = pattern_span(&inner);
+                Ok(Pattern::Something { inner: Box::new(inner), span: span.to(end) })
+            }
+            Item::Kw(Kw::Something) => {
+                self.bump();
+                let name = Name { words: vec!["something".to_string()], span };
+                Ok(Pattern::Name { name })
+            }
+            // Literals.
+            Item::Tok(Tok::Int(v)) => {
+                let v = *v;
+                self.bump();
+                Ok(Pattern::Literal { value: PatternLiteral::Int(v), span })
+            }
+            Item::Tok(Tok::Float(v)) => {
+                let v = *v;
+                self.bump();
+                Ok(Pattern::Literal { value: PatternLiteral::Float(v), span })
+            }
+            Item::Tok(Tok::Text(s)) => {
+                let s = s.clone();
+                self.bump();
+                Ok(Pattern::Literal { value: PatternLiteral::Text(s), span })
+            }
+            Item::Kw(Kw::True) => {
+                self.bump();
+                Ok(Pattern::Literal { value: PatternLiteral::Bool(true), span })
+            }
+            Item::Kw(Kw::False) => {
+                self.bump();
+                Ok(Pattern::Literal { value: PatternLiteral::Bool(false), span })
+            }
+            // `a pair of <pattern> and <pattern>` — pair destructuring.
+            Item::Kw(Kw::APairOf) => {
+                self.bump();
+                let first = self.parse_pattern()?;
+                self.expect_kw(Kw::And, "the word `and` (joining the pair's patterns)")?;
+                let second = self.parse_pattern()?;
+                let end = pattern_span(&second);
+                Ok(Pattern::Pair { first: Box::new(first), second: Box::new(second), span: span.to(end) })
+            }
+            // Article: a variant destructure (`a circle with radius r`) or the
+            // article-as-name fallback (7.9's contextual articles).
+            Item::Kw(Kw::A) | Item::Kw(Kw::An) => {
+                if matches!(self.items.get(self.pos + 1), Some((Item::Tok(Tok::WordRun(_)), _))) {
+                    self.bump();
+                    let name = self.parse_name("`a` must be followed by the variant's name")?;
+                    let mut fields = Vec::new();
+                    while self.peek_kw() == Some(Kw::With) || self.peek_kw() == Some(Kw::And) {
+                        self.bump();
+                        let fname = self.parse_name("the pattern field needs a name")?;
+                        // §7.12's pattern grammar: `with` takes *name pairs* —
+                        // the field is the leading words, the binding the last
+                        // word when they differ (`with radius r` = field
+                        // `radius`, binding `r`). A single word means the
+                        // binding *is* the field (`with radius`). The §7.12
+                        // examples spell it both ways.
+                        let (fname, sub): (Name, Pattern) = if fname.words.len() >= 2 {
+                            let last = fname.words.last().unwrap().clone();
+                            let span = fname.span;
+                            (
+                                Name { words: fname.words[..fname.words.len() - 1].to_vec(), span },
+                                Pattern::Name { name: Name { words: vec![last], span } },
+                            )
+                        } else {
+                            let f = fname.clone();
+                            (f.clone(), Pattern::Name { name: f })
+                        };
+                        fields.push((fname, sub));
+                    }
+                    let end = fields
+                        .last()
+                        .map(|(_, p)| pattern_span(p))
+                        .unwrap_or(name.span);
+                    Ok(Pattern::Variant { name, fields, span: span.to(end) })
+                } else {
+                    let name = self.parse_name("a pattern")?;
+                    Ok(Pattern::Name { name })
+                }
+            }
+            // A bare name: binding, variant literal, or a multi-word variant
+            // name whose fields follow (`when a rectangle with …` is handled
+            // above; `when rectangle` stays a binding-shaped variant match).
+            Item::Tok(Tok::WordRun(_)) => {
+                let name = self.parse_name("a pattern")?;
+                Ok(Pattern::Name { name })
+            }
+            _ => {
+                self.errors.push(
+                    Diagnostic::error("E0205", "I expected a pattern here.", span)
+                        .with_explanation("A `when` pattern is a value to compare (`0`, `\"quit\"`), a name to bind, `nothing`, `something with value …`, or `a <variant> with …`.")
+                        .with_note(format!("found: {}", item_text(item))),
+                );
+                Err(())
+            }
+        }
+    }
+
     // ------------------------------------------------------------------
     // Expressions (docs/13 §2 precedence ladder)
     // ------------------------------------------------------------------
@@ -1071,6 +1337,31 @@ impl<'src> Parser<'src> {
             Item::Kw(Kw::AListOf) => self.list_lit(),
             Item::Kw(Kw::AMapFrom) => self.map_lit(),
             Item::Kw(Kw::APairOf) => self.pair_lit(),
+            // The block lambda (11.1): `a function [taking n and m …] block`.
+            Item::Kw(Kw::A) | Item::Kw(Kw::An)
+                if matches!(self.items.get(self.pos + 1), Some((Item::Kw(Kw::Function), _))) =>
+            {
+                self.block_lambda()
+            }
+            // The inline lambda (11.1): `taking n giving back <comparison>` —
+            // opened by `taking` in expression position.
+            Item::Kw(Kw::Taking) => self.inline_lambda(),
+            // The option construction (8.5/G-21): `something with value v` —
+            // §8.5's value sentence made expression-shaped. The phrase lexes
+            // as ONE token; the value binds at the additive level (R-4: `and`
+            // stays an argument separator).
+            Item::Kw(Kw::SomethingWithValue) => {
+                let start = self.bump().1;
+                let value = self.additive()?;
+                let end = expr_span(&value);
+                Ok(Expr::SomeValue { value: Box::new(value), span: start.to(end) })
+            }
+            // `it` is a reserved word (11.1) — the implicit combinator
+            // parameter, in scope only where a lambda binds it (sema checks).
+            Item::Kw(Kw::It) => {
+                self.bump();
+                Ok(Expr::Name { name: Name { words: vec!["it".to_string()], span }, span })
+            }
             Item::Kw(Kw::Attempt) => {
                 self.bump();
                 let inner = self.orexpr()?;
@@ -1093,8 +1384,10 @@ impl<'src> Parser<'src> {
             | Item::Kw(Kw::Text)
             | Item::Kw(Kw::Boolean)
             | Item::Kw(Kw::Random) => self.try_call_from_head(),
-            // Construction (7.11 structlit): `a player with name "bo" and score 0`.
-            // An article followed by a name opens a construction; otherwise the
+            // Construction (7.11 structlit / 7.12 variantlit): `a player with
+            // name "bo" and score 0` — the same reader shape; sema resolves
+            // which table (structure or kind variant) owns the name. An
+            // article followed by a name opens a construction; otherwise the
             // article is itself a one-word name (7.9: `bigger of a and b`).
             Item::Kw(Kw::A) | Item::Kw(Kw::An) => {
                 if matches!(self.items.get(self.pos + 1), Some((Item::Tok(Tok::WordRun(_)), _))) {
@@ -1236,10 +1529,28 @@ impl<'src> Parser<'src> {
 
     /// A WordRun is a name; it becomes a call if an argument follows (7.15
     /// `flowcall = name [additive] { prep additive } { "and" additive }`).
+    /// Does a flowcall ARGUMENT open after a name run? `and` does NOT start
+    /// one: the andexpr ladder owns boolean `and` at parse level, and sema's
+    /// G-22 arm splits `split line and ","` into call arguments when callee
+    /// resolution calls for it (the parser cannot know bound names).
+    fn starts_flowcall_argument(&self) -> bool {
+        self.starts_argument()
+    }
+
     fn try_name_or_call(&mut self) -> PResult<Expr> {
         let callee = self.parse_name("a value or a call")?;
         // no argument tokens follow → plain name
-        if !self.starts_argument() {
+        if !self.starts_flowcall_argument() {
+            let span = callee.span;
+            return Ok(Expr::Name { name: callee, span });
+        }
+        // R-3: `using`/`where` are the SENTENCE's call suffixes. A multi-word
+        // run (`map xs using f` → run `map xs`) carries them — but a
+        // single-word value followed by `using` (`combine xs with start seen
+        // using f`: the run is just `seen`) is the with-labeled argument, and
+        // the suffix belongs to the enclosing sentence call, not to `seen`.
+        let peek_using = self.peek_kw() == Some(Kw::Using) || self.peek_kw() == Some(Kw::Where);
+        if callee.words.len() == 1 && peek_using && !self.starts_additive() {
             let span = callee.span;
             return Ok(Expr::Name { name: callee, span });
         }
@@ -1275,6 +1586,58 @@ impl<'src> Parser<'src> {
         self.finish_call(callee)
     }
 
+    /// The block lambda (11.1): `a function [taking n and m] ⏎ INDENT …body…
+    /// DEDENT` — the parameters come from the optional `taking` clause on the
+    /// header line; the body is the indented block (7.15's funclit: "the
+    /// block may open with takes/returns/can clauses (11.1: `twice`)" — those
+    /// typed-clause forms are an M2 signature feature; M1 infers parameters).
+    fn block_lambda(&mut self) -> PResult<Expr> {
+        let start = self.peek().1;
+        self.eat_kw(Kw::A);
+        self.eat_kw(Kw::An);
+        self.expect_kw(Kw::Function, "the words `a function`")?;
+        let mut params: Vec<Name> = Vec::new();
+        if self.eat_kw(Kw::Taking).is_some() {
+            params.push(self.parse_name("`taking` must be followed by the parameter's name")?);
+            while self.eat_kw(Kw::And).is_some() {
+                params.push(self.parse_name("`and` must be followed by the next parameter's name")?);
+            }
+        }
+        let body = self.block("The `a function` lambda needs its body indented under it.")?;
+        Ok(Expr::Lambda { params, body: LambdaBody::Block(body.clone()), span: start.to(body.span) })
+    }
+
+    /// The inline lambda (11.1/R-3): `taking <name> [and <name> …] giving
+    /// back <comparison>` — the body is one comparison-level expression
+    /// (bounded; boolean bodies use the block form).
+    fn inline_lambda(&mut self) -> PResult<Expr> {
+        let start = self.expect_kw(Kw::Taking, "the word `taking`")?;
+        let mut params = vec![self.parse_name("`taking` must be followed by the parameter's name")?];
+        while self.eat_kw(Kw::And).is_some() {
+            params.push(self.parse_name("`and` must be followed by the next parameter's name")?);
+        }
+        self.expect_kw(Kw::GivingBack, "the words `giving back`")?;
+        let body = self.comparison()?;
+        let end = expr_span(&body);
+        Ok(Expr::Lambda {
+            params,
+            body: LambdaBody::Inline(Box::new(body)),
+            span: start.to(end),
+        })
+    }
+
+    /// The `using` argument (7.15's `lambda` production): a bare comparison
+    /// (`using double` passes the function itself; `using it plus 5` is the
+    /// implicit-`it` lambda — `it` and the preceding `with`-bound names are
+    /// in scope) or the inline `taking … giving back …` form.
+    fn parse_lambda(&mut self) -> PResult<Expr> {
+        if self.peek_kw() == Some(Kw::Taking) {
+            self.inline_lambda()
+        } else {
+            self.comparison()
+        }
+    }
+
     /// Construction (7.11 structlit): `a player with name "bo" and score 0` —
     /// the second+ `with` spells `and` (7.11). Requires a user-type name.
     fn struct_lit(&mut self) -> PResult<Expr> {
@@ -1297,6 +1660,38 @@ impl<'src> Parser<'src> {
                 return Err(());
             }
             let fname = self.parse_name("this construction field needs a name")?;
+            // The field value's head word can be lexed INTO the field-name
+            // run (`a ok with label fields at 0` — the lexer merges `label
+            // fields` because both words are plain). Names and values never
+            // contain a flowcall preposition (`of/at/from/to` is a closed
+            // reserved set, 7.15), so when the run is followed by a prep the
+            // run's last word is provably the value's head: split it off and
+            // re-parse the value from there. The same holds when the run is
+            // followed by the keyword `and` (the next field's conjunction —
+            // `a good with filepath fp and folder "misc"`) or by the end of
+            // the line (`a broken with reason row`): a field value can never
+            // be empty, and a value can never START with `and` or end-of-line,
+            // so the last run word is the earliest provable value head.
+            // Deterministic, no backtracking (the value still must parse
+            // from that word).
+            let at_boundary = matches!(self.peek_kw(), Some(Kw::Of | Kw::At | Kw::From | Kw::To | Kw::And))
+                || matches!(self.peek().0, Item::Tok(Tok::Newline | Tok::Dedent | Tok::Eof));
+            let fname = if fname.words.len() > 1 && at_boundary {
+                let mut words = fname.words.clone();
+                let head = words.pop().unwrap();
+                let head_span_end = fname.span.end;
+                let word_len = head.len();
+                let head_span = Span { start: head_span_end - word_len, end: head_span_end };
+                // `fname` keeps the words BEFORE the value head (`label` in
+                // `label fields at 0`); the head word goes back on the stream
+                // so the value parses from it.
+                let rest = Name { words, span: fname.span };
+                let head_name = Name { words: vec![head], span: head_span };
+                self.push_back_name(head_name);
+                rest
+            } else {
+                fname
+            };
             if !self.starts_additive() {
                 let (_, span) = self.peek();
                 self.errors.push(Diagnostic::error(
@@ -1307,20 +1702,147 @@ impl<'src> Parser<'src> {
                 return Err(());
             }
             let value = self.additive()?;
+            // The field value's own flowcall greedily consumed any `and`
+            // continuation (`a ok with name p at 0 and score q at 1` — the
+            // inner `p at 0` call holds `and score q at 1`). Inside a
+            // construction, an and-arg shaped like the NEXT FIELD (`and
+            // score 0`, 7.11's own exemplar) belongs to the construction,
+            // not the call: pop field-shaped leading and-args out into
+            // fields. Non-field-shaped and-args (`and ","` — `split line
+            // and ","` as a value) stay the call's arguments.
+            let (value, promoted) = split_field_continuation(value);
             fields.push((fname, value));
+            fields.extend(promoted);
+            // After a field value, an `and` continues the construction ONLY
+            // when it opens the next `name <additive>` field (7.11's exemplar:
+            // `a player with name "bo" and score 0`). An `and` followed by an
+            // additive WITHOUT a name head belongs to the field value's own
+            // flowcall continuation (`… with label fields at 0 and num 2` is
+            // label = fields(0, num(2)) when `num` names nothing bound here —
+            // wait: that reading is ambiguous, so the tie-break is positional:
+            // `and <name> <additive>` where the name is a plain single-word
+            // run followed by an additive value is the NEXT FIELD; anything
+            // else (`and "x"`, `and (a plus b)`) is the call's argument list.
+            // This keeps the construction reading for exactly the shape the
+            // grammar's exemplar shows, and never re-binds an `and`-argument.
+            if self.peek_kw() == Some(Kw::And) {
+                let next_is_field = self.peek_and_then_field_name();
+                if !next_is_field {
+                    break;
+                }
+            }
         }
         let end = fields.last().map(|(_, v)| expr_span(v)).unwrap_or(start);
         Ok(Expr::StructLit { name, fields, span: start.to(end) })
     }
 
-    /// Could an argument follow the call head here? Arguments are either
-    /// additive-level values (R-4) or prepositional (`of/at/from/to` + value —
-    /// `name of p`, `random from 1 to 6`).
+    /// After `and` (already peeked): does a `name <additive>` field follow?
+    /// The lookahead is two tokens: a single-word run (the field name) then
+    /// something additive-level. Multi-word runs after `and` in a construction
+    /// are call continuations (`a ok with label p and size of q` — `size of
+    /// q` continues the `label` field's value only when `size` is a bound
+    /// name, which the parser cannot know; the single-word field-name shape
+    /// is the grammar's own exemplar form). A known PREP keyword opens the
+    /// flowing-read value form (`and size of q` = the field `size` reading
+    /// `q`), so preps also count as value openers.
+    fn peek_and_then_field_name(&self) -> bool {
+        // self.items[self.pos] is the `and` keyword's item slot? peek_kw() saw
+        // `and` AT pos; the next item is pos+1.
+        let name_item = self.items.get(self.pos + 1).map(|(i, _)| i);
+        let value_item = self.items.get(self.pos + 2).map(|(i, _)| i);
+        let single_word_name = matches!(
+            name_item,
+            Some(Item::Tok(Tok::WordRun(w))) if w.len() == 1
+        );
+        if !single_word_name {
+            return false;
+        }
+        match value_item {
+            // Ints, floats, texts, parens open values; articles open nested
+            // constructions (`and width a number` is a value, not a field —
+            // but `a list of …` also opens a value; both are additive).
+            Some(Item::Tok(Tok::Int(_)))
+            | Some(Item::Tok(Tok::Float(_)))
+            | Some(Item::Tok(Tok::Text(_)))
+            | Some(Item::Tok(Tok::LParen))
+            | Some(Item::Tok(Tok::Minus)) => true,
+            Some(Item::Kw(
+                Kw::True | Kw::False | Kw::Nothing | Kw::AListOf | Kw::AMapFrom | Kw::APairOf,
+            )) => true,
+            Some(Item::Kw(Kw::Of | Kw::At | Kw::From | Kw::To)) => true,
+            _ => false,
+        }
+    }
+}
+
+/// Split a construction field value's trailing field-shaped and-args into
+/// (value, next_fields). See `struct_lit`'s call site for the rule.
+fn split_field_continuation(value: Expr) -> (Expr, Vec<(Name, Expr)>) {
+    let Expr::Call(mut c) = value else { return (value, Vec::new()) };
+    if c.using_arg.is_some() || c.where_expr.is_some() || !c.with_args.is_empty() {
+        return (Expr::Call(c), Vec::new());
+    }
+    let mut promoted: Vec<(Name, Expr)> = Vec::new();
+    while let Some(arg) = c.and_args.first() {
+        match field_shaped(&arg.expr) {
+            Some((fname, fvalue)) => {
+                c.and_args.remove(0);
+                promoted.push((fname, fvalue));
+            }
+            None => break,
+        }
+    }
+    (Expr::Call(c), promoted)
+}
+
+/// Is this and-arg shaped like the construction's next field? Two shapes
+/// (both the grammar exemplar's own: `a player with name "bo" and score 0`):
+/// `field value` (single-word callee + first positional: `num 2`) and
+/// `field valuehead rest…` (multi-word callee + prep: `score fields at 1`,
+/// the same value-head-rides-the-name-run rule as the field-name split).
+fn field_shaped(e: &Expr) -> Option<(Name, Expr)> {
+    let Expr::Call(c) = e else { return None };
+    if c.using_arg.is_some() || c.where_expr.is_some() || !c.with_args.is_empty() || !c.and_args.is_empty() {
+        return None;
+    }
+    if c.preps.is_empty() {
+        // `field value`: one-word callee, one positional value.
+        if c.callee.words.len() == 1 {
+            if let Some(first) = &c.first {
+                return Some((c.callee.clone(), first.expr.as_ref().clone()));
+            }
+        }
+        return None;
+    }
+    // `field valuehead rest…`: the field name rides the callee run's head;
+    // the remaining words + preps are the value (a prep-continuing call).
+    if c.first.is_none() && c.callee.words.len() >= 2 {
+        let mut words = c.callee.words.clone();
+        let fname = words.remove(0);
+        let fvalue = Expr::Call(Box::new(ast::CallExpr {
+            callee: Name { words, span: c.callee.span },
+            first: None,
+            preps: c.preps.clone(),
+            and_args: Vec::new(),
+            with_args: Vec::new(),
+            using_arg: None,
+            where_expr: None,
+            span: c.span,
+        }));
+        return Some((Name { words: vec![fname], span: c.callee.span }, fvalue));
+    }
+    None
+}
+
+impl Parser<'_> {
+    /// additive-level values (R-4), prepositional (`of/at/from/to` + value —
+    /// `name of p`, `random from 1 to 6`), or the `using`/`where` call
+    /// suffixes (R-3 — `map scores using double`, `keep scores where …`).
     fn starts_argument(&self) -> bool {
         self.starts_additive()
             || matches!(
                 self.peek_kw(),
-                Some(Kw::Of | Kw::At | Kw::From | Kw::To)
+                Some(Kw::Of | Kw::At | Kw::From | Kw::To | Kw::Using | Kw::Where | Kw::With)
             )
     }
 
@@ -1382,6 +1904,32 @@ impl<'src> Parser<'src> {
         while self.peek_kw() == Some(Kw::With) {
             self.bump();
             let label = self.parse_name("`with` must be followed by the argument's name")?;
+            // The label's value-head word can be lexed INTO the label run:
+            // `with start seen using …` reads the run as one name (`start
+            // seen`). A call argument can never be empty, so when the run is
+            // followed by a keyword boundary (`using`/`where`/`and`/prep or
+            // end-of-line), the run's last word is provably the value's head
+            // — split it off (the same deterministic rule the construction
+            // fields use above).
+            let label = if label.words.len() > 1 {
+                let after_value = matches!(
+                    self.peek_kw(),
+                    Some(Kw::Using | Kw::Where | Kw::And | Kw::Of | Kw::At | Kw::From | Kw::To)
+                ) || self.at_newline() || self.at_dedent() || self.at_eof();
+                if after_value && !self.starts_additive() {
+                    let mut words = label.words.clone();
+                    let head = words.pop().unwrap();
+                    let head_len = head.len();
+                    let head_span = Span { start: label.span.end - head_len, end: label.span.end };
+                    let value_name = Name { words: vec![head], span: head_span };
+                    self.push_back_name(value_name);
+                    Name { words, span: Span { start: label.span.start, end: head_span.start } }
+                } else {
+                    label
+                }
+            } else {
+                label
+            };
             if !self.starts_additive() {
                 let (_, span) = self.peek();
                 self.errors.push(Diagnostic::error(
@@ -1395,15 +1943,32 @@ impl<'src> Parser<'src> {
             let span = expr_span(&e);
             with_args.push((label, Arg { expr: Box::new(e), span }));
         }
-        let end = and_args
-            .last()
-            .or_else(|| with_args.last().map(|(_, a)| a))
-            .or_else(|| preps.last().map(|(_, a)| a))
-            .or(first.as_deref())
-            .map(|a| a.span)
+        // `using <lambda>` (R-3/11.2): the function-valued argument, one per
+        // call, after every positional/prepositional/labeled argument.
+        let mut using_arg = None;
+        if self.peek_kw() == Some(Kw::Using) {
+            self.bump();
+            using_arg = Some(Box::new(self.parse_lambda()?));
+        }
+        // `where <orexpr>` (R-3): the filter sugar — `keep scores where it is
+        // at least 80` — one desugaring rule in sema (`using taking it giving
+        // back <expr>`).
+        let mut where_expr = None;
+        if self.peek_kw() == Some(Kw::Where) {
+            self.bump();
+            where_expr = Some(Box::new(self.orexpr()?));
+        }
+        let end = where_expr
+            .as_deref()
+            .map(expr_span)
+            .or_else(|| using_arg.as_deref().map(expr_span))
+            .or_else(|| and_args.last().map(|a| a.span))
+            .or_else(|| with_args.last().map(|(_, a)| a.span))
+            .or_else(|| preps.last().map(|(_, a)| a.span))
+            .or(first.as_deref().map(|a| a.span))
             .unwrap_or(start);
         self.check_ambiguous_or(&callee)?;
-        Ok(Expr::Call(Box::new(CallExpr { callee, first, preps, and_args, with_args, span: start.to(end) })))
+        Ok(Expr::Call(Box::new(CallExpr { callee, first, preps, and_args, with_args, using_arg, where_expr, span: start.to(end) })))
     }
 
     /// 7.9 (R-4): `bigger of a and b or c` is a compile error with a teaching
@@ -1462,10 +2027,29 @@ impl<'src> Parser<'src> {
                 | Kw::Decimal
                 | Kw::Text
                 | Kw::Boolean
-                | Kw::Random,
+                | Kw::Random
+                | Kw::It
+                | Kw::Taking,
             ) => true,
+            // The block lambda opens an argument: `twice with f a function …`.
+            Item::Kw(Kw::A) | Item::Kw(Kw::An)
+                if matches!(self.items.get(self.pos + 1), Some((Item::Kw(Kw::Function), _))) => true,
             Item::Tok(Tok::WordRun(_)) => true,
             _ => false,
+        }
+    }
+
+    /// Re-insert a Name's words into the token stream (the construction
+    /// field-value split: after carving the value's head word off a merged
+    /// run, the remaining words go back so the value re-parses from them).
+    /// Insertion order preserves the stream's left-to-right read.
+    fn push_back_name(&mut self, name: Name) {
+        let mut items: Vec<(Item, Span)> = Vec::with_capacity(name.words.len());
+        for w in &name.words {
+            items.push((Item::Tok(Tok::WordRun(vec![w.clone()])), name.span));
+        }
+        for (item, span) in items.into_iter().rev() {
+            self.items.insert(self.pos, (item, span));
         }
     }
 
@@ -1473,8 +2057,7 @@ impl<'src> Parser<'src> {
     /// `a`/`an` used as a one-word name — §7.9's own example `bigger of a and b`
     /// uses `a` as a variable, so articles are *contextual*: they are articles
     /// in type/construction positions and names everywhere else.
-    fn parse_name(&mut self, expecting: &str) -> PResult<Name> {
-        match self.peek() {
+    fn parse_name(&mut self, expecting: &str) -> PResult<Name> {        match self.peek() {
             (Item::Tok(Tok::WordRun(words)), span) => {
                 let words = words.clone();
                 let span = span;
@@ -1487,8 +2070,7 @@ impl<'src> Parser<'src> {
                 self.bump();
                 Ok(Name { words: vec![word], span })
             }
-            _ => {
-                let (item, span) = self.peek();
+            _ => {                let (item, span) = self.peek();
                 self.errors.push(
                     Diagnostic::error("E0208", format!("I expected a name here ({expecting})."), span)
                         .with_note(format!("found: {}", item_text(item))),
@@ -1534,8 +2116,22 @@ fn expr_span(e: &Expr) -> Span {
         | Expr::MapLit { span, .. }
         | Expr::PairLit { span, .. }
         | Expr::StructLit { span, .. }
+        | Expr::VariantLit { span, .. }
+        | Expr::SomeValue { span, .. }
+        | Expr::Lambda { span, .. }
         | Expr::AttemptExpr { span, .. } => *span,
         Expr::Call(c) => c.span,
+    }
+}
+
+fn pattern_span(p: &Pattern) -> Span {
+    match p {
+        Pattern::Literal { span, .. }
+        | Pattern::Variant { span, .. }
+        | Pattern::Something { span, .. }
+        | Pattern::Pair { span, .. } => *span,
+        Pattern::Name { name } => name.span,
+        Pattern::Wildcard => Span::default(),
     }
 }
 
@@ -1565,7 +2161,7 @@ fn kw_text(kw: Kw) -> &'static str {
         Takes => "takes",
         Called => "called",
         Returns => "returns",
-        GiveBack => "give back",
+        GiveBack => "gives back",
         FailWith => "fail with",
         CanFail => "can fail",
         Attempt => "attempt",
@@ -1581,6 +2177,17 @@ fn kw_text(kw: Kw) -> &'static str {
         Has => "has",
         OfType => "of type",
         WaitForAllTasks => "wait for all tasks",
+        Kind => "kind",
+        Match => "match",
+        When => "when",
+        Taking => "taking",
+        GivingBack => "giving back",
+        Where => "where",
+        It => "it",
+        Something => "something",
+        SomethingWithValue => "something with value",
+        IsA => "is a",
+        OrNothing => "or nothing",
         And => "and",
         Or => "or",
         Not => "not",
@@ -1738,6 +2345,169 @@ mod tests {
             other => panic!("{other:?}"),
         }
         let _ = first_stmt(&p);
+    }
+
+    // ----- M1: kinds, match, patterns, option types, lambdas (7.12, 11.1, 8.5) -----
+
+    #[test]
+    fn kind_decl_with_variants() {
+        let p = parse_ok(
+            "kind shape\n    is a blank\n    is a circle with radius of type number\n",
+        );
+        match &p.items[0] {
+            AstItem::Kind(k) => {
+                assert_eq!(k.name.display(), "shape");
+                assert_eq!(k.variants.len(), 2);
+                assert_eq!(k.variants[0].name.display(), "blank");
+                assert!(k.variants[0].fields.is_empty());
+                assert_eq!(k.variants[1].name.display(), "circle");
+                assert_eq!(k.variants[1].fields.len(), 1);
+                assert_eq!(k.variants[1].fields[0].0.display(), "radius");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn match_with_when_arms() {
+        let p = parse_ok(
+            "match s\n    when blank\n        say \"empty\"\n    when something with value n\n        say n\n",
+        );
+        match first_stmt(&p) {
+            Stmt::Match { scrutinee, arms, .. } => {
+                assert!(matches!(scrutinee, Expr::Name { .. }));
+                assert_eq!(arms.len(), 2);
+                assert!(matches!(arms[0].0, Pattern::Name { .. }));
+                assert!(matches!(arms[1].0, Pattern::Something { .. }));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn match_with_literals_and_otherwise() {
+        let p = parse_ok(
+            "match x\n    when 0\n        say \"zero\"\n    when \"quit\"\n        say \"bye\"\n    otherwise\n        say \"other\"\n",
+        );
+        match first_stmt(&p) {
+            Stmt::Match { arms, otherwise, .. } => {
+                assert_eq!(arms.len(), 2);
+                assert!(matches!(&arms[0].0, Pattern::Literal { value: PatternLiteral::Int(0), .. }));
+                assert!(matches!(&arms[1].0, Pattern::Literal { value: PatternLiteral::Text(_), .. }));
+                assert!(otherwise.is_some());
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn match_with_variant_and_pair_patterns() {
+        let p = parse_ok(
+            "match s\n    when a circle with radius r\n        say r\n    when a pair of a and b\n        say first of pt\n",
+        );
+        match first_stmt(&p) {
+            Stmt::Match { arms, .. } => {
+                assert!(matches!(&arms[0].0, Pattern::Variant { name, fields, .. }
+                    if name.display() == "circle" && fields.len() == 1));
+                assert!(matches!(&arms[1].0, Pattern::Pair { .. }));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn option_type_spellings_parse() {
+        // Compact: `T?`. Word: `a T or nothing`. One type, two spellings (R-18).
+        let p = parse_ok("function maybe\n    returns text?\n    gives back nothing");
+        match &p.items[0] {
+            AstItem::Function(f) => match &f.returns {
+                Some(TypeExpr::OptionT(inner)) => assert!(matches!(**inner, TypeExpr::Text)),
+                other => panic!("{other:?}"),
+            },
+            other => panic!("{other:?}"),
+        }
+        let p = parse_ok("function maybe\n    returns a text or nothing\n    gives back nothing");
+        match &p.items[0] {
+            AstItem::Function(f) => {
+                assert!(matches!(f.returns, Some(TypeExpr::OptionT(_))));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn variant_construction_parses_like_structlit() {
+        // The reader shape is uniform (7.11/7.12): `a <name> with …`. The
+        // parser cannot know whether `circle` is a structure or a kind
+        // variant — sema reclassifies against the kind table.
+        let p = parse_ok("make s equal to a circle with radius 5");
+        match first_stmt(&p) {
+            Stmt::Make { value: Expr::StructLit { name, fields, .. }, .. } => {
+                assert_eq!(name.display(), "circle");
+                assert_eq!(fields.len(), 1);
+                assert_eq!(fields[0].0.display(), "radius");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn inline_lambda_and_it() {
+        // The word run `map things` stays whole at the parser level —
+        // multi-word resolution is sema's job (7.0.3). The `using` suffix
+        // must land on the call either way.
+        let p = parse_ok("make raised equal to map things using taking n giving back n times 2");
+        match first_stmt(&p) {
+            Stmt::Make { value: Expr::Call(c), .. } => {
+                let lam = c.using_arg.as_ref().expect("using argument");
+                assert!(matches!(lam.as_ref(), Expr::Lambda { .. }));
+            }
+            other => panic!("{other:?}"),
+        }
+        let p = parse_ok("make raised equal to map things using it plus 5");
+        match first_stmt(&p) {
+            Stmt::Make { value: Expr::Call(c), .. } => {
+                let lam = c.using_arg.as_ref().expect("using argument");
+                match lam.as_ref() {
+                    Expr::Binary { left, .. } => {
+                        assert!(matches!(left.as_ref(), Expr::Name { name, .. } if name.display() == "it"));
+                    }
+                    other => panic!("{other:?}"),
+                }
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn where_suffix_parses_full_expression() {
+        // `where` takes an orexpr (R-3): comparisons without parens. The
+        // callee word run stays whole (sema splits it).
+        let p = parse_ok("make passing equal to keep scores where it is at least 80");
+        match first_stmt(&p) {
+            Stmt::Make { value: Expr::Call(c), .. } => {
+                assert!(c.where_expr.is_some());
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn block_lambda_parses() {
+        let p = parse_ok(
+            "make twice equal to a function taking f\n    gives back f of f of 3\n",
+        );
+        match first_stmt(&p) {
+            Stmt::Make { value: Expr::Lambda { params, body, .. }, .. } => {
+                assert_eq!(params.len(), 1);
+                assert_eq!(params[0].display(), "f");
+                match body {
+                    LambdaBody::Block(block) => assert_eq!(block.stmts.len(), 1),
+                    other => panic!("{other:?}"),
+                }
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     // ----- say / ask (7.7, 7.9 call forms) -----
@@ -2054,7 +2824,7 @@ function calculate average
     make total equal to 0
     repeat for each score in scores
         increase total by score
-    give back total divided evenly by size of scores
+    gives back total divided evenly by size of scores
 ";
         let p = parse_ok(src);
         match p.items.first().unwrap() {
@@ -2079,7 +2849,7 @@ function calculate score
     takes number of correct answers
     takes number of total questions
     returns a number
-    give back correct answers divided by total questions
+    gives back correct answers divided by total questions
 ";
         let p = parse_ok(src);
         match p.items.first().unwrap() {
@@ -2111,7 +2881,7 @@ function greet
         let src = "\
 function load config
     can fail
-    give back nothing
+    gives back nothing
 ";
         let _ = parse_ok(src);
         let src3 = "function risky\n    can fail\n    say \"x\"\n";

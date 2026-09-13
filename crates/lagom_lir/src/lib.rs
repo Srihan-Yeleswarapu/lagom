@@ -164,6 +164,33 @@ pub enum LirInstr {
     /// expression was a comparison).
     Check { value: LirOperand, has_cmp: bool, cmp_op: i64, left: LirOperand, right: LirOperand, line: i64 },
 
+    // ----- M1 (7.12/8.5/11/19.1): one LIR op per MIR op — the lowering
+    // decision is already made upstream; these are pure carriers. -----
+    /// `dest = the variant tag of value` (7.12): the variant name as text;
+    /// `nothing` for the option sentinel.
+    VariantTag { dest: SlotId, value: LirOperand, line: i64 },
+    /// `dest = pair.first | pair.second`.
+    PairGet { dest: SlotId, pair: LirOperand, second: bool, line: i64 },
+    /// `dest = closure(function, [captures…])`.
+    MakeClosure { dest: SlotId, function: StrId, captures: Vec<LirOperand>, line: i64 },
+    /// `dest = f(args…)` applying a closure value (11.1) — can fail.
+    CallClosure { dest: SlotId, f: LirOperand, args: Vec<LirOperand>, line: i64 },
+    /// `dest = map/keep list with f` (which selects the op).
+    MapList { dest: SlotId, list: LirOperand, f: LirOperand, is_map: bool, line: i64 },
+    /// `dest = combine list start f`.
+    CombineList { dest: SlotId, list: LirOperand, start: LirOperand, f: LirOperand, line: i64 },
+    /// `dest = text split by sep`.
+    SplitText { dest: SlotId, text: LirOperand, sep: LirOperand, line: i64 },
+    /// `dest = sorted list`.
+    SortList { dest: SlotId, list: LirOperand, line: i64 },
+    /// `dest = json from text` — can fail.
+    JsonParse { dest: SlotId, text: LirOperand, line: i64 },
+    /// `dest = json text from value` — cannot fail.
+    JsonFormat { dest: SlotId, value: LirOperand, line: i64 },
+    /// File ops (§19.1; op: 0 read, 1 write, 2 append, 3 delete, 4 exists,
+    /// 5 size). All but `exists` can fail.
+    FileOp { dest: SlotId, op: i64, a: LirOperand, b: Option<LirOperand>, line: i64 },
+
     // ----- LOM probes (§26.5): dev builds emit these; release builds drop
     // them in this very lowering (the release-identity boundary) -----
     /// Function-entry probe with argument snapshots.
@@ -192,7 +219,7 @@ pub enum LirTerm {
     Branch { cond: LirOperand, then: BlockId, otherwise: BlockId },
     Break(BlockId),
     Continue(BlockId),
-    /// `give back value` — `Nothing` for script bodies.
+    /// `gives back value` — `Nothing` for script bodies.
     Return(LirOperand),
     /// `fail with message` with no enclosing pad: propagate the failure to
     /// the caller (the failed flag; the message stays in the fail slot).
@@ -530,6 +557,87 @@ fn lower_instr(i: &lagom_mir::Instr, dev: bool, inr: &mut Interner, out: &mut Ve
             message: lower_operand(message, inr),
         }),
         M::EventFunctionEntry { .. } | M::EventBind { .. } | M::EventFail { .. } => {}
+
+        // ----- M1 instructions: pure carriers (one MIR op = one LIR op) -----
+        M::VariantTag { dest, value, span } => out.push(LirInstr::VariantTag {
+            dest: SlotId(dest.0),
+            value: lower_operand(value, inr),
+            line: line_of(span),
+        }),
+        M::PairGet { dest, pair, second, span } => out.push(LirInstr::PairGet {
+            dest: SlotId(dest.0),
+            pair: lower_operand(pair, inr),
+            second: *second,
+            line: line_of(span),
+        }),
+        M::MakeClosure { dest, function, captures, span } => out.push(LirInstr::MakeClosure {
+            dest: SlotId(dest.0),
+            function: inr.intern(function),
+            captures: captures.iter().map(|c| lower_operand(c, inr)).collect(),
+            line: line_of(span),
+        }),
+        M::CallClosure { dest, f, args, span } => out.push(LirInstr::CallClosure {
+            dest: SlotId(dest.0),
+            f: lower_operand(f, inr),
+            args: args.iter().map(|a| lower_operand(a, inr)).collect(),
+            line: line_of(span),
+        }),
+        M::MapList { dest, list, f, span } => out.push(LirInstr::MapList {
+            dest: SlotId(dest.0),
+            list: lower_operand(list, inr),
+            f: lower_operand(f, inr),
+            is_map: true,
+            line: line_of(span),
+        }),
+        M::KeepList { dest, list, f, span } => out.push(LirInstr::MapList {
+            dest: SlotId(dest.0),
+            list: lower_operand(list, inr),
+            f: lower_operand(f, inr),
+            is_map: false,
+            line: line_of(span),
+        }),
+        M::CombineList { dest, list, start, f, span } => out.push(LirInstr::CombineList {
+            dest: SlotId(dest.0),
+            list: lower_operand(list, inr),
+            start: lower_operand(start, inr),
+            f: lower_operand(f, inr),
+            line: line_of(span),
+        }),
+        M::SplitText { dest, text, sep, span } => out.push(LirInstr::SplitText {
+            dest: SlotId(dest.0),
+            text: lower_operand(text, inr),
+            sep: lower_operand(sep, inr),
+            line: line_of(span),
+        }),
+        M::SortList { dest, list, span } => out.push(LirInstr::SortList {
+            dest: SlotId(dest.0),
+            list: lower_operand(list, inr),
+            line: line_of(span),
+        }),
+        M::JsonParse { dest, text, span } => out.push(LirInstr::JsonParse {
+            dest: SlotId(dest.0),
+            text: lower_operand(text, inr),
+            line: line_of(span),
+        }),
+        M::JsonFormat { dest, value, span } => out.push(LirInstr::JsonFormat {
+            dest: SlotId(dest.0),
+            value: lower_operand(value, inr),
+            line: line_of(span),
+        }),
+        M::FileOp { dest, op, a, b, span } => out.push(LirInstr::FileOp {
+            dest: SlotId(dest.0),
+            op: match op {
+                lagom_mir::FileOp::Read => 0,
+                lagom_mir::FileOp::Write => 1,
+                lagom_mir::FileOp::Append => 2,
+                lagom_mir::FileOp::Delete => 3,
+                lagom_mir::FileOp::Exists => 4,
+                lagom_mir::FileOp::Size => 5,
+            },
+            a: lower_operand(a, inr),
+            b: b.as_ref().map(|x| lower_operand(x, inr)),
+            line: line_of(span),
+        }),
     }
 }
 
@@ -561,6 +669,9 @@ pub fn binop_discriminant(op: &lagom_mir::BinOp) -> i64 {
         lagom_mir::BinOp::Less => 11,
         lagom_mir::BinOp::AtLeast => 12,
         lagom_mir::BinOp::AtMost => 13,
+        lagom_mir::BinOp::Contains => 14,
+        lagom_mir::BinOp::Max => 15,
+        lagom_mir::BinOp::Min => 16,
     }
 }
 

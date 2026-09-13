@@ -84,7 +84,7 @@ lagom run
 - Arithmetic, words and symbols: `6 times 7`, `20 divided by 4`, `remainder of 17 and 5`, `10 modulo 3`
 - Branches: `if / otherwise if / otherwise`; loops: `repeat 10 times using i`, `repeat while …`, `repeat for each … in`, with `stop` / `next`
 - Lists and maps: `a list of …`, `a map from … to …`
-- Functions: `takes … called …` / `returns …` / `give back …`
+- Functions: `takes … called …` / `returns …` / `gives back …`
 - Errors as values: `can fail`, `fail with`, `attempt … if it fails then … otherwise …`
 - Structs, `test` blocks with `check that`, `use math for square root`
 - Commands: `lagom run | build | test | check | fmt | new | explain | words`
