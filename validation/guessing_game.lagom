@@ -9,7 +9,7 @@ function read guess
     returns a number
     can fail
     make answer equal to ask "guess {turn}: "
-    give back attempt number from answer
+    gives back attempt number from answer
 
 make secret equal to random from 1 to 100
 make changing guesses equal to 0

@@ -25,8 +25,9 @@
 
 use lagom_diagnostics::Span;
 use lagom_mir::{
-    BinOp, BlockId, Conv, EventRing, FormatPart, Instr, LomConfig, LomEvent, MathOp, MirFunction,
-    MirItem, MirProgram, Operand, Term, TextOp, UnOp, failure_report, instrument,
+    BinOp, BlockId, Conv, EventRing, FileOp, FormatPart, Instr, LocalId, LomConfig, LomEvent,
+    MathOp, MirFunction, MirItem, MirProgram, Operand, Term, TextOp, UnOp, failure_report,
+    instrument,
 };
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -51,8 +52,12 @@ pub enum Value {
     /// Insertion-ordered key/value pairs (S-9 prints in insertion order).
     Map(Vec<(Value, Value)>),
     Pair(Box<Value>, Box<Value>),
-    /// A structure value, fields in declaration order.
+    /// A structure value, fields in declaration order. A *variant* value
+    /// (7.12) is the same shape named by its variant.
     Struct { name: String, fields: Vec<Value> },
+    /// A closure value (11.1): the synthetic function's name plus the
+    /// captured values. Both backends use the same shape.
+    Closure { function: String, captures: Vec<Value> },
 }
 
 impl Value {
@@ -83,6 +88,7 @@ impl Value {
                 let inner: Vec<String> = fields.iter().map(Value::format).collect();
                 format!("{}({})", name, inner.join(", "))
             }
+            Value::Closure { .. } => "a function".to_string(),
         }
     }
 }
@@ -124,7 +130,7 @@ impl Trap {
 
 /// How a function's execution ended.
 enum Exit {
-    /// `give back value` — `Nothing` for fall-out of a script/test body.
+    /// `gives back value` — `Nothing` for fall-out of a script/test body.
     Return(Value),
     /// `fail with` / a failing instruction reached a `catch: None` boundary:
     /// the error flows to the *caller*'s innermost pad (13.1).
@@ -145,17 +151,26 @@ pub struct Host {
     pub stdin: Vec<String>,
     /// Everything `say` printed, in order.
     pub stdout: Vec<String>,
+    /// The working directory for file operations (§19.1's `files` module).
+    /// Tests point it at a temp dir; the CLI leaves it at the process cwd.
+    pub workdir: std::path::PathBuf,
     rng: u64,
 }
 
 impl Host {
     pub fn new(stdin: Vec<String>) -> Host {
-        Host { stdin, stdout: Vec::new(), rng: 0x2545_F491_4F6C_DD1D }
+        Host { stdin, stdout: Vec::new(), workdir: std::env::current_dir().unwrap_or_default(), rng: 0x2545_F491_4F6C_DD1D }
     }
 
     /// A fixed seed, for replay-determinism tests.
     pub fn with_seed(stdin: Vec<String>, seed: u64) -> Host {
-        Host { stdin, stdout: Vec::new(), rng: seed | 1 }
+        Host { stdin, stdout: Vec::new(), workdir: std::env::current_dir().unwrap_or_default(), rng: seed | 1 }
+    }
+
+    /// A host pinned to a working directory (file-op tests, validation
+    /// projects running in a sandbox dir).
+    pub fn with_workdir(stdin: Vec<String>, dir: std::path::PathBuf) -> Host {
+        Host { stdin, stdout: Vec::new(), workdir: dir, rng: 0x2545_F491_4F6C_DD1D }
     }
 
 
@@ -650,6 +665,18 @@ impl Interp {
                         }
                         Err(t) => route_index_error(t, pad),
                     },
+                    (Value::Text(s), Value::Number(n)) => {
+                        // §7.7: `greeting at 2` — the Unicode code point by
+                        // position (0-based, like list indexing).
+                        let chars: Vec<char> = s.chars().collect();
+                        match index_of(chars.len(), n, *span) {
+                            Ok(ix) => {
+                                locals[dest.0] = Value::Text(chars[ix].to_string());
+                                Step::Continue
+                            }
+                            Err(t) => route_index_error(t, pad),
+                        }
+                    }
                     (Value::Map(entries), key) => {
                         // A map read of a missing key gives `nothing`
                         // (S-13/D-34's option-shaped absence).
@@ -662,7 +689,7 @@ impl Interp {
                     }
                     (b, i) => Step::Exit(Exit::Trap(Trap {
                         message: format!(
-                            "`at` reads a list or a map, but {} at {} is not one.",
+                            "`at` reads a list, a map, or text, but {} at {} is not one.",
                             b.format(),
                             i.format()
                         ),
@@ -896,6 +923,233 @@ impl Interp {
 
             // ----- LOM probes: record and continue (dev only; release has
             // none — the instrument pass strips them) -----
+            // ----- M1 instructions (kinds/match, options, closures,
+            // combinators, files, JSON — 7.12/8.5/11/19.1) -----
+            Instr::VariantTag { dest, value, .. } => {
+                // The scrutinee's variant name: a struct value named by the
+                // variant; the `nothing` sentinel is the option tag (8.5);
+                // any other value IS `something` (D-34's value-or-nothing).
+                let v = self.read(value, locals);
+                let tag = match v {
+                    Value::Struct { name, .. } => name,
+                    Value::Nothing => "nothing".to_string(),
+                    _ => "something".to_string(),
+                };
+                locals[dest.0] = Value::Text(tag);
+                Step::Continue
+            }
+            Instr::PairGet { dest, pair, second, span } => {
+                let p = self.read(pair, locals);
+                match p {
+                    Value::Pair(a, b) => {
+                        locals[dest.0] = if *second { *b } else { *a };
+                        Step::Continue
+                    }
+                    other => Step::Exit(Exit::Trap(Trap {
+                        message: format!(
+                            "this destructure needs a pair, but this is {}.",
+                            other.format()
+                        ),
+                        span: *span,
+                    })),
+                }
+            }
+            Instr::MakeClosure { dest, function, captures, .. } => {
+                let mut caps = Vec::with_capacity(captures.len());
+                for c in captures {
+                    caps.push(self.read(c, locals));
+                }
+                locals[dest.0] = Value::Closure { function: function.clone(), captures: caps };
+                Step::Continue
+            }
+            Instr::CallClosure { dest, f, args, span } => {
+                let fv = self.read(f, locals);
+                let mut vals = Vec::with_capacity(args.len());
+                for a in args {
+                    vals.push(self.read(a, locals));
+                }
+                match fv {
+                    Value::Closure { function, captures } => {
+                        // The uniform closure ABI: one args list
+                        // `[captures…, formals…]` is the synthetic
+                        // function's single parameter.
+                        // Uniform closure ABI: formals first, captures after.
+                        let mut packed = vals;
+                        packed.extend(captures);
+                        let list = Value::List(packed);
+                        match self.call_user(&function, vec![list], functions) {
+                            CallResult::Done => {
+                                locals[dest.0] = Value::Nothing;
+                                Step::Continue
+                            }
+                            CallResult::Value(v) => {
+                                locals[dest.0] = v;
+                                Step::Continue
+                            }
+                            CallResult::Fail(msg) => {
+                                self.record_fail(&msg);
+                                route_fail(msg, pad)
+                            }
+                            CallResult::Exit(e) => Step::Exit(e),
+                        }
+                    }
+                    other => Step::Exit(Exit::Trap(Trap {
+                        message: format!(
+                            "`call` applies a function value, but this is {}.",
+                            other.format()
+                        ),
+                        span: *span,
+                    })),
+                }
+            }
+            Instr::MapList { dest, list, f, span }
+            | Instr::KeepList { dest, list, f, span } => {
+                let l = self.read(list, locals);
+                let fv = self.read(f, locals);
+                let is_map = matches!(instr, Instr::MapList { .. });
+                match (l, fv) {
+                    (Value::List(items), fv @ Value::Closure { .. }) => {
+                        let mut out = Vec::with_capacity(items.len());
+                        for item in items {
+                            match self.call_closure_1(&fv, item.clone(), functions, pad) {
+                                Ok(v) => {
+                                    // `keep` filters on truthiness of the
+                                    // predicate's boolean (11.2).
+                                    if is_map {
+                                        out.push(v);
+                                    } else if matches!(v, Value::Boolean(true)) {
+                                        out.push(item);
+                                    }
+                                }
+                                Err(e) => return Step::Exit(e),
+                            }
+                        }
+                        locals[dest.0] = Value::List(out);
+                        Step::Continue
+                    }
+                    (Value::List(_), other) => Step::Exit(Exit::Trap(Trap {
+                        message: format!(
+                            "`{}` needs a function value, but got {}.",
+                            if is_map { "map" } else { "keep" },
+                            other.format()
+                        ),
+                        span: *span,
+                    })),
+                    (other, _) => Step::Exit(Exit::Trap(Trap {
+                        message: format!(
+                            "`{}` needs a list, but this is {}.",
+                            if is_map { "map" } else { "keep" },
+                            other.format()
+                        ),
+                        span: *span,
+                    })),
+                }
+            }
+            Instr::CombineList { dest, list, start, f, span } => {
+                let l = self.read(list, locals);
+                let acc0 = self.read(start, locals);
+                let fv = self.read(f, locals);
+                match (l, fv) {
+                    (Value::List(items), fv @ Value::Closure { .. }) => {
+                        let mut acc = acc0;
+                        for item in items {
+                            match self.call_closure_2(&fv, acc, item, functions, pad) {
+                                Ok(v) => acc = v,
+                                Err(e) => return Step::Exit(e),
+                            }
+                        }
+                        locals[dest.0] = acc;
+                        Step::Continue
+                    }
+                    (Value::List(_), other) => Step::Exit(Exit::Trap(Trap {
+                        message: format!(
+                            "`combine` needs a function value, but got {}.",
+                            other.format()
+                        ),
+                        span: *span,
+                    })),
+                    (other, _) => Step::Exit(Exit::Trap(Trap {
+                        message: format!("`combine` needs a list, but this is {}.", other.format()),
+                        span: *span,
+                    })),
+                }
+            }
+            Instr::SplitText { dest, text, sep, span } => {
+                let t = self.read(text, locals);
+                let s = self.read(sep, locals);
+                match (t, s) {
+                    (Value::Text(t), Value::Text(sep)) => {
+                        if sep.is_empty() {
+                            Step::Exit(Exit::Trap(Trap {
+                                message: "`split` needs a non-empty separator.".to_string(),
+                                span: *span,
+                            }))
+                        } else {
+                            let parts = t.split(sep.as_str()).map(|p| Value::Text(p.to_string())).collect();
+                            locals[dest.0] = Value::List(parts);
+                            Step::Continue
+                        }
+                    }
+                    _ => Step::Exit(Exit::Trap(Trap {
+                        message: "`split` needs two texts.".to_string(),
+                        span: *span,
+                    })),
+                }
+            }
+            Instr::SortList { dest, list, span } => {
+                let l = self.read(list, locals);
+                match l {
+                    Value::List(mut items) => {
+                        let sorted = items.sort_by(|a, b| value_order(a, b));
+                        let _ = sorted;
+                        locals[dest.0] = Value::List(items);
+                        Step::Continue
+                    }
+                    other => Step::Exit(Exit::Trap(Trap {
+                        message: format!("`sort` needs a list, but this is {}.", other.format()),
+                        span: *span,
+                    })),
+                }
+            }
+            Instr::JsonParse { dest, text, span } => {
+                let t = self.read(text, locals);
+                match t {
+                    Value::Text(s) => match json_parse(s.trim()) {
+                        Ok(v) => {
+                            locals[dest.0] = v;
+                            Step::Continue
+                        }
+                        Err(msg) => {
+                            let msg = format!("this text is not valid JSON: {msg}");
+                            self.record_fail(&msg);
+                            route_fail(msg, pad)
+                        }
+                    },
+                    other => Step::Exit(Exit::Trap(Trap {
+                        message: format!(
+                            "`json from` needs text, but got {}.",
+                            other.format()
+                        ),
+                        span: *span,
+                    })),
+                }
+            }
+            Instr::JsonFormat { dest, value, .. } => {
+                let v = self.read(value, locals);
+                locals[dest.0] = Value::Text(json_format(&v));
+                Step::Continue
+            }
+            Instr::FileOp { dest, op, a, b, span } => {
+                match self.file_op(*op, *dest, a, b.as_ref(), locals, *span, pad) {
+                    Ok(()) => Step::Continue,
+                    Err(FileOutcome::Fail(msg)) => {
+                        self.record_fail(&msg);
+                        route_fail(msg, pad)
+                    }
+                    Err(FileOutcome::Trap(t)) => Step::Exit(Exit::Trap(t)),
+                }
+            }
+
             Instr::EventFunctionEntry { function, args } => {
                 if self.dev {
                     let mut rendered: Vec<(String, String)> = Vec::with_capacity(args.len());
@@ -926,6 +1180,232 @@ impl Interp {
 
     fn field_index(&self, struct_name: &str, field: &str) -> Option<usize> {
         self.struct_fields.get(struct_name)?.iter().position(|f| f == field)
+    }
+
+    /// Call a closure value with one argument (the combinators' element
+    /// lambda). A failing closure body propagates like any call (13.1).
+    fn call_closure_1(
+        &mut self,
+        f: &Value,
+        arg: Value,
+        functions: &HashMap<&str, &MirFunction>,
+        pad: Option<BlockId>,
+    ) -> Result<Value, Exit> {
+        let Value::Closure { function, captures } = f else {
+            return Err(Exit::Trap(Trap {
+                message: "internal: combinator called with a non-closure".to_string(),
+                span: Span::default(),
+            }));
+        };
+        let mut packed = vec![arg];
+        packed.extend(captures.clone());
+        match self.call_user(function, vec![Value::List(packed)], functions) {
+            CallResult::Done => Ok(Value::Nothing),
+            CallResult::Value(v) => Ok(v),
+            CallResult::Fail(msg) => {
+                self.record_fail(&msg);
+                match pad {
+                    // Inside an attempt the failure composes (13.1); in a
+                    // combinator loop with no pad it exits the frame.
+                    Some(_) => Ok(Value::Nothing),
+                    None => Err(Exit::Fail(msg)),
+                }
+            }
+            CallResult::Exit(e) => Err(e),
+        }
+    }
+
+    /// Call a closure value with two arguments (`combine`'s
+    /// (accumulator, element) step — 11.2's fold shape).
+    fn call_closure_2(
+        &mut self,
+        f: &Value,
+        a: Value,
+        b: Value,
+        functions: &HashMap<&str, &MirFunction>,
+        pad: Option<BlockId>,
+    ) -> Result<Value, Exit> {
+        let Value::Closure { function, captures } = f else {
+            return Err(Exit::Trap(Trap {
+                message: "internal: combinator called with a non-closure".to_string(),
+                span: Span::default(),
+            }));
+        };
+        let mut packed = vec![a, b];
+        packed.extend(captures.clone());
+        match self.call_user(function, vec![Value::List(packed)], functions) {
+            CallResult::Done => Ok(Value::Nothing),
+            CallResult::Value(v) => Ok(v),
+            CallResult::Fail(msg) => {
+                self.record_fail(&msg);
+                match pad {
+                    Some(_) => Ok(Value::Nothing),
+                    None => Err(Exit::Fail(msg)),
+                }
+            }
+            CallResult::Exit(e) => Err(e),
+        }
+    }
+
+    /// One file operation (§19.1). Paths resolve inside `Host::workdir`;
+    /// every operation except `exists` can fail (§13.1), and the failure
+    /// value is the message text (S-10).
+    #[allow(clippy::too_many_arguments)]
+    fn file_op(
+        &mut self,
+        op: FileOp,
+        dest: LocalId,
+        a: &Operand,
+        b: Option<&Operand>,
+        locals: &mut Vec<Value>,
+        span: Span,
+        _pad: Option<BlockId>,
+    ) -> Result<(), FileOutcome> {
+        let path_v = self.read(a, locals);
+        let Value::Text(path_s) = path_v else {
+            return Err(FileOutcome::Trap(Trap {
+                message: format!("file operations need text paths, but got {}.", path_v.format()),
+                span,
+            }));
+        };
+        // `write file <content> at <path>` carries the content first (the
+        // call's first argument); every other op's first argument is the
+        // path. Resolve the path per-op so both spellings hit the same
+        // workdir rule.
+        let write_content = if matches!(op, FileOp::Write | FileOp::Append) {
+            let content_v = self.read(a, locals);
+            let Value::Text(content_s) = content_v else {
+                return Err(FileOutcome::Trap(Trap {
+                    message: format!(
+                        "file writes need text, but got {}.",
+                        content_v.format()
+                    ),
+                    span,
+                }));
+            };
+            let Some(bop) = b else {
+                return Err(FileOutcome::Trap(Trap {
+                    message: "internal: a write needs a path".to_string(),
+                    span,
+                }));
+            };
+            let path_v2 = self.read(bop, locals);
+            let Value::Text(path2) = path_v2 else {
+                return Err(FileOutcome::Trap(Trap {
+                    message: format!(
+                        "file operations need text paths, but got {}.",
+                        path_v2.format()
+                    ),
+                    span,
+                }));
+            };
+            Some((content_s, path2))
+        } else {
+            None
+        };
+        let full = self.host.workdir.join(match &write_content {
+            Some((_, p)) => p,
+            None => &path_s,
+        });
+        match op {
+            FileOp::Exists => {
+                locals[dest.0] = Value::Boolean(full.exists());
+                Ok(())
+            }
+            FileOp::Size => match std::fs::metadata(&full) {
+                Ok(m) => {
+                    locals[dest.0] = Value::Number(m.len() as i64);
+                    Ok(())
+                }
+                Err(e) => Err(FileOutcome::Fail(format!(
+                    "could not measure \"{}\": {}.",
+                    path_s,
+                    e.kind()
+                ))),
+            },
+            FileOp::Read => match std::fs::read_to_string(&full) {
+                Ok(s) => {
+                    locals[dest.0] = Value::Text(s);
+                    Ok(())
+                }
+                Err(e) => Err(FileOutcome::Fail(format!(
+                    "could not open \"{}\": {}.",
+                    path_s,
+                    e.kind()
+                ))),
+            },
+            FileOp::Write | FileOp::Append => {
+                // The content/path pair was extracted up front (the call's
+                // first argument is the *content*; `at` carries the path).
+                let Some((text, path_s)) = write_content else {
+                    return Err(FileOutcome::Trap(Trap {
+                        message: "internal: a write needs content".to_string(),
+                        span,
+                    }));
+                };
+                let result = if op == FileOp::Write {
+                    std::fs::write(&full, text.as_bytes())
+                } else {
+                    use std::io::Write as _;
+                    std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&full)
+                        .and_then(|mut f| f.write_all(text.as_bytes()))
+                }
+                .or_else(|e| {
+                    // A write into a not-yet-existing folder creates the
+                    // folder (the files module's teaching rule; the
+                    // file-organizer project's shape). Identical in both
+                    // backends.
+                    if e.kind() == std::io::ErrorKind::NotFound {
+                        if let Some(parent) = std::path::Path::new(&full).parent() {
+                            if std::fs::create_dir_all(parent).is_ok() {
+                                return if op == FileOp::Write {
+                                    std::fs::write(&full, text.as_bytes())
+                                } else {
+                                    use std::io::Write as _;
+                                    std::fs::OpenOptions::new()
+                                        .create(true)
+                                        .append(true)
+                                        .open(&full)
+                                        .and_then(|mut f| f.write_all(text.as_bytes()))
+                                };
+                            }
+                        }
+                    }
+                    Err(e)
+                });
+                match result {
+                    Ok(()) => {
+                        locals[dest.0] = Value::Text(text);
+                        Ok(())
+                    }
+                    Err(e) => Err(FileOutcome::Fail(format!(
+                        "could not write \"{}\": {}.",
+                        path_s,
+                        e.kind()
+                    ))),
+                }
+            }
+            FileOp::Delete => match std::fs::remove_file(&full) {
+                Ok(()) => {
+                    locals[dest.0] = Value::Boolean(true);
+                    Ok(())
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    // Deleting an absent file already did the job — deleting
+                    // is idempotent for the student.
+                    locals[dest.0] = Value::Boolean(true);
+                    Ok(())
+                }
+                Err(e) => Err(FileOutcome::Fail(format!(
+                    "could not delete \"{}\": {}.",
+                    path_s,
+                    e.kind()
+                ))),
+            },
+        }
     }
 
     /// A user call: push a frame by recursion (M0 is sequential — 13.1's
@@ -977,6 +1457,13 @@ enum CallResult {
 enum ConvertOutcome {
     Value(Value),
     Fail(String),
+}
+
+/// A file operation's outcome (§19.1): ok, a failure (catchable), or a trap
+/// (a misuse — wrong types — is a crash, not an error value).
+enum FileOutcome {
+    Fail(String),
+    Trap(Trap),
 }
 
 fn route_fail(msg: String, pad: Option<BlockId>) -> Step {
@@ -1087,6 +1574,28 @@ fn binop(op: BinOp, l: Value, r: Value, span: Span) -> Result<Value, Exit> {
         (Rem, Value::Decimal(a), Value::Number(b)) => Ok(Value::Decimal(a % b as f64)),
         (And, Value::Boolean(a), Value::Boolean(b)) => Ok(Value::Boolean(a && b)),
         (Or, Value::Boolean(a), Value::Boolean(b)) => Ok(Value::Boolean(a || b)),
+        // G-27: max/min of two numbers (§7.8's `bigger of a and b`).
+        (Max, Value::Number(a), Value::Number(b)) => Ok(Value::Number(a.max(b))),
+        (Max, Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Decimal(a.max(b))),
+        (Max, Value::Number(a), Value::Decimal(b)) => {
+            let d = a as f64;
+            if d >= b { Ok(Value::Decimal(d)) } else { Ok(Value::Decimal(b)) }
+        }
+        (Max, Value::Decimal(a), Value::Number(b)) => {
+            let d = b as f64;
+            if a >= d { Ok(Value::Decimal(a)) } else { Ok(Value::Decimal(d)) }
+        }
+        (Min, Value::Number(a), Value::Number(b)) => Ok(Value::Number(a.min(b))),
+        (Min, Value::Decimal(a), Value::Decimal(b)) => Ok(Value::Decimal(a.min(b))),
+        (Min, Value::Number(a), Value::Decimal(b)) => {
+            let d = a as f64;
+            if d <= b { Ok(Value::Decimal(d)) } else { Ok(Value::Decimal(b)) }
+        }
+        (Min, Value::Decimal(a), Value::Number(b)) => {
+            let d = b as f64;
+            if a <= d { Ok(Value::Decimal(a)) } else { Ok(Value::Decimal(d)) }
+        }
+        (Contains, l, r) => binop_contains(l, r, span),
         (op, l, r) => compare(op, l, r, span).map(Value::Boolean),
     }
 }
@@ -1096,6 +1605,280 @@ fn overflow(span: Span) -> Trap {
         message: "a number grew past its largest possible value (overflow).".to_string(),
         span,
     }
+}
+
+// ---------------------------------------------------------------------------
+// M1: text containment, ordering, JSON (docs/07's student set, §19.1)
+// ---------------------------------------------------------------------------
+
+fn binop_contains(l: Value, r: Value, span: Span) -> Result<Value, Exit> {
+    match (l, r) {
+        (Value::Text(h), Value::Text(n)) => Ok(Value::Boolean(h.contains(n.as_str()))),
+        (l, r) => Err(Exit::Trap(Trap {
+            message: format!(
+                "`contains` needs two texts, but got {} and {}.",
+                l.format(),
+                r.format()
+            ),
+            span,
+        })),
+    }
+}
+
+/// A total order over list elements for `sort`: numbers (and decimals)
+/// numerically, text code-point order, booleans false-first; mixed kinds
+/// sort by nothing-defined-but-stable tag order rather than crashing — a
+/// teaching sort stays total.
+fn value_order(a: &Value, b: &Value) -> std::cmp::Ordering {
+    fn rank(v: &Value) -> u8 {
+        match v {
+            Value::Boolean(_) => 0,
+            Value::Number(_) | Value::Decimal(_) => 1,
+            Value::Text(_) => 2,
+            _ => 3,
+        }
+    }
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => x.cmp(y),
+        (Value::Number(x), Value::Decimal(y)) => (*x as f64).partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
+        (Value::Decimal(x), Value::Number(y)) => x.partial_cmp(&(*y as f64)).unwrap_or(std::cmp::Ordering::Equal),
+        (Value::Decimal(x), Value::Decimal(y)) => x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
+        (Value::Text(x), Value::Text(y)) => x.cmp(y),
+        (Value::Boolean(x), Value::Boolean(y)) => x.cmp(y),
+        _ => rank(a).cmp(&rank(b)),
+    }
+}
+
+/// Parse JSON text into the M1 value surface (§19.1): objects become maps
+/// (text keys), arrays lists, strings/numbers/booleans/null their Lagom
+/// values (`null` is `nothing` — 8.5's sentinel).
+fn json_parse(s: &str) -> Result<Value, String> {
+    let bytes: Vec<char> = s.chars().collect();
+    let mut pos = 0usize;
+    let v = json_value(&bytes, &mut pos)?;
+    json_skip_ws(&bytes, &mut pos);
+    if pos != bytes.len() {
+        return Err(format!("unexpected text after the value at character {pos}"));
+    }
+    Ok(v)
+}
+
+fn json_skip_ws(b: &[char], pos: &mut usize) {
+    while *pos < b.len() && b[*pos].is_whitespace() {
+        *pos += 1;
+    }
+}
+
+fn json_value(b: &[char], pos: &mut usize) -> Result<Value, String> {
+    json_skip_ws(b, pos);
+    match b.get(*pos) {
+        Some('{') => {
+            *pos += 1;
+            let mut entries: Vec<(Value, Value)> = Vec::new();
+            json_skip_ws(b, pos);
+            if b.get(*pos) == Some(&'}') {
+                *pos += 1;
+                return Ok(Value::Map(entries));
+            }
+            loop {
+                json_skip_ws(b, pos);
+                let key = json_string(b, pos)?;
+                json_skip_ws(b, pos);
+                if b.get(*pos) != Some(&':') {
+                    return Err(format!("expected ':' in the object at character {pos}"));
+                }
+                *pos += 1;
+                let val = json_value(b, pos)?;
+                entries.push((Value::Text(key), val));
+                json_skip_ws(b, pos);
+                match b.get(*pos) {
+                    Some(',') => *pos += 1,
+                    Some('}') => {
+                        *pos += 1;
+                        return Ok(Value::Map(entries));
+                    }
+                    _ => return Err(format!("expected ',' or '}}' at character {pos}")),
+                }
+            }
+        }
+        Some('[') => {
+            *pos += 1;
+            let mut items = Vec::new();
+            json_skip_ws(b, pos);
+            if b.get(*pos) == Some(&']') {
+                *pos += 1;
+                return Ok(Value::List(items));
+            }
+            loop {
+                let v = json_value(b, pos)?;
+                items.push(v);
+                json_skip_ws(b, pos);
+                match b.get(*pos) {
+                    Some(',') => *pos += 1,
+                    Some(']') => {
+                        *pos += 1;
+                        return Ok(Value::List(items));
+                    }
+                    _ => return Err(format!("expected ',' or ']' at character {pos}")),
+                }
+            }
+        }
+        Some('"') => Ok(Value::Text(json_string(b, pos)?)),
+        Some('t') => {
+            json_expect(b, pos, "true")?;
+            Ok(Value::Boolean(true))
+        }
+        Some('f') => {
+            json_expect(b, pos, "false")?;
+            Ok(Value::Boolean(false))
+        }
+        Some('n') => {
+            json_expect(b, pos, "null")?;
+            Ok(Value::Nothing)
+        }
+        Some(c) if *c == '-' || c.is_ascii_digit() => {
+            let start = *pos;
+            if b.get(*pos) == Some(&'-') {
+                *pos += 1;
+            }
+            while *pos < b.len() && (b[*pos].is_ascii_digit() || b[*pos] == '.') {
+                *pos += 1;
+            }
+            if *pos < b.len() && (b[*pos] == 'e' || b[*pos] == 'E') {
+                *pos += 1;
+                if *pos < b.len() && (b[*pos] == '+' || b[*pos] == '-') {
+                    *pos += 1;
+                }
+                while *pos < b.len() && b[*pos].is_ascii_digit() {
+                    *pos += 1;
+                }
+            }
+            let text: String = b[start..*pos].iter().collect();
+            if text.contains('.') || text.contains('e') || text.contains('E') {
+                text.parse::<f64>()
+                    .map(Value::Decimal)
+                    .map_err(|_| format!("bad number \"{text}\""))
+            } else {
+                text.parse::<i64>()
+                    .map(Value::Number)
+                    .map_err(|_| format!("bad number \"{text}\""))
+            }
+        }
+        _ => Err(format!("unexpected character at position {pos}")),
+    }
+}
+
+fn json_expect(b: &[char], pos: &mut usize, word: &str) -> Result<(), String> {
+    for c in word.chars() {
+        if b.get(*pos) != Some(&c) {
+            return Err(format!("expected '{word}' at character {pos}"));
+        }
+        *pos += 1;
+    }
+    Ok(())
+}
+
+fn json_string(b: &[char], pos: &mut usize) -> Result<String, String> {
+    if b.get(*pos) != Some(&'"') {
+        return Err(format!("expected a string at character {pos}"));
+    }
+    *pos += 1;
+    let mut out = String::new();
+    while let Some(&c) = b.get(*pos) {
+        *pos += 1;
+        match c {
+            '"' => return Ok(out),
+            '\\' => match b.get(*pos) {
+                Some('"') => {
+                    out.push('"');
+                    *pos += 1;
+                }
+                Some('\\') => {
+                    out.push('\\');
+                    *pos += 1;
+                }
+                Some('/') => {
+                    out.push('/');
+                    *pos += 1;
+                }
+                Some('n') => {
+                    out.push('\n');
+                    *pos += 1;
+                }
+                Some('t') => {
+                    out.push('\t');
+                    *pos += 1;
+                }
+                Some('r') => {
+                    out.push('\r');
+                    *pos += 1;
+                }
+                Some('u') => {
+                    *pos += 1;
+                    let hex: String = b[*pos..(*pos + 4).min(b.len())].iter().collect();
+                    *pos += 4;
+                    let code = u32::from_str_radix(&hex, 16)
+                        .map_err(|_| format!("bad \\u escape \"{hex}\""))?;
+                    out.push(char::from_u32(code).unwrap_or('\u{FFFD}'));
+                }
+                _ => return Err(format!("bad escape at character {pos}")),
+            },
+            c => out.push(c),
+        }
+    }
+    Err("the string never closed".to_string())
+}
+
+/// Format a value as JSON (§19.1): maps are objects, lists arrays, and the
+/// student scalars map directly. Structs format as objects of their fields
+/// (field names are known to the program, not to this printer — the simple
+/// positional form stays for them).
+fn json_format(v: &Value) -> String {
+    match v {
+        Value::Number(n) => n.to_string(),
+        Value::Decimal(d) => format_decimal(*d),
+        Value::Text(s) => json_string_lit(s),
+        Value::Boolean(b) => (if *b { "true" } else { "false" }).to_string(),
+        Value::Nothing => "null".to_string(),
+        Value::List(items) => {
+            let inner: Vec<String> = items.iter().map(json_format).collect();
+            format!("[{}]", inner.join(", "))
+        }
+        Value::Map(entries) => {
+            let inner: Vec<String> = entries
+                .iter()
+                .map(|(k, v)| format!("{}: {}", json_string_lit(&k.format()), json_format(v)))
+                .collect();
+            format!("{{{}}}", inner.join(", "))
+        }
+        Value::Pair(a, b) => format!("[{}, {}]", json_format(a), json_format(b)),
+        Value::Struct { name, fields } => {
+            let inner: Vec<String> = fields
+                .iter()
+                .map(|f| format!("{}: {}", json_string_lit(name), json_format(f)))
+                .collect();
+            format!("{{{}}}", inner.join(", "))
+        }
+        Value::Closure { .. } => "null".to_string(),
+    }
+}
+
+fn json_string_lit(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// Comparisons: numbers/decimals mix and promote; text and booleans compare
@@ -1161,6 +1944,7 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Struct { name: n1, fields: f1 }, Value::Struct { name: n2, fields: f2 }) => {
             n1 == n2 && f1.len() == f2.len() && f1.iter().zip(f2).all(|(x, y)| values_equal(x, y))
         }
+        (Value::Closure { function: f1, .. }, Value::Closure { function: f2, .. }) => f1 == f2,
         _ => false,
     }
 }
@@ -1181,6 +1965,9 @@ fn cmp_text(op: BinOp) -> &'static str {
         BinOp::Less => "is less than",
         BinOp::AtLeast => "is at least",
         BinOp::AtMost => "is at most",
+        BinOp::Contains => "contains",
+        BinOp::Max => "bigger of",
+        BinOp::Min => "smaller of",
     }
 }
 
@@ -1496,19 +2283,19 @@ mod tests {
     #[test]
     fn function_calls_and_recursion() {
         expect_says(
-            "function square\n    takes number called n\n    give back n times n\nsay square of 6",
+            "function square\n    takes number called n\n    gives back n times n\nsay square of 6",
             &[],
             &["36"],
         );
         expect_says(
-            "function fact\n    takes number called n\n    if n is at most 1\n        give back 1\n    give back n times fact of n minus 1\nsay fact of 5",
+            "function fact\n    takes number called n\n    if n is at most 1\n        gives back 1\n    gives back n times fact of n minus 1\nsay fact of 5",
             &[],
             &["120"],
         );
         expect_says(
             // R-4: call arguments bind at the additive level, so two chained
-            // calls in one `give back` need parentheses (the frozen rule).
-            "function fib\n    takes number called n\n    if n is less than 2\n        give back n\n    give back (fib of n minus 1) plus (fib of n minus 2)\nsay fib of 10",
+            // calls in one `gives back` need parentheses (the frozen rule).
+            "function fib\n    takes number called n\n    if n is less than 2\n        gives back n\n    gives back (fib of n minus 1) plus (fib of n minus 2)\nsay fib of 10",
             &[],
             &["55"],
         );
@@ -1546,7 +2333,7 @@ mod tests {
     #[test]
     fn success_branch_binds_result() {
         expect_says(
-            "function divide\n    takes number called top\n    takes number called bottom\n    returns a decimal\n    can fail\n    give back top divided by bottom\nattempt divide 10 and 4 if it fails then\n    say \"no\"\notherwise\n    say result",
+            "function divide\n    takes number called top\n    takes number called bottom\n    returns a decimal\n    can fail\n    gives back top divided by bottom\nattempt divide 10 and 4 if it fails then\n    say \"no\"\notherwise\n    say result",
             &[],
             &["2.5"],
         );

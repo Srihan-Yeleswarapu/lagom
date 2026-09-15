@@ -27,6 +27,7 @@
 use std::collections::{HashMap, HashSet};
 
 use lagom_diagnostics::Span;
+use lagom_ast as lagom_ast_pub;
 use lagom_sema::{
     CheckedAttemptTail, CheckedItem, CheckedProgram, CheckedStmt, CheckedStmtKind, Type, TypedExpr,
 };
@@ -47,9 +48,20 @@ pub enum HirItem {
     Structure(HirStructure),
     /// A test body is a zero-parameter function (`lagom test` calls each).
     Test(HirFunction),
+    /// `kind` (7.12) — the sum-type declaration, carried for the backends'
+    /// variant tables (tag assignment, constructor generation).
+    Kind(HirKind),
     /// A top-level statement. The driver concatenates these into the program
     /// entry at M0 (§19.1's script model).
     Main(HirStmt),
+}
+
+/// A kind (7.12): name + variants in declaration order.
+#[derive(Debug, Clone)]
+pub struct HirKind {
+    pub name: String,
+    /// (variant name, fields (name, type, span), decl span).
+    pub variants: Vec<(String, Vec<(String, Type, Span)>, Span)>,
 }
 
 #[derive(Debug, Clone)]
@@ -59,7 +71,7 @@ pub struct HirFunction {
     pub params: Vec<(String, Type, Span)>,
     pub ret: Type,
     pub can_fail: bool,
-    /// False = inferred from the body's `give back` (7.8's optional `returns`).
+    /// False = inferred from the body's `gives back` (7.8's optional `returns`).
     pub ret_declared: bool,
     pub body: Vec<HirStmt>,
     pub span: Span,
@@ -150,6 +162,40 @@ pub enum HirStmtKind {
     },
     /// An expression evaluated for effect (`say …`, a bare call).
     Effect(HirExpr),
+    /// `match <scrutinee>` (7.12): checked arms + optional `otherwise`. Arm
+    /// order is source order; MIR lowers to a tag switch.
+    Match {
+        scrutinee: HirExpr,
+        arms: Vec<(HirPattern, Vec<HirStmt>)>,
+        otherwise: Option<Vec<HirStmt>>,
+    },
+}
+
+/// A checked `when` pattern (7.12/7.15's pattern production).
+#[derive(Debug, Clone)]
+pub enum HirPattern {
+    /// A literal comparison (`when 0`, `when "quit"`, `when nothing`).
+    Literal { value: HirPatternLiteral, span: Span },
+    /// A variant tag test with destructured fields (`when a circle with
+    /// radius r`); the field list is in declaration order.
+    Variant { kind: String, variant: String, fields: Vec<(String, HirPattern)> },
+    /// `something with value <pattern>` (8.5).
+    Something { inner: Box<HirPattern>, span: Span },
+    /// `a pair of <pattern> and <pattern>` (7.15 pair).
+    Pair { first: Box<HirPattern>, second: Box<HirPattern>, span: Span },
+    /// A catch-all binding name.
+    Binding { name: String, span: Span },
+    /// `_` (if spelled); M1 programs use named bindings.
+    Wildcard,
+}
+
+#[derive(Debug, Clone)]
+pub enum HirPatternLiteral {
+    Int(i64),
+    Float(f64),
+    Text(String),
+    Bool(bool),
+    Nothing,
 }
 
 #[derive(Debug, Clone)]
@@ -260,6 +306,28 @@ pub enum HirExprKind {
     /// A bare attempt in expression position (13.1/R-20.1): evaluates to the
     /// success value; propagation is the enclosing function's `can fail`.
     Attempt(Box<HirExpr>),
+    /// Variant construction (7.12): `a circle with radius 5`. The kind is the
+    /// checked type; `variant` names the tag.
+    VariantLit {
+        variant: String,
+        /// (field name, value) in source order.
+        fields: Vec<(String, HirExpr)>,
+    },
+    /// A lambda (11.1): parameters (inferred types from the use site), body.
+    /// The block form's statements ride in `body_stmts`; an inline lambda has
+    /// exactly one `Return`-shaped value expression in `body`.
+    Lambda {
+        params: Vec<(String, Type, Span)>,
+        ret: Type,
+        body: Box<HirExpr>,
+        /// The block form's checked statements (§11.1: a full function);
+        /// empty for the inline form.
+        body_stmts: Vec<HirStmt>,
+        span: Span,
+        /// Stable name for the synthetic closure function (the MIR pending
+        /// queue and codegen's lambda table key on it; None = auto-number).
+        name: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -301,12 +369,18 @@ pub enum BinOp {
 
 /// Lower a checked program to HIR.
 pub fn lower(program: CheckedProgram) -> HirProgram {
-    let LowerTables { types, callee_spans, reads } = LowerTables {
+    let LowerTables { types, callee_spans, reads, lambda_bodies } = LowerTables {
         types: program.node_types,
         callee_spans: program.callee_spans,
         reads: program.read_spans,
+        lambda_bodies: program.lambda_bodies,
     };
-    let mut lx = Lowerer { types: &types, callee_spans: &callee_spans, reads: &reads };
+    let mut lx = Lowerer {
+        types: &types,
+        callee_spans: &callee_spans,
+        reads: &reads,
+        lambda_bodies: &lambda_bodies,
+    };
     let mut items = Vec::new();
     for item in program.items {
         match item {
@@ -317,6 +391,7 @@ pub fn lower(program: CheckedProgram) -> HirProgram {
                 fields: s.fields,
             })),
             CheckedItem::Test(t) => items.push(HirItem::Test(lx.function(t))),
+            CheckedItem::Kind(k) => items.push(HirItem::Kind(HirKind { name: k.name, variants: k.variants })),
             CheckedItem::Stmt(s) => items.push(HirItem::Main(lx.stmt(s))),
         }
     }
@@ -328,12 +403,14 @@ struct LowerTables {
     types: HashMap<Span, Type>,
     callee_spans: HashMap<Span, Span>,
     reads: HashSet<Span>,
+    lambda_bodies: HashMap<Span, Vec<CheckedStmt>>,
 }
 
 struct Lowerer<'t> {
     types: &'t HashMap<Span, Type>,
     callee_spans: &'t HashMap<Span, Span>,
     reads: &'t HashSet<Span>,
+    lambda_bodies: &'t HashMap<Span, Vec<CheckedStmt>>,
 }
 
 impl<'t> Lowerer<'t> {
@@ -470,9 +547,51 @@ impl<'t> Lowerer<'t> {
                     },
                 }
             }
+            CheckedStmtKind::Match { scrutinee, arms, otherwise } => {
+                let scrut = self.expr(scrutinee);
+                let out_arms = arms
+                    .into_iter()
+                    .map(|(pat, body)| {
+                        let hp = self.pattern(pat);
+                        let hb = body.into_iter().map(|s| self.stmt(s)).collect();
+                        (hp, hb)
+                    })
+                    .collect();
+                let out_otherwise =
+                    otherwise.map(|b| b.into_iter().map(|s| self.stmt(s)).collect());
+                HirStmtKind::Match { scrutinee: scrut, arms: out_arms, otherwise: out_otherwise }
+            }
             CheckedStmtKind::ExprStmt { expr } => HirStmtKind::Effect(self.expr(expr)),
         };
         HirStmt { kind, span }
+    }
+
+    /// Lower a checked pattern. Field sub-patterns keep their spans; binding
+    /// spans are the binding's own (the MIR uses them for the local slot).
+    fn pattern(&mut self, p: lagom_sema::CheckedPattern) -> HirPattern {
+        match p {
+            lagom_sema::CheckedPattern::Literal { value, span } => {
+                HirPattern::Literal { value: lower_pattern_literal(value), span }
+            }
+            lagom_sema::CheckedPattern::Variant { kind, variant, fields } => HirPattern::Variant {
+                kind,
+                variant,
+                fields: fields
+                    .into_iter()
+                    .map(|(n, sub)| (n, self.pattern(sub)))
+                    .collect(),
+            },
+            lagom_sema::CheckedPattern::Something { inner, span } => {
+                HirPattern::Something { inner: Box::new(self.pattern(*inner)), span }
+            }
+            lagom_sema::CheckedPattern::Pair { first, second, span } => HirPattern::Pair {
+                first: Box::new(self.pattern(*first)),
+                second: Box::new(self.pattern(*second)),
+                span,
+            },
+            lagom_sema::CheckedPattern::Binding { name, span } => HirPattern::Binding { name, span },
+            lagom_sema::CheckedPattern::Wildcard => HirPattern::Wildcard,
+        }
     }
 
     fn tail(&mut self, t: CheckedAttemptTail) -> HirAttemptTail {
@@ -647,6 +766,81 @@ impl<'t> Lowerer<'t> {
                 lowered.span = ispan;
                 HirExprKind::Attempt(Box::new(lowered))
             }
+            lagom_ast::Expr::VariantLit { name, fields, .. } => HirExprKind::VariantLit {
+                variant: name.display(),
+                fields: fields
+                    .into_iter()
+                    .map(|(n, v)| {
+                        let vs = lagom_sema::expr_span(&v);
+                        let vty = self.ty(vs, Type::Error);
+                        let mut lowered = self.expr(TypedExpr { expr: v, ty: vty });
+                        lowered.span = vs;
+                        (n.display(), lowered)
+                    })
+                    .collect(),
+            },
+            lagom_ast::Expr::Lambda { params, body, span } => {
+                // Inline lambdas carry their value expression; the block form
+                // (§11.1: a full function) carries its checked statements —
+                // sema records them in the `lambda_bodies` side table keyed by
+                // the lambda's span, and MIR lowers them inside the synthetic
+                // closure function.
+                let (lbody, ret, body_stmts) = match body {
+                    lagom_ast::LambdaBody::Inline(inner) => {
+                        let ispan = lagom_sema::expr_span(&inner);
+                        let ity = self.ty(ispan, Type::Error);
+                        let mut lowered = self.expr(TypedExpr { expr: (*inner).clone(), ty: ity });
+                        lowered.span = ispan;
+                        (lowered, Type::Error, Vec::new())
+                    }
+                    lagom_ast::LambdaBody::Block(_) => {
+                        match self.lambda_bodies.get(&span) {
+                            Some(stmts) => {
+                                let lowered: Vec<HirStmt> =
+                                    stmts.clone().into_iter().map(|s| self.stmt(s)).collect();
+                                // The checked return type rides the lambda's
+                                // node type (recorded at the lambda's span).
+                                let rty = self.ty(span, Type::Error);
+                                let r = match rty {
+                                    Type::Function(_, r) => (*r).clone(),
+                                    other => other,
+                                };
+                                (HirExpr { kind: HirExprKind::Nothing, ty: r.clone(), span }, r, lowered)
+                            }
+                            None => (
+                                HirExpr { kind: HirExprKind::Nothing, ty: Type::Error, span },
+                                Type::Error,
+                                Vec::new(),
+                            ),
+                        }
+                    }
+                };
+                HirExprKind::Lambda {
+                    params: params
+                        .into_iter()
+                        .map(|p| {
+                            let pname = p.display();
+                            let pty = self.ty(p.span, Type::Error);
+                            (pname, pty, p.span)
+                        })
+                        .collect(),
+                    ret,
+                    body: Box::new(lbody),
+                    body_stmts,
+                    span,
+                    name: None,
+                }
+            }
+            lagom_ast::Expr::SomeValue { value, .. } => {
+                // G-21: the option construction IS the value (options are
+                // value-or-`nothing` at the value level, D-34) — no wrapper
+                // instruction on either backend.
+                let vspan = lagom_sema::expr_span(&value);
+                let vty = self.ty(vspan, Type::Error);
+                let mut lowered = self.expr(TypedExpr { expr: *value, ty: vty });
+                lowered.span = vspan;
+                lowered.kind
+            }
             lagom_ast::Expr::Call(call) => self.call(*call),
         }
     }
@@ -705,6 +899,13 @@ impl<'t> Lowerer<'t> {
         for (_, a) in call.with_args {
             args.push(*a.expr);
         }
+        // The `using` lambda survives sema's rebuild (the desugared inline
+        // lambda is the checked form) and is the trailing argument (R-3's
+        // fixed suffix order) — append it so MIR's combinator ops see the
+        // closure value as their function operand.
+        if let Some(lam) = call.using_arg {
+            args.push(*lam);
+        }
         let lowered: Vec<HirExpr> = args
             .into_iter()
             .map(|a| {
@@ -716,6 +917,16 @@ impl<'t> Lowerer<'t> {
             })
             .collect();
         HirExprKind::Call { callee, callee_span, args: lowered }
+    }
+}
+
+fn lower_pattern_literal(value: lagom_ast_pub::PatternLiteral) -> HirPatternLiteral {
+    match value {
+        lagom_ast_pub::PatternLiteral::Int(v) => HirPatternLiteral::Int(v),
+        lagom_ast_pub::PatternLiteral::Float(v) => HirPatternLiteral::Float(v),
+        lagom_ast_pub::PatternLiteral::Text(v) => HirPatternLiteral::Text(v),
+        lagom_ast_pub::PatternLiteral::Bool(v) => HirPatternLiteral::Bool(v),
+        lagom_ast_pub::PatternLiteral::Nothing => HirPatternLiteral::Nothing,
     }
 }
 

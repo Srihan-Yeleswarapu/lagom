@@ -51,7 +51,7 @@ mod tests {
 function double
     takes number called x
     returns a number
-    give back x plus x
+    gives back x plus x
 
 make start equal to 3
 make doubled equal to double start

@@ -250,6 +250,75 @@ pub fn render_expert(file: &SourceFile, d: &Diagnostic) -> String {
     )
 }
 
+/// A diagnostic verbosity mode (00 §26.2: `student`/`normal`/`expert`).
+/// Student mode is the default for new projects; the mode is per-invocation
+/// via `--student`/`--normal`/`--expert` and per-project via `Lagom.toml`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Verbosity {
+    /// The full five-part teaching format (what/where/why/fix/concept).
+    #[default]
+    Student,
+    /// The teaching format's what/where — no fix suggestion or concept link.
+    Normal,
+    /// Terse, code-first: `E0003: message at file:line:col`.
+    Expert,
+}
+
+impl Verbosity {
+    /// Parse a `--diagnostics` flag value.
+    pub fn parse(name: &str) -> Option<Verbosity> {
+        match name {
+            "student" => Some(Verbosity::Student),
+            "normal" => Some(Verbosity::Normal),
+            "expert" => Some(Verbosity::Expert),
+            _ => None,
+        }
+    }
+
+    /// Render one diagnostic in this mode.
+    pub fn render(self, file: &SourceFile, d: &Diagnostic) -> String {
+        match self {
+            Verbosity::Student => render_student(file, d),
+            Verbosity::Normal => render_normal(file, d),
+            Verbosity::Expert => render_expert(file, d),
+        }
+    }
+}
+
+/// Render in normal mode: the teaching format's what/where without the
+/// fix/concept footers. doc 09 names the mode but leaves the exact shape
+/// open (its open-questions list defers the default-mode policy to M1 with
+/// user data); this is the smallest honest reading: same teaching prose,
+/// minus the two footers a learner still needs (see docs/14 G-30).
+pub fn render_normal(file: &SourceFile, d: &Diagnostic) -> String {
+    let mut out = String::new();
+    let (line, _col) = file.line_col(d.span.start);
+    let _ = fmt::Write::write_fmt(
+        &mut out,
+        format_args!("{} on line {}\n\n{}\n\n", d.severity, line, d.message),
+    );
+    quote_span(&mut out, file, d.span, true);
+    for (span, label) in &d.labels {
+        let (l, _) = file.line_col(span.start);
+        if l == line {
+            continue;
+        }
+        out.push('\n');
+        out.push_str(label);
+        out.push_str(":\n");
+        quote_span(&mut out, file, *span, false);
+    }
+    if let Some(why) = &d.explanation {
+        out.push('\n');
+        out.push_str(why);
+        out.push('\n');
+    }
+    for note in &d.notes {
+        let _ = fmt::Write::write_fmt(&mut out, format_args!("\nnote: {}\n", note));
+    }
+    out
+}
+
 /// The diagnostic bundle for one compilation.
 #[derive(Default)]
 pub struct Diagnostics {

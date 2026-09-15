@@ -1,0 +1,21 @@
+# D-35 numeric suite: a hot arithmetic loop whose only semantic content is
+# `number` math — the op mix exercises the checked-path cost the D-35 datum
+# measures (trap-vs-wrap, 11 §R-17: threshold 2% on the numeric suite).
+
+make changing total equal to 0
+make changing acc equal to 1
+repeat 3000000 times using i
+    make changing x equal to remainder of i and 1000
+    make changing y equal to x plus 7
+    make changing z equal to y times 3
+    make changing w equal to z divided evenly by 5
+    make changing q equal to remainder of w and 97
+    make changing s equal to x plus q
+    increase total by s
+    make changing a2 equal to acc times 3
+    make changing a3 equal to a2 divided evenly by 7
+    make changing a4 equal to a3 plus 1
+    make changing a5 equal to remainder of a4 and 1000000007
+    make acc equal to a5
+say total
+say acc
