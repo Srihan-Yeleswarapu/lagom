@@ -306,8 +306,11 @@ const INCOMPLETE_TAIL_WORDS: &[&str] = &[
     "decrease", "divided", "each", "evenly", "for", "from", "function", "gives",
     "greater", "has", "if", "in", "increase", "is", "least", "less", "make", "minus",
     "modulo", "most", "not", "of", "or", "plus", "remainder", "repeat", "returns", "set",
-    "structure", "takes", "test", "that", "than", "to", "type", "use", "using",
+    "structure", "takes", "test", "that", "than", "to", "use", "using",
     "while", "with",
+    // `type` is deliberately NOT a tail word: no complete line ends in bare
+    // `type` except a 12.1/12.2 type read (`returns some type`) — where
+    // continuation is exactly wrong and made that clause unparseable.
     // M1: multi-word forms' heads/tails (7.12/11.1/8.5). `taking`, `giving`,
     // `where` are statement/expression openers that end before their body;
     // `match` may continue into its pattern line. `something` is NOT a tail

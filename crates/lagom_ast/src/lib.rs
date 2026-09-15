@@ -21,9 +21,35 @@ pub enum Item {
     Structure(StructureDecl),
     /// `kind shape … is a circle with radius …` (7.12) — the sum type.
     Kind(KindDecl),
+    /// `a type called score is a number` (8.4) — the type alias.
+    TypeAlias(TypeAliasDecl),
     Test(TestDecl),
     Use(UseDecl),
     Stmt(Stmt),
+}
+
+/// `a type called score is a number` (8.4): a new name for an existing type.
+/// Aliases are *transparent* — `score` and `number` are the same type to the
+/// checker, and no runtime stage ever sees the alias (it resolves in sema).
+#[derive(Debug)]
+pub struct TypeAliasDecl {
+    pub name: Name,
+    pub ty: TypeExpr,
+    pub span: Span,
+}
+
+impl TypeAliasDecl {
+    /// The target type's span (for diagnostics pointing at `is a <type>`).
+    pub fn ty_span(&self) -> Span {
+        match &self.ty {
+            TypeExpr::User(n) => n.span,
+            TypeExpr::List(t) | TypeExpr::Map(t, _) | TypeExpr::Pair(t, _) => match t.as_ref() {
+                TypeExpr::User(n) => n.span,
+                _ => self.name.span,
+            },
+            _ => self.name.span,
+        }
+    }
 }
 
 /// `kind` — an algebraic data type (7.12): one variant per line, each with
@@ -396,6 +422,10 @@ pub enum TypeExpr {
     /// `T?` — the compact option spelling (8.5, R-18). One desugaring rule:
     /// the same type as `a T or nothing`.
     OptionT(Box<TypeExpr>),
+    /// The type parameter (12.1/12.2): `anything` (implicit, inferred from
+    /// use) and `some type` (the explicit spelling of the same word) are the
+    /// one concept — frozen grammar words, not user names.
+    TypeParam,
     /// Missing annotation (inferred).
     Inferred,
 }
@@ -413,6 +443,7 @@ impl TypeExpr {
             TypeExpr::Pair(a, b) => format!("a pair of {} and {}", a.display(), b.display()),
             TypeExpr::User(n) => n.display(),
             TypeExpr::OptionT(t) => format!("{}?", t.display()),
+            TypeExpr::TypeParam => "anything".into(),
             TypeExpr::Inferred => "inferred".into(),
         }
     }

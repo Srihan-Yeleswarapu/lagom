@@ -2,6 +2,19 @@
 //! printed by `lagom words`. Kept in step with the lexer's keyword table
 //! (docs/13's M0 grammar plus the frozen phrase-tokens of 7.15).
 
+use super::args::CliResult;
+
+/// `lagom words` — the reserved words; `--types` prints the type surface
+/// (the built-ins plus the 8.4 alias form) instead.
+pub fn cmd_words(rest: &[String]) -> CliResult {
+    if rest.iter().any(|a| a == "--types") {
+        println!("{}", TYPE_ALIAS_LISTING);
+    } else {
+        println!("{}", RESERVED_LISTING);
+    }
+    Ok(())
+}
+
 pub const RESERVED_LISTING: &str = "\
 reserved words (user names may not use these):
 
@@ -27,4 +40,20 @@ types & conversions
 
 options
   is nothing  is something
+";
+
+/// `lagom words --types`: the type surface — the built-ins every program
+/// sees and the alias form that names new ones (8.4, listed because the
+/// alias line is the one piece of type syntax a student writes by hand).
+pub const TYPE_ALIAS_LISTING: &str = "\
+types (use with `of type` and `takes … of type`):
+
+built-in
+  number  decimal  text  boolean
+  a list of T  a map from K to V  a pair of A and B  a T or nothing
+
+new names (8.4 type aliases)
+  a type called <name> is a <type>
+  — transparent: everywhere the old type is accepted, so is <name>.
+  — order-free: an alias may be declared after the line that uses it.
 ";

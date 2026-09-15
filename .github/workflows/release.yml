@@ -154,6 +154,16 @@ jobs:
       - name: Run the test suite
         run: cargo test --workspace
 
+      - name: Check demo.md against the real compiler
+        # The doc-sync gate (scripts/check_demo.py): runs every documented
+        # command and compares its output with the transcript demo.md prints.
+        # The script rebuilds the release binary first (freshness), executes
+        # every implemented section, and skips only loudly-counted planned/
+        # future sections — a mismatch or error exits non-zero, so this job
+        # gates on documentation rot exactly as `cargo test` gates on
+        # behavior rot.
+        run: python scripts/check_demo.py
+
   install-test:
     name: release-page install (${{ matrix.os }})
     # Play the user from the release page with nothing but the package: no

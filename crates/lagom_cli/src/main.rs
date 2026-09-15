@@ -1,18 +1,25 @@
 //! The `lagom` CLI (M0) — the Go single-binary model (00 §26.1).
 //!
-//! `main.rs` is the face only: argument dispatch and the exit-code mapping.
-//! Each command lives in its own module; shared plumbing (the error type,
-//! the source-file convention, stdin, failure rendering) lives in `args`.
-//! `doc|play|add|profile` are M1+ (doc 09/10); unknown commands say so
-//! honestly and point at the command list.
+//! `main.rs` is dispatch only: arg parsing, the command table, and the
+//! exit-code mapping. Every command is a module sibling with one `cmd_*`
+//! entry point (`help` owns the usage text and version line; `words` owns
+//! its flag handling); shared plumbing (the error type, the source-file
+//! convention, stdin, failure rendering) lives in `args`. `doc|play|add|
+//! profile` are M1+ (doc 09/10); unknown commands say so honestly and point
+//! at the command list.
 
 mod args;
 mod check;
+mod doc_cmd;
 mod explain;
 mod explain_cmd;
 mod fmt;
 mod fmt_cmd;
+mod help;
 mod new;
+mod packages;
+mod play;
+mod profile;
 mod run;
 mod template;
 mod test;
@@ -21,16 +28,7 @@ mod words;
 use std::process::ExitCode;
 
 use args::CliError;
-
-/// The CLI's identity line (26.1): the package version plus the build
-/// profile, stamped from the crate itself — no hand-maintained copy.
-const VERSION_LINE: &str = concat!(
-    "lagom ",
-    env!("CARGO_PKG_VERSION"),
-    " (",
-    env!("LAGOM_BUILD_PROFILE"),
-    ")"
-);
+use help::usage;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -55,22 +53,6 @@ fn main() -> ExitCode {
     }
 }
 
-fn usage() -> String {
-    "usage: lagom <command> [arguments]
-
-commands:
-  run [file] [--release]    compile and run a Lagom program (default: main.lagom)
-  build [file] [-o out]     compile to a native executable
-  test [file]               run this file's `test` blocks (on the interpreter)
-  check [file]              parse and check; show diagnostics
-  fmt [file] [--write]      print the canonically formatted source (or rewrite)
-  new <name>                start a new Lagom project directory
-  words                     print the reserved words
-  explain <code>            the teaching write-up for an error code
-"
-    .to_string()
-}
-
 fn dispatch(args: &[String]) -> Result<(), CliError> {
     let Some(cmd) = args.first() else {
         return Err(CliError::Message(usage()));
@@ -78,24 +60,20 @@ fn dispatch(args: &[String]) -> Result<(), CliError> {
     let rest = &args[1..];
     match cmd.as_str() {
         "run" => run::cmd_run(rest),
+        "play" => play::cmd_play(rest),
+        "doc" => doc_cmd::cmd_doc(rest),
+        "add" => packages::cmd_add(rest),
+        "remove" => packages::cmd_remove(rest),
+        "profile" => profile::cmd_profile(rest),
         "build" => run::cmd_build(rest),
         "test" => test::cmd_test(rest),
         "check" => check::cmd_check(rest),
         "fmt" => fmt_cmd::cmd_fmt(rest),
         "new" => new::cmd_new(rest),
-        "words" => {
-            println!("{}", words::RESERVED_LISTING);
-            Ok(())
-        }
+        "words" => words::cmd_words(rest),
         "explain" => explain_cmd::cmd_explain(rest),
-        "version" | "--version" | "-V" => {
-            println!("{VERSION_LINE}");
-            Ok(())
-        }
-        "help" | "--help" | "-h" => {
-            print!("{}", usage());
-            Ok(())
-        }
+        "version" | "--version" | "-V" => help::cmd_version(),
+        "help" | "--help" | "-h" => help::cmd_help(),
         other => Err(CliError::Message(format!(
             "unknown command `{other}`.\n\n{}",
             usage()
