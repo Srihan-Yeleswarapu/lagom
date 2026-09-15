@@ -7,6 +7,32 @@ use super::args::{
     has_flag, read_source, read_stdin_lines, render_failure, report_outcome, source_path, CliError,
     CliResult,
 };
+use super::packages;
+
+/// The source a run/build compiles: a project with a `Lagom.toml` merges its
+/// dependency sources ahead of the entry file (the vendored merge, 20.2);
+/// a bare file compiles alone.
+fn project_source(path: &Path, explicit: bool) -> Result<String, CliError> {
+    let own = read_source(path)?;
+    // An explicit file argument compiles alone; the default `main.lagom` is
+    // the project entry and gets the merge.
+    if explicit || !Path::new(packages::MANIFEST).exists() {
+        return Ok(own);
+    }
+    match packages::merged_sources(Path::new(".")) {
+        Some((merged, files)) if !files.is_empty() => {
+            // Replace the entry file's text with the merged whole (the entry
+            // is included last by the merge).
+            Ok(merged)
+        }
+        _ => Ok(own),
+    }
+}
+
+/// Whether the source argument was explicit (vs the `main.lagom` default).
+fn explicit_source(rest: &[String]) -> bool {
+    rest.iter().any(|a| !a.starts_with('-') && a != "-o" && a != "--release" && a != "--pdb" && a != "--trace" && Path::new(a).exists())
+}
 
 /// Everything both commands need before touching the backend: the source,
 /// its stem, the dev/release choice, and whether debug info should be
@@ -23,7 +49,7 @@ struct BuildRequest {
 impl BuildRequest {
     fn parse(rest: &[String]) -> Result<BuildRequest, CliError> {
         let path = source_path(rest)?;
-        let src = read_source(&path)?;
+        let src = project_source(&path, explicit_source(rest))?;
         let stem = path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -92,11 +118,17 @@ fn cmd_run_trace(rest: &[String]) -> CliResult {
     } else {
         Vec::new()
     };
-    let (host, outcome) = lagom_driver::run_interpreted(&src, stdin, None);
+    // One execution supplies everything: the output, the outcome, and the
+    // trace timeline (26.5). Program output first, then the steps —
+    // post-mortem view.
+    let (report, host, outcome) =
+        lagom_driver::run_traced_fe(fe, &src, stdin, None);
     // The interpreter buffers output in the host; flush it in order.
     for line in &host.stdout {
         println!("{line}");
     }
+    println!("\n---- trace ----");
+    print!("{report}");
     report_outcome(outcome)
 }
 

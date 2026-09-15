@@ -13,12 +13,12 @@ structure room
 
 make halls equal to a map from "entrance" to a room with name "entrance" and description "a dusty entrance hall" and north "library", "library" to a room with name "library" and description "shelves and one creaky ladder" and north "vault", "vault" to a room with name "vault" and description "a locked iron door" and north ""
 
-make changing where equal to "entrance"
+make changing room here equal to "entrance"
 make changing lamp oil equal to 10
 make changing treasure found equal to false
 
 repeat while treasure found is equal to false
-    make here equal to halls at where
+    make here equal to halls at room here
     say "you are in the {name of here} — {description of here}"
     decrease lamp oil by 1
     if lamp oil is at most 0
@@ -33,7 +33,7 @@ repeat while treasure found is equal to false
             say "the vault! the treasure is yours."
             set treasure found to true
         otherwise
-            set where to going north
+            set room here to going north
     otherwise if move is equal to "look"
         say "you see dust, and a door north."
     otherwise
