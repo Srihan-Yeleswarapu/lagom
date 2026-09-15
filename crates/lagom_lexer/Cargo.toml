@@ -1,0 +1,7 @@
+[package]
+name = "lagom_lexer"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+lagom_diagnostics.workspace = true

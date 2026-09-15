@@ -1,0 +1,112 @@
+name: release
+
+# Build the `lagom` CLI release artifacts: on every push to main (smoke —
+# Windows only, the fast path) and full matrix on tags and manual dispatch.
+# Artifacts are uploaded as workflow artifacts; attaching them to a GitHub
+# release is a later step (doc 09 tooling story).
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build the lagom CLI (release)
+        run: cargo build --release -p lagom_cli
+
+      - name: Build the runtime rlib for bundling
+        run: cargo build --release -p lagom_rt
+        env:
+          CARGO_TARGET_DIR: target/lagom-rt
+
+      - name: Smoke-test the CLI
+        shell: bash
+        # GITHUB_PATH does not apply within the writing step itself, so the
+        # freshly built binary is invoked by path here (the validate step
+        # below can rely on GITHUB_PATH — it is a separate step).
+        run: |
+          LAGOM="$(pwd)/target/release/lagom"
+          [ "$RUNNER_OS" = "Windows" ] && LAGOM="$(pwd)/target/release/lagom.exe"
+          "$LAGOM" version
+          "$LAGOM" check validation/smoke.lagom
+          "$LAGOM" fmt validation/smoke.lagom
+
+      - name: Stage the artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path stage/lib/lagom/deps | Out-Null
+          Copy-Item target/release/lagom.exe stage/
+          Copy-Item target/lagom-rt/release/liblagom_rt.rlib stage/lib/lagom/
+          Copy-Item target/lagom-rt/release/deps/*.rlib stage/lib/lagom/deps/
+          Compress-Archive -Path stage/* -DestinationPath lagom-Windows.zip
+
+      - name: Stage the artifact (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p stage/lib/lagom/deps
+          cp target/release/lagom stage/
+          cp target/lagom-rt/release/liblagom_rt.rlib stage/lib/lagom/
+          cp target/lagom-rt/release/deps/*.rlib stage/lib/lagom/deps/
+          tar czf lagom-${{ runner.os }}.tar.gz -C stage .
+
+      - name: Validate the staged artifact
+        shell: bash
+        # GITHUB_PATH applies to later steps, not the one writing it — so
+        # this step both exports the unpacked dir for later steps and calls
+        # the unpacked binary by path here.
+        run: |
+          mkdir clean
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            unzip -q lagom-Windows.zip -d clean
+          else
+            tar xzf lagom-${{ runner.os }}.tar.gz -C clean
+          fi
+          echo "$(pwd)/clean" >> "$GITHUB_PATH"
+          LAGOM="$(pwd)/clean/lagom"
+          [ "$RUNNER_OS" = "Windows" ] && LAGOM="$(pwd)/clean/lagom.exe"
+          "$LAGOM" version
+          "$LAGOM" run validation/smoke.lagom
+          "$LAGOM" build validation/smoke.lagom -o built-smoke
+          ./built-smoke
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lagom-${{ matrix.os }}
+          path: |
+            lagom-Windows.zip
+            lagom-Linux.tar.gz
+            lagom-macOS.tar.gz
+          if-no-files-found: error
+
+  test:
+    name: cargo test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run the test suite
+        run: cargo test --workspace

@@ -1,0 +1,21 @@
+[package]
+name = "lagom_codegen"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+lagom_lir.workspace = true
+lagom_mir.workspace = true
+lagom_diagnostics.workspace = true
+lagom_rt.workspace = true
+cranelift.workspace = true
+cranelift-module.workspace = true
+cranelift-object.workspace = true
+cranelift-native.workspace = true
+object.workspace = true
+target-lexicon.workspace = true
+
+[dev-dependencies]
+lagom_parser.workspace = true
+lagom_sema.workspace = true
+lagom_hir.workspace = true

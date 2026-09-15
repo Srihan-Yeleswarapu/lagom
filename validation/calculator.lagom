@@ -1,0 +1,72 @@
+# Calculator — an M0 validation program (00 §33.1).
+#
+# Asks for two numbers and an operation, then shows the result. Text input
+# is parsed with `number from` (can fail) and handled with `attempt` — a
+# wrong answer is a teaching moment, never a crash.
+
+use math for square root
+
+function add
+    takes number called first
+    takes number called second
+    returns a number
+    give back first plus second
+
+function subtract
+    takes number called first
+    takes number called second
+    returns a number
+    give back first minus second
+
+function multiply
+    takes number called first
+    takes number called second
+    returns a number
+    give back first times second
+
+function divide
+    takes number called first
+    takes number called second
+    returns a decimal
+    can fail
+    if second is equal to 0
+        fail with "a number cannot be divided by zero"
+    give back first divided by second
+
+function parse answer
+    takes text called question
+    returns a number
+    can fail
+    make reply equal to ask question
+    give back attempt number from reply
+
+make changing left equal to 0
+attempt parse answer "first number: " if it fails then
+    say "that was not a number — using 0"
+otherwise
+    set left to result
+
+make changing right equal to 0
+attempt parse answer "second number: " if it fails then
+    say "that was not a number either — using 0"
+otherwise
+    set right to result
+
+say "pick an operation: add, subtract, multiply, divide, or root"
+make operation equal to ask "operation: "
+
+if operation is equal to "add"
+    say "{left} plus {right} is {add (left), right}"
+otherwise if operation is equal to "subtract"
+    say "{left} minus {right} is {subtract (left), right}"
+otherwise if operation is equal to "multiply"
+    say "{left} times {right} is {multiply (left), right}"
+otherwise if operation is equal to "divide"
+    attempt divide (left), right if it fails then
+        say problem
+    otherwise
+        say "{left} divided by {right} is {result}"
+otherwise if operation is equal to "root"
+    say "the square root of {left} is {square root of left}"
+otherwise
+    say "I do not know that operation"
