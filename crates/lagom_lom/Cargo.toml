@@ -1,0 +1,12 @@
+[package]
+name = "lagom_lom"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+lagom_mir.workspace = true
+
+[dev-dependencies]
+lagom_parser.workspace = true
+lagom_sema.workspace = true
+lagom_hir.workspace = true

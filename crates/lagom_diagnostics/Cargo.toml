@@ -1,0 +1,10 @@
+[package]
+name = "lagom_diagnostics"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+lagom_parser.workspace = true
+lagom_sema.workspace = true

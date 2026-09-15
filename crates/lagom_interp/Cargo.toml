@@ -1,0 +1,13 @@
+[package]
+name = "lagom_interp"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+lagom_mir.workspace = true
+lagom_diagnostics.workspace = true
+
+[dev-dependencies]
+lagom_parser.workspace = true
+lagom_sema.workspace = true
+lagom_hir.workspace = true

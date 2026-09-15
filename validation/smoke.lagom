@@ -1,0 +1,4 @@
+# A minimal smoke program for the release workflow: exercises the native
+# backend's whole surface (run, build, execute) without needing stdin.
+
+say "Hello from Lagom"
