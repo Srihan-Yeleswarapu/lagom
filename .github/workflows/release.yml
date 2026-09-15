@@ -1,9 +1,14 @@
 name: release
 
-# Build the `lagom` CLI release artifacts: on every push to main (smoke —
-# Windows only, the fast path) and full matrix on tags and manual dispatch.
-# Artifacts are uploaded as workflow artifacts; attaching them to a GitHub
-# release is a later step (doc 09 tooling story).
+# Build the `lagom` CLI release artifacts: full matrix on every push to
+# main, tags, and manual dispatch. On a `v*` tag the publish job attaches
+# the three validated packages plus sha256 checksums to a GitHub Release
+# (doc 09's tooling story).
+#
+# install-test then plays the user: nothing but the downloaded package (no
+# checkout, no Rust toolchain), executing the release page's printed
+# instructions step by step on all three OSes. Publishing waits for it, so
+# a release only appears once its own install guide has been run by CI.
 
 on:
   push:
@@ -32,6 +37,10 @@ jobs:
         run: cargo build --release -p lagom_cli
 
       - name: Build the runtime rlib for bundling
+        # The rlib is rustc-version-specific (E0514 under any other rustc),
+        # so the staged runtime also carries its stamp and the snapshot
+        # sources — a user whose rustc differs gets a one-time rebuild from
+        # the sources (see install-test below for the proof).
         run: cargo build --release -p lagom_rt
         env:
           CARGO_TARGET_DIR: target/lagom-rt
@@ -49,14 +58,28 @@ jobs:
           "$LAGOM" fmt validation/smoke.lagom
 
       - name: Stage the artifact (Windows)
+        # Bash staging (pwsh silently skipped the stamp write once), but
+        # the *zip itself* must come from Compress-Archive: bsdtar's zip
+        # layout makes Windows Explorer's extractor reject the archive
+        # ("invalid"), while Info-ZIP unzip reads it fine — only half the
+        # users could open it. Compress-Archive is the .NET zipper Explorer
+        # itself uses, so it can't disagree with Explorer.
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p stage/lib/lagom/deps
+          cp target/release/lagom.exe stage/
+          cp target/lagom-rt/release/liblagom_rt.rlib stage/lib/lagom/
+          cp target/lagom-rt/release/deps/*.rlib stage/lib/lagom/deps/
+          rustc --version | tr -d '\r\n' > stage/lib/lagom/rustc.txt
+          for c in lagom_diagnostics lagom_ast lagom_sema lagom_hir lagom_mir lagom_rt; do
+            mkdir -p stage/lib/lagom/src/$c
+            cp crates/$c/src/lib.rs stage/lib/lagom/src/$c/lib.rs
+          done
+      - name: Zip the staged artifact (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path stage/lib/lagom/deps | Out-Null
-          Copy-Item target/release/lagom.exe stage/
-          Copy-Item target/lagom-rt/release/liblagom_rt.rlib stage/lib/lagom/
-          Copy-Item target/lagom-rt/release/deps/*.rlib stage/lib/lagom/deps/
-          Compress-Archive -Path stage/* -DestinationPath lagom-Windows.zip
+        run: Compress-Archive -Path stage/* -DestinationPath lagom-Windows.zip -Force
 
       - name: Stage the artifact (Unix)
         if: runner.os != 'Windows'
@@ -66,7 +89,21 @@ jobs:
           cp target/release/lagom stage/
           cp target/lagom-rt/release/liblagom_rt.rlib stage/lib/lagom/
           cp target/lagom-rt/release/deps/*.rlib stage/lib/lagom/deps/
+          rustc --version | tr -d '\r\n' > stage/lib/lagom/rustc.txt
+          for c in lagom_diagnostics lagom_ast lagom_sema lagom_hir lagom_mir lagom_rt; do
+            mkdir -p stage/lib/lagom/src/$c
+            cp crates/$c/src/lib.rs stage/lib/lagom/src/$c/lib.rs
+          done
           tar czf lagom-${{ runner.os }}.tar.gz -C stage .
+
+      - name: Checksum the package (sha256)
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Windows) sha256sum lagom-Windows.zip > lagom-Windows.zip.sha256 ;;
+            macOS)   sha256sum lagom-macOS.tar.gz > lagom-macOS.tar.gz.sha256 ;;
+            Linux)   sha256sum lagom-Linux.tar.gz > lagom-Linux.tar.gz.sha256 ;;
+          esac
 
       - name: Validate the staged artifact
         shell: bash
@@ -83,6 +120,11 @@ jobs:
           echo "$(pwd)/clean" >> "$GITHUB_PATH"
           LAGOM="$(pwd)/clean/lagom"
           [ "$RUNNER_OS" = "Windows" ] && LAGOM="$(pwd)/clean/lagom.exe"
+          # Packaging invariants: the rustc stamp and the snapshot sources
+          # must ship, or the fast path silently degrades to a rebuild.
+          test -f clean/lib/lagom/rustc.txt
+          test -f clean/lib/lagom/liblagom_rt.rlib
+          test -f clean/lib/lagom/src/lagom_rt/lib.rs
           "$LAGOM" version
           "$LAGOM" run validation/smoke.lagom
           "$LAGOM" build validation/smoke.lagom -o built-smoke
@@ -96,6 +138,7 @@ jobs:
             lagom-Windows.zip
             lagom-Linux.tar.gz
             lagom-macOS.tar.gz
+            lagom-*.sha256
           if-no-files-found: error
 
   test:
@@ -110,3 +153,167 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Run the test suite
         run: cargo test --workspace
+
+  install-test:
+    name: release-page install (${{ matrix.os }})
+    # Play the user from the release page with nothing but the package: no
+    # checkout, no Rust toolchain. Every printed instruction is executed —
+    # sha256 verify, unpack anywhere, run from the folder, the day-one
+    # `lagom new` flow, the warned-about exe-without-lib mistake, and the
+    # optional PATH step ("reopen the terminal" = the next step's env).
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Download the package for this OS
+        uses: actions/download-artifact@v4
+        with:
+          name: lagom-${{ matrix.os }}
+
+      - name: Verify the download (sha256)
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Windows) PKG=lagom-Windows.zip ;;
+            macOS)   PKG=lagom-macOS.tar.gz ;;
+            Linux)   PKG=lagom-Linux.tar.gz ;;
+          esac
+          sha256sum -c "$PKG.sha256"
+
+      - name: Unpack anywhere (keep lagom and lib together)
+        shell: bash
+        run: |
+          mkdir -p "$HOME/lagom"
+          case "$RUNNER_OS" in
+            Windows) unzip -q lagom-Windows.zip -d "$HOME/lagom" ;;
+            macOS)   tar xzf lagom-macOS.tar.gz -C "$HOME/lagom" ;;
+            Linux)   tar xzf lagom-Linux.tar.gz -C "$HOME/lagom" ;;
+          esac
+          ls "$HOME/lagom"
+
+      - name: Run from the folder (before any PATH)
+        shell: bash
+        run: |
+          cd "$HOME/lagom"
+          [ "$RUNNER_OS" = "Windows" ] && L=./lagom.exe || L=./lagom
+          "$L" version
+          printf 'say "hello from the package"\n' > smoke.lagom
+          "$L" run smoke.lagom | grep "hello from the package"
+          "$L" build smoke.lagom -o smoke-built
+          ./smoke-built
+
+      - name: Day one (lagom new → cd → lagom run)
+        shell: bash
+        run: |
+          ROOT="$HOME/lagom"
+          [ "$RUNNER_OS" = "Windows" ] && L="$ROOT/lagom.exe" || L="$ROOT/lagom"
+          # Exactly the page's flow: from any scratch directory the user
+          # happens to be in (steps don't share cwd — like a fresh shell).
+          mkdir -p "$HOME/projects" && cd "$HOME/projects"
+          "$L" new hello
+          cd hello
+          echo you | "$L" run | grep "Hello, you!"
+
+      - name: A rustc that didn't build the package (snapshot rebuild)
+        # The E0514 scenario: the bundled rlib was built by CI's rustc. If
+        # this runner's rustc differs, the first run above already rebuilt
+        # from the shipped snapshot sources — assert that happened. If the
+        # rustcs matched, force the same path by removing the stamp (exactly
+        # what a version mismatch makes the driver conclude), rerun, and
+        # assert the self-built runtime appears and the run still works.
+        shell: bash
+        run: |
+          cd "$HOME/lagom"
+          [ "$RUNNER_OS" = "Windows" ] && L=./lagom.exe || L=./lagom
+          if [ ! -f lib/lagom/built/release/liblagom_rt.rlib ]; then
+            rm lib/lagom/rustc.txt
+            "$L" run smoke.lagom | grep "hello from the package"
+          fi
+          test -f lib/lagom/built/release/liblagom_rt.rlib
+          test -f lib/lagom/built/release/rustc.txt
+          # now instant: the self-built runtime is reused
+          "$L" run smoke.lagom | grep "hello from the package"
+
+      - name: The warned-about mistake (exe without its lib)
+        shell: bash
+        run: |
+          mkdir -p "$HOME/lagom-bare"
+          [ "$RUNNER_OS" = "Windows" ] && BIN=lagom.exe || BIN=lagom
+          cp "$HOME/lagom/$BIN" "$HOME/lagom-bare/"
+          printf 'say "hi"\n' > "$HOME/lagom-bare/t.lagom"
+          if "$HOME/lagom-bare/$BIN" run "$HOME/lagom-bare/t.lagom"; then
+            echo "native run worked without the bundled runtime — the lib rule is not enforced"
+            exit 1
+          fi
+          # the interpreter path needs no runtime at all
+          "$HOME/lagom-bare/$BIN" run --trace "$HOME/lagom-bare/t.lagom" > /dev/null
+
+      - name: Add the folder to PATH (the page's optional step)
+        shell: bash
+        run: |
+          if command -v cygpath >/dev/null 2>&1; then
+            DIR="$(cygpath -w "$HOME/lagom")"
+          else
+            DIR="$HOME/lagom"
+          fi
+          echo "$DIR" >> "$GITHUB_PATH"
+
+      - name: Plain lagom from anywhere (the reopened terminal)
+        shell: bash
+        run: |
+          cd "$HOME"
+          lagom version
+          lagom new hello2
+          cd hello2
+          echo you | lagom run | grep "Hello, you!"
+
+  publish:
+    name: publish (GitHub Release)
+    # Only a tag publishes. Every package was already machine-validated by
+    # the build job's "Validate the staged artifact" step, and install-test
+    # has executed the release page's instructions end to end on all three
+    # OSes — so what lands on the page is proven to work exactly as printed.
+    needs: [build, install-test]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the validated packages
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksum the packages
+        run: |
+          cd dist
+          sha256sum lagom-Windows.zip lagom-Linux.tar.gz lagom-macOS.tar.gz > sha256sums.txt
+          cat sha256sums.txt
+
+      - name: Build the release notes
+        # Stamp the template with the tag name (the template's __VERSION__
+        # marker) so every release ships the same install guide.
+        run: |
+          sed 's/__VERSION__/'"$GITHUB_REF_NAME"'/g' \
+            .github/release-notes-template.md > release-notes.md
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Explicit assets: the per-OS *.sha256 files stay out of the page
+          # (the combined sha256sums.txt is the one checksum file users see).
+          gh release create "$GITHUB_REF_NAME" \
+            dist/lagom-Windows.zip dist/lagom-Linux.tar.gz dist/lagom-macOS.tar.gz dist/sha256sums.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Lagom $GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
+            || gh release upload "$GITHUB_REF_NAME" \
+              dist/lagom-Windows.zip dist/lagom-Linux.tar.gz dist/lagom-macOS.tar.gz dist/sha256sums.txt \
+              --clobber --repo "$GITHUB_REPOSITORY"

@@ -1,0 +1,95 @@
+# File organizer — an M1 validation project (00 §33.1).
+#
+# A genuine M1 program: reads a manifest of "path|category" lines, builds a
+# category report with the map/kind/combinator features M1 adds, writes a
+# per-category summary file, and "moves" each manifest entry by reading the
+# file and writing it under its category folder. Files it cannot read are
+# reported, never crashed on — the program stays total over its input (13.1's
+# rule) and demonstrates the option/result surface end to end.
+#
+# No directory-listing builtin exists in the frozen M1 surface, so the
+# manifest (written by the test harness) is the honest input shape.
+
+kind entry
+  is a good with path of type text and folder of type text
+  is a broken with path of type text and reason of type text
+
+function classify line
+  takes text called line
+  returns an entry
+  make parts equal to split line and "|"
+  if size of parts is not equal to 2
+    gives back a broken with path line and reason "not path|category"
+  gives back a good with path parts at 0 and folder parts at 1
+
+function show entry
+  takes entry called e
+  returns a text
+  match e
+    when a good with path p and folder f
+      gives back "{p} -> {f}"
+    when a broken with path p and reason r
+      gives back "{p} (skipped: {r})"
+
+function folder name
+  takes entry called e
+  returns a text
+  match e
+    when a good with path p and folder f
+      gives back f
+    when a broken with path p and reason r
+      gives back "none"
+
+# ----- read the manifest (failures stop the run: no manifest, no work) -------
+
+attempt open file "organize_manifest.txt" if it fails then
+  say "cannot read the manifest: {problem}"
+otherwise
+  say "manifest read"
+  make manifest equal to result
+  make raw lines equal to split manifest and "\n"
+  # Drop the trailing empty line a final newline produces (keep keeps the
+  # rows a human would count).
+  make lines equal to keep raw lines using size of it is greater than 0
+  say "manifest lines: {size of lines}"
+
+  # ----- classify every line through the kind -------------------------------
+
+  make entries equal to map lines using classify line of it
+  make shown equal to map entries using show entry
+  repeat for each row in shown
+    say row
+
+  # ----- count categories with the combinators ------------------------------
+
+  make folders equal to map entries using folder name
+  make unique equal to sort folders
+  say "categories: {size of unique}"
+
+  # ----- copy each file into its category folder ----------------------------
+
+  make changing moved equal to 0
+  make changing failed equal to 0
+
+  repeat for each e in entries
+    match e
+      when a good with path p and folder f
+        attempt open file p if it fails then
+          say "cannot read {p}: {problem}"
+          increase failed by 1
+        otherwise
+          make content equal to result
+          make target equal to "{f}/{p}"
+          attempt write file content at target if it fails then
+            say "cannot write {target}"
+            increase failed by 1
+          otherwise
+            increase moved by 1
+      when a broken
+        say "bad manifest row stays unprocessed"
+
+  say "moved {moved} files, {failed} failures"
+  attempt write file "moved: {moved}\nfailed: {failed}" at "organize_report.txt" if it fails then
+    say "report write failed"
+  otherwise
+    say "report written"

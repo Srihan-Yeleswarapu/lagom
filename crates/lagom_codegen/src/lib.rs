@@ -52,6 +52,7 @@ use cranelift::codegen::Context;
 use cranelift::codegen::isa::CallConv;
 use cranelift::prelude::*;
 use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
+use cranelift_object::ObjectBuilder;
 use cranelift_object::ObjectModule;
 
 use lagom_lir::{
@@ -82,6 +83,13 @@ fn verify_flags() -> &'static settings::Flags {
 ///
 /// PDB generation is controlled at the object-backend level, not by a
 /// Cranelift codegen setting.
+///
+/// The default for end-user builds is `no_pdb = true`: users should not see
+/// debug-info files unless they explicitly ask for them with `--pdb`.
+///
+/// PDB generation is controlled at the link step via the `/DEBUG:NONE` linker
+/// flag on Windows when `no_pdb = true`; the object backend leaves debug-info
+/// flags at their default on all platforms.
 pub fn compile(lir: &LirProgram, source: &str, dev: bool, _no_pdb: bool) -> Result<Vec<u8>, String> {
     let mut sb = settings::builder();
     // Position-independent code: the object is linked by the platform linker
@@ -97,12 +105,15 @@ pub fn compile(lir: &LirProgram, source: &str, dev: bool, _no_pdb: bool) -> Resu
         .finish(flags)
         .map_err(|e| format!("Cranelift ISA setup failed: {e}"))?;
     let call_conv = isa.default_call_conv();
-    let builder = cranelift_object::ObjectBuilder::new(
+
+    let mut builder = ObjectBuilder::new(
         isa.clone(),
         "lagom_module.o".to_string(),
         cranelift_module::default_libcall_names(),
     )
     .map_err(|e| e.to_string())?;
+    builder.per_function_section(true);
+    builder.per_data_object_section(true);
     let mut module = ObjectModule::new(builder);
     let rt = RtFns::declare(&mut module, call_conv);
 
@@ -159,6 +170,7 @@ pub fn compile(lir: &LirProgram, source: &str, dev: bool, _no_pdb: bool) -> Resu
     bx.define_lagom_main()?;
 
     let product = bx.module.finish();
+
     product
         .emit()
         .map_err(|e| format!("object emission failed: {e}"))
@@ -229,6 +241,19 @@ struct RtFns {
     panic_from_fail: FuncId,
     set_dev: FuncId,
     register_struct: FuncId,
+    register_lambda: FuncId,
+    variant_tag: FuncId,
+    pair_get: FuncId,
+    closure_new: FuncId,
+    closure_push: FuncId,
+    call_closure: FuncId,
+    map_list: FuncId,
+    combine_list: FuncId,
+    split_text: FuncId,
+    sort_list: FuncId,
+    json_parse: FuncId,
+    json_format: FuncId,
+    file_op: FuncId,
     lom_set_source: FuncId,
     lom_entry: FuncId,
     lom_entry_arg: FuncId,
@@ -283,6 +308,19 @@ impl RtFns {
             panic_from_fail: imp(module, "rt_panic_from_fail", 1, 0),
             set_dev: imp(module, "rt_set_dev", 1, 0),
             register_struct: imp(module, "rt_register_struct", 4, 0),
+            register_lambda: imp(module, "rt_register_lambda", 3, 0),
+            variant_tag: imp(module, "rt_variant_tag", 4, 1),
+            pair_get: imp(module, "rt_pair_get", 5, 1),
+            closure_new: imp(module, "rt_closure_new", 3, 1),
+            closure_push: imp(module, "rt_closure_push", 3, 0),
+            call_closure: imp(module, "rt_call_closure", 6, 1),
+            map_list: imp(module, "rt_map_list", 7, 1),
+            combine_list: imp(module, "rt_combine_list", 8, 1),
+            split_text: imp(module, "rt_split_text", 6, 1),
+            sort_list: imp(module, "rt_sort_list", 4, 1),
+            json_parse: imp(module, "rt_json_parse", 4, 1),
+            json_format: imp(module, "rt_json_format", 3, 1),
+            file_op: imp(module, "rt_file_op", 8, 1),
             lom_set_source: imp(module, "rt_lom_set_source", 2, 0),
             lom_entry: imp(module, "rt_lom_entry", 2, 0),
             lom_entry_arg: imp(module, "rt_lom_entry_arg", 4, 0),
@@ -510,6 +548,25 @@ impl<'a> Backend<'a> {
             let fp = self.data_ptr(&mut fb, fields);
             let fl = fb.ins().iconst(I64, fields_len);
             self.rt_call(&mut fb, self.rt.register_struct, &[np, nl, fp, fl]);
+        }
+
+        // Closure registration (11.1): every synthetic lambda's address is
+        // registered by name so `rt_call_closure` calls through it. The
+        // compiled lambda has the uniform one-list ABI `(out, tag, payload)`
+        // and writes the return triple through `out`.
+        for f in &self.lir.functions {
+            if !f.name.starts_with("%lambda") {
+                continue;
+            }
+            let Some(&id) = self.fn_ids.get(&f.name) else {
+                continue;
+            };
+            let fref = self.module.declare_func_in_func(id, fb.func);
+            let addr = fb.ins().func_addr(I64, fref);
+            let blob = self.declare_ro(f.name.as_bytes());
+            let nptr = self.data_ptr(&mut fb, blob);
+            let nlen = fb.ins().iconst(I64, f.name.len() as i64);
+            self.rt_call(&mut fb, self.rt.register_lambda, &[addr, nptr, nlen]);
         }
 
         // Dev: hand the source to the failure-report renderer.
@@ -983,6 +1040,168 @@ impl<'a> Backend<'a> {
                 let has_v = fb.ins().iconst(I64, *has_cmp as i64);
                 let line_v = fb.ins().iconst(I64, *line);
                 self.rt_call(fb, self.rt.check, &[vt, vp, lt, lp, rt_, rp, cmp_v, has_v, line_v]);
+            }
+            LirInstr::VariantTag { dest, value, line } => {
+                let (vt, vp) = self.operand(fb, st, pad, value);
+                let line_v = fb.ins().iconst(I64, *line);
+                let (t, p) =
+                    self.call_out_status(fb, st, pad, self.rt.variant_tag, &[vt, vp, line_v], Some(*line));
+                self.store_pair(fb, st, *dest, (t, p));
+            }
+            LirInstr::PairGet { dest, pair, second, line } => {
+                let (pt, pp) = self.operand(fb, st, pad, pair);
+                let sec_v = fb.ins().iconst(I64, *second as i64);
+                let line_v = fb.ins().iconst(I64, *line);
+                let (t, p) = self.call_out_status(
+                    fb,
+                    st,
+                    pad,
+                    self.rt.pair_get,
+                    &[pt, pp, sec_v, line_v],
+                    Some(*line),
+                );
+                self.store_pair(fb, st, *dest, (t, p));
+            }
+            LirInstr::MakeClosure { dest, function, captures, line } => {
+                let (nptr, nlen) = self.declare_ro_i(fb, *function);
+                let (t, p) =
+                    self.call_out_status(fb, st, pad, self.rt.closure_new, &[nptr, nlen], Some(*line));
+                for c in captures {
+                    let (ct, cp) = self.operand(fb, st, pad, c);
+                    self.rt_call(fb, self.rt.closure_push, &[p, ct, cp]);
+                }
+                self.store_pair(fb, st, *dest, (t, p));
+            }
+            LirInstr::CallClosure { dest, f, args, line } => {
+                let (ft, fp) = self.operand(fb, st, pad, f);
+                let line_v = fb.ins().iconst(I64, *line);
+                // Build the argument array on the stack: 2*argc i64s.
+                let argc = args.len();
+                let arg_slot = fb.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    (argc * 16).max(16) as u32,
+                    3,
+                ));
+                let arg_base = fb.ins().stack_addr(I64, arg_slot, 0);
+                for (i, a) in args.iter().enumerate() {
+                    let (at, ap) = self.operand(fb, st, pad, a);
+                    fb.ins().store(MemFlags::new(), at, arg_base, (i * 16) as i32);
+                    fb.ins().store(MemFlags::new(), ap, arg_base, (i * 16 + 8) as i32);
+                }
+                let argc_v = fb.ins().iconst(I64, argc as i64);
+                let (t, p) = self.call_out_status_mode(
+                    fb,
+                    st,
+                    pad,
+                    self.rt.call_closure,
+                    &[ft, fp, arg_base, argc_v, line_v],
+                    Some(*line),
+                    true,
+                );
+                self.store_pair(fb, st, *dest, (t, p));
+            }
+            LirInstr::MapList { dest, list, f, is_map, line } => {
+                let (lt, lp) = self.operand(fb, st, pad, list);
+                let (ft, fp) = self.operand(fb, st, pad, f);
+                let is_v = fb.ins().iconst(I64, *is_map as i64);
+                let line_v = fb.ins().iconst(I64, *line);
+                let (t, p) = self.call_out_status_mode(
+                    fb,
+                    st,
+                    pad,
+                    self.rt.map_list,
+                    &[lt, lp, ft, fp, is_v, line_v],
+                    Some(*line),
+                    true,
+                );
+                self.store_pair(fb, st, *dest, (t, p));
+            }
+            LirInstr::CombineList { dest, list, start, f, line } => {
+                let (lt, lp) = self.operand(fb, st, pad, list);
+                let (st_, sp) = self.operand(fb, st, pad, start);
+                let (ft, fp) = self.operand(fb, st, pad, f);
+                let line_v = fb.ins().iconst(I64, *line);
+                let (t, p) = self.call_out_status_mode(
+                    fb,
+                    st,
+                    pad,
+                    self.rt.combine_list,
+                    &[lt, lp, st_, sp, ft, fp, line_v],
+                    Some(*line),
+                    true,
+                );
+                self.store_pair(fb, st, *dest, (t, p));
+            }
+            LirInstr::SplitText { dest, text, sep, line } => {
+                let (tt, tp) = self.operand(fb, st, pad, text);
+                let (spt, spp) = self.operand(fb, st, pad, sep);
+                let line_v = fb.ins().iconst(I64, *line);
+                let (t, p) = self.call_out_status(
+                    fb,
+                    st,
+                    pad,
+                    self.rt.split_text,
+                    &[tt, tp, spt, spp, line_v],
+                    Some(*line),
+                );
+                self.store_pair(fb, st, *dest, (t, p));
+            }
+            LirInstr::SortList { dest, list, line } => {
+                let (lt, lp) = self.operand(fb, st, pad, list);
+                let line_v = fb.ins().iconst(I64, *line);
+                let (t, p) =
+                    self.call_out_status(fb, st, pad, self.rt.sort_list, &[lt, lp, line_v], Some(*line));
+                self.store_pair(fb, st, *dest, (t, p));
+            }
+            LirInstr::JsonParse { dest, text, line } => {
+                let (tt, tp) = self.operand(fb, st, pad, text);
+                let line_v = fb.ins().iconst(I64, *line);
+                // A failed parse propagates like a can-fail call (13.1).
+                let (t, p) = self.call_out_status_mode(
+                    fb,
+                    st,
+                    pad,
+                    self.rt.json_parse,
+                    &[tt, tp, line_v],
+                    Some(*line),
+                    true,
+                );
+                self.store_pair(fb, st, *dest, (t, p));
+            }
+            LirInstr::JsonFormat { dest, value, line } => {
+                let (vt, vp) = self.operand(fb, st, pad, value);
+                let (t, p) =
+                    self.call_out_status(fb, st, pad, self.rt.json_format, &[vt, vp], Some(*line));
+                self.store_pair(fb, st, *dest, (t, p));
+            }
+            LirInstr::FileOp { dest, op, a, b, line } => {
+                let (at, ap) = self.operand(fb, st, pad, a);
+                let op_v = fb.ins().iconst(I64, *op);
+                let (bt, bp, has_v): (Value, Value, Value) = match b {
+                    Some(bop) => {
+                        let (t, p) = self.operand(fb, st, pad, bop);
+                        (t, p, fb.ins().iconst(I64, 1))
+                    }
+                    None => (
+                        fb.ins().iconst(I64, 0),
+                        fb.ins().iconst(I64, 0),
+                        fb.ins().iconst(I64, 0),
+                    ),
+                };
+                let bt = bt;
+                let bp = bp;
+                let has_v = has_v;
+                let line_v = fb.ins().iconst(I64, *line);
+                let (t, p) = self.call_out_status_mode(
+                    fb,
+                    st,
+                    pad,
+                    self.rt.file_op,
+                    &[op_v, at, ap, bt, bp, has_v, line_v],
+                    Some(*line),
+                    true,
+                );
+                self.store_pair(fb, st, *dest, (t, p));
             }
             LirInstr::LomEntry { function, args } => {
                 // Dev-only probe (§26.5): the argument snapshots ride the

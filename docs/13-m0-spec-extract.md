@@ -23,7 +23,7 @@ repeat      = "repeat" (count | whilec | foreach) block ;
 count       = number "times" ["using" name] ;
 whilec      = "while" expr ;
 foreach     = name "in" expr ;                       (* pattern = name at M0 *)
-giveback    = "give back" expr ;
+giveback    = "gives back" expr ;
 failwith    = "fail with" expr ;
 attempt     = "attempt" orexpr [attempttail] ;
 attempttail = "and pass the problem on"

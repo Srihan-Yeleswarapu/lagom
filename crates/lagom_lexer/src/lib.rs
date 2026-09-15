@@ -138,6 +138,21 @@ pub enum Kw {
     With,
     A,
     An,
+
+    // ----- M1 (7.12 kinds/match, 11.1 lambdas, 8.5 options) -----
+    Kind,
+    Match,
+    When,
+    Taking,
+    GivingBack,
+    Where,
+    It,
+    Something,
+    /// `something with value <pattern>` — the option destructuring pattern (8.5, 7.15's `pattern`).
+    SomethingWithValue,
+    IsA,
+    /// `or nothing` — the option-type tail word (`a text or nothing`, 8.5).
+    OrNothing,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -288,11 +303,18 @@ impl LogicalLine {
 /// are deliberately excluded — see docs/14 G-6.
 const INCOMPLETE_TAIL_WORDS: &[&str] = &[
     "and", "as", "at", "attempt", "back", "by", "called", "changing", "check",
-    "decrease", "divided", "each", "evenly", "for", "from", "function", "give",
+    "decrease", "divided", "each", "evenly", "for", "from", "function", "gives",
     "greater", "has", "if", "in", "increase", "is", "least", "less", "make", "minus",
     "modulo", "most", "not", "of", "or", "plus", "remainder", "repeat", "returns", "set",
     "structure", "takes", "test", "that", "than", "to", "type", "use", "using",
     "while", "with",
+    // M1: multi-word forms' heads/tails (7.12/11.1/8.5). `taking`, `giving`,
+    // `where` are statement/expression openers that end before their body;
+    // `match` may continue into its pattern line. `something` is NOT a tail
+    // word: `if maybe is something` is complete (8.5's bare-something test)
+    // — only `something with value` (one phrase-token) continues, and the
+    // `with` tail already covers it.
+    "giving", "match", "taking", "where",
 ];
 
 /// Build logical lines: skip blanks and comments, join continuations, collect docs.
@@ -516,8 +538,8 @@ const PHRASES: &[&[&str]] = &[
     &["is", "equal", "to"],
     &["is", "at", "least"],
     &["is", "at", "most"],
-    &        ["is", "nothing"],
-        &["is", "something"],
+    &["is", "nothing"],
+    &["is", "something"],
     &[] as &[&str], // spacer
     &["not", "equal", "to"],
     &["divided", "evenly", "by"],
@@ -529,7 +551,7 @@ const PHRASES: &[&[&str]] = &[
     &["at", "most"],
     &["remainder", "of"],
     &["divided", "by"],
-    &["give", "back"],
+    &["gives", "back"],
     &["fail", "with"],
     &["can", "fail"],
     &["a", "list", "of"],
@@ -538,7 +560,20 @@ const PHRASES: &[&[&str]] = &[
     &["if", "it", "fails"],
     &["of", "type"],
     &["for", "each"],
+    // ----- M1 phrases (7.12/11.1/8.5) — before their single-word heads so the
+    // longest match wins (is a / with value / giving back over is/gives) -----
+    &["something", "with", "value"],
+    &["giving", "back"],
+    &["is", "a"],
+    &["or", "nothing"],
     // single-word keywords
+    &["kind"],
+    &["match"],
+    &["when"],
+    &["taking"],
+    &["where"],
+    &["it"],
+    &["something"],
     &["otherwise"],
     &["changing"],
     &["number"],
@@ -556,7 +591,7 @@ const PHRASES: &[&[&str]] = &[
     &["attempt"],
     &["check", "that"],
     &["check"],
-    &["give"],
+    &["gives"],
     &["fail"],
     &["while"],
     &["using"],
@@ -618,7 +653,7 @@ fn phrase_kw(phrase: &[&str]) -> Kw {
         ["for", "each"] => ForEach,
         ["remainder", "of"] => RemainderOf,
         ["divided", "by"] => DividedBy,
-        ["give", "back"] => GiveBack,
+        ["gives", "back"] => GiveBack,
         ["fail", "with"] => FailWith,
         ["can", "fail"] => CanFail,
         ["a", "list", "of"] => AListOf,
@@ -626,6 +661,18 @@ fn phrase_kw(phrase: &[&str]) -> Kw {
         ["a", "pair", "of"] => APairOf,
         ["if", "it", "fails"] => IfItFails,
         ["of", "type"] => OfType,
+        // M1
+        ["something", "with", "value"] => SomethingWithValue,
+        ["giving", "back"] => GivingBack,
+        ["is", "a"] => IsA,
+        ["or", "nothing"] => OrNothing,
+        ["kind"] => Kind,
+        ["match"] => Match,
+        ["when"] => When,
+        ["taking"] => Taking,
+        ["where"] => Where,
+        ["it"] => It,
+        ["something"] => Something,
         ["otherwise"] => Otherwise,
         ["changing"] => Changing,
         ["number"] => Number,
@@ -643,7 +690,7 @@ fn phrase_kw(phrase: &[&str]) -> Kw {
         ["attempt"] => Attempt,
         ["check", "that"] => CheckThat,
         ["check"] => CheckThat, // bare `check` is diagnosed by the parser
-        ["give"] => GiveBack,   // bare `give` is diagnosed by the parser
+        ["gives"] => GiveBack,  // bare `gives` is diagnosed by the parser
         ["fail"] => FailWith,   // bare `fail` is diagnosed by the parser
         ["while"] => While,
         ["using"] => Using,
@@ -1112,8 +1159,8 @@ mod tests {
             // the `and` belongs to the pair literal's grammar (a pair of X and Y)
             vec![Kw::Make, Kw::EqualTo, Kw::APairOf, Kw::And]
         );
-        // `give back`, `fail with`, `can fail`, `check that`
-        assert_eq!(kws("give back total\n"), vec![Kw::GiveBack]);
+        // `gives back`, `fail with`, `can fail`, `check that`
+        assert_eq!(kws("gives back total\n"), vec![Kw::GiveBack]);
         assert_eq!(kws("fail with \"no\"\n"), vec![Kw::FailWith]);
         assert_eq!(kws("function f\n    can fail\n"), vec![Kw::Function, Kw::CanFail]);
         assert_eq!(kws("check that 1 is less than 2\n"), vec![Kw::CheckThat, Kw::CmpLessThan]);
@@ -1258,5 +1305,45 @@ mod tests {
             kws("make flag equal to true\n"),
             vec![Kw::Make, Kw::EqualTo, Kw::True]
         );
+    }
+
+    // ----- M1 phrase-tokens (7.12 kinds/match, 11.1 lambdas, 8.5 options) -----
+
+    #[test]
+    fn m1_phrase_tokens() {
+        // `something with value` beats the `with` preposition; `giving back`
+        // beats a bare `gives`; `is a` beats a bare `is`.
+        assert_eq!(
+            kws("when something with value name\n"),
+            vec![Kw::When, Kw::SomethingWithValue]
+        );
+        assert_eq!(
+            kws("make double equal to map things using taking n giving back n times 2\n"),
+            vec![Kw::Make, Kw::EqualTo, Kw::Using, Kw::Taking, Kw::GivingBack, Kw::TimesWord]
+        );
+        assert_eq!(kws("match s\n"), vec![Kw::Match]);
+        assert_eq!(kws("kind shape\n"), vec![Kw::Kind]);
+        assert_eq!(kws("when a circle\n"), vec![Kw::When, Kw::A]);
+        assert_eq!(kws("keep scores where it is at least 80\n"), vec![Kw::Where, Kw::It, Kw::CmpAtLeast]);
+    }
+
+    /// `a shape or nothing` — the word-spelled option type (8.5): the article
+    /// and `or nothing` must not fuse into other phrases.
+    #[test]
+    fn option_type_words() {
+        assert_eq!(
+            kws("returns a text or nothing\n"),
+            vec![Kw::Returns, Kw::A, Kw::Text, Kw::OrNothing]
+        );
+    }
+
+    /// M1 block headers end complete (7.0.1): the block-lambda body and the
+    /// `match` arms arrive through block structure (Indent), not continuation.
+    #[test]
+    fn m1_block_structure() {
+        let t = toks("make f equal to a function taking n\n    gives back n times 2\n");
+        assert!(t.contains(&Item::Tok(Tok::Indent)), "the lambda body is a block: {t:?}");
+        let t = toks("match s\n    when something\n        say \"empty\"\n");
+        assert!(t.contains(&Item::Tok(Tok::Indent)), "the match arms are a block: {t:?}");
     }
 }

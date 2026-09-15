@@ -11,7 +11,7 @@ function ask one
     takes question called card
     returns a boolean
     make reply equal to ask "{prompt of card} "
-    give back reply is equal to answer of card
+    gives back reply is equal to answer of card
 
 make cards equal to a list of a question with prompt "What is 7 plus 5?" and answer "12", a question with prompt "Capital of France?" and answer "paris", a question with prompt "What is 3 times 4?" and answer "12"
 

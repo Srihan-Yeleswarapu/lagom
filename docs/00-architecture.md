@@ -154,7 +154,7 @@ The complete capability map with layer assignments. Every feature listed here ha
 | Loop control | `stop`, `next` | M0 |
 | Lists | `make things equal to a list of "a", "b", "c"` | M0 |
 | Maps | `make ages equal to a map from "ana" to 11, "bo" to 12` | M0 |
-| Functions | `function greet` + `takes` / `returns` clauses, `give back …` | M0 |
+| Functions | `function greet` + `takes` / `returns` clauses, `gives back …` | M0 |
 | Strings & interpolation | `text` type, `"hello {name}"` | M0 |
 | First-class numbers | `number` (i64-backed) with `decimal` promotion on true division | M0 |
 | Basic tests | `test "name"` + `check that …` | M0 |
@@ -440,7 +440,7 @@ function calculate average
     make total equal to 0
     repeat for each score in scores
         increase total by score
-    give back total divided evenly by size of scores
+    gives back total divided evenly by size of scores
 ```
 
 - Clause words, in order: `takes …` (one per parameter), `returns …` (optional; inferred when absent), `can fail …` (error capability, 13), `can wait` (async capability, 15 — orthogonal to `can fail`; both compose on one function). Body indented under the header.
@@ -453,7 +453,7 @@ function calculate score
     takes number of correct answers
     takes number of total questions
     returns a number
-    give back correct answers divided by total questions
+    gives back correct answers divided by total questions
 ```
 
 **The expert uses the identical clause grammar with more explicit types:**
@@ -528,11 +528,11 @@ function describe
     returns text
     match s
         when a circle with radius r
-            give back "round, {r}"
+            gives back "round, {r}"
         when a rectangle with width w and height h
-            give back "boxy, {w} by {h}"
+            gives back "boxy, {w} by {h}"
         when blank
-            give back "empty"
+            gives back "empty"
 ```
 
 - `kind` declares an algebraic data type (sum type); `match` + `when` patterns destructure. Patterns: literal, binding, tuple/struct destructuring, `when nothing`/`when something with value v` for optionals. Exhaustiveness is enforced — a `match` that misses a case is a compile error with the missing case named.
@@ -558,7 +558,7 @@ say circle at 3 and 4
 
 ### 7.14 Everything-is-an-expression boundary
 
-For transfer to Rust/Swift/functional languages, **most constructs are expressions**: `if` (when both branches present), `match`, blocks, `attempt`. Statements are: declarations, assignments, `repeat`, `stop`, `next`, `use`. `give back` is the return form (expression), `fail with` the failure form (13). This uniformity is what lets Lagom grow functional idioms (11) without a second "expression language".
+For transfer to Rust/Swift/functional languages, **most constructs are expressions**: `if` (when both branches present), `match`, blocks, `attempt`. Statements are: declarations, assignments, `repeat`, `stop`, `next`, `use`. `gives back` is the return form (expression), `fail with` the failure form (13). This uniformity is what lets Lagom grow functional idioms (11) without a second "expression language".
 
 ### 7.15 Formal grammar sketch
 
@@ -619,7 +619,7 @@ interface   = "interface" name ["of" name] { interfacereq } ;   (* 10.6, M2 *)
 interfacereq = "can" name [takes] [canfail] [canwait] ;   (* a requirement — no body (10.6) *)
 typealias   = "a type called" name "is a" type ;     (* 8.4, M1 *)
 
-giveback    = "give back" expr ;
+giveback    = "gives back" expr ;
 failwith    = "fail with" expr ;
 attempt     = "attempt" orexpr [attempttail] ;       (* ONE production, used in statement AND
                                                           expression position (R-20.1, 13.1) *)
@@ -952,14 +952,14 @@ Allowed for arithmetic/comparison on user types via interface implementations (`
 make twice equal to a function
     takes a function from number to number called f
     returns a function from number to number
-    give back f of f of 3        # f(f(3)) — nested flowing calls are legal when unambiguous
+    gives back f of f of 3        # f(f(3)) — nested flowing calls are legal when unambiguous
 ```
 
 Lambdas:
 
 ```lagom
 make double equal to a function taking n
-    give back n times 2
+    gives back n times 2
 
 make doubled equal to map things using double
 ```
@@ -1004,7 +1004,7 @@ Adopts: first-class functions, closures, immutability-by-default, ADTs + pattern
 function first item
     takes a list of anything called items
     returns anything         # same type as the list's item type
-    give back items at 0
+    gives back items at 0
 ```
 
 `anything` (called `T` elsewhere) is inferred from use — the beginner writes a generic function *without knowing generics exist*. This is the Swift-style opaque inference form; the checker unifies `anything` per call site (and per-body occurrence, co-consistently), and monomorphization happens in MIR (22).
@@ -1015,7 +1015,7 @@ function first item
 function first item
     takes a list of some type called items
     returns some type
-    give back items at 0
+    gives back items at 0
 ```
 
 `some type` names the type parameter explicitly. Containers: `a list of some type`, `a box of some type` (user generic classes use the same word). In v0.1, **type arguments are always inferred at call sites**; when inference cannot decide, the programmer annotates a binding (`of type`) or an intermediate variable instead — an explicit type-argument syntax is deferred until the M2 generics work proves it necessary (tracked with doc 04's open questions).
@@ -1049,7 +1049,7 @@ function divide
     can fail
     if bottom is equal to 0
         fail with "cannot divide by zero"
-    give back top divided by bottom
+    gives back top divided by bottom
 
 attempt divide 10 and 0 if it fails then
     say problem
@@ -1236,7 +1236,7 @@ function library version
     can fail
     unsafe because calling a C library that needs raw string handling
     make raw equal to sqlite3 libversion
-    give back text from C string raw        # the wrapper converts; C calls return values, not errors
+    gives back text from C string raw        # the wrapper converts; C calls return values, not errors
 ```
 
 **C calls return values, period — no magic capability inference** (R-20.4 of doc 11). A C function never implicitly becomes `can fail`; error conversion is *explicit in the wrapper*: the Lagom wrapper declares `can fail`, inspects the C return code, and constructs a Lagom error with `fail with` (or returns the converted value). The caller sees only the readable Lagom API; the unsafe C boundary and the error translation both live in one audited place.
@@ -1255,7 +1255,7 @@ export function lagom add
     takes a C number called a
     takes a C number called b
     returns a C number
-    give back a plus b
+    gives back a plus b
 ```
 
 This enables Lagom-built static/shared libraries callable from C, Python (ctypes), Swift, etc. This is also the embedding story (a Lagom runtime library with a C API, the Lua/SQLite model).
@@ -1576,7 +1576,7 @@ The brief's goal 5 makes debugging an *explanation* process: the system answers 
 | `if a is greater than b` | `if a > b:` | `if (a > b)` | `if (a > b)` | `if (a > b)` | `if a > b` | `if a > b` | `if a > b` |
 | `repeat 10 times using i` | `for i in range(10):` | `for (let i=0;i<10;i++)` | `for(int i=0;i<10;i++)` | `for(int i=0;i<10;i++)` | `for i in 0..10` | `for i := 0; i < 10; i++` | `for i in 0..<10` |
 | `function add … returns a number` | `def add(...):` | `function add(...)` | `int add(...)` | `int add(...)` | `fn add(...) -> i64` | `func add(...) int` | `func add(...) -> Int` |
-| `give back` | `return` | `return` | `return` | `return` | `return` | `return` | `return` |
+| `gives back` | `return` | `return` | `return` | `return` | `return` | `return` | `return` |
 | `can fail` + `attempt` | try/except | try/catch | try/catch | errno/retval | `Result` + `?` | error values | `throws` + `try` |
 | `can wait` | async/await | async/await | CompletableFuture | (none) | `async`/`.await` | goroutines | `async`/`await` |
 | `kind` + `match` | (match 3.10) | (switch) | sealed+switch | (switch) | `enum`+`match` | (type switch) | `enum`+`switch` |
