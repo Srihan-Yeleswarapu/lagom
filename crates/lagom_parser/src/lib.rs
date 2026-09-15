@@ -188,6 +188,15 @@ impl<'src> Parser<'src> {
                     Ok(k) => items.push(AstItem::Kind(k)),
                     Err(()) => self.skip_decl(),
                 },
+                // `a type called score is a number` (8.4): the alias statement.
+                Item::Kw(Kw::A)
+                    if matches!(self.items.get(self.pos + 1), Some((Item::Tok(Tok::WordRun(w)), _)) if w == &["type"]) =>
+                {
+                    match self.type_alias_decl() {
+                        Ok(a) => items.push(AstItem::TypeAlias(a)),
+                        Err(()) => self.skip_to_line_end(),
+                    }
+                }
                 Item::Kw(Kw::Test) => match self.test_decl() {
                     Ok(t) => items.push(AstItem::Test(t)),
                     Err(()) => self.skip_decl(),
@@ -279,6 +288,22 @@ impl<'src> Parser<'src> {
                 Ok(TypeExpr::Pair(Box::new(a), Box::new(b)))
             }
             _ => {
+                // The type parameter (12.1/12.2): `takes anything called x`
+                // and `takes some type called x` are the frozen word spellings
+                // of one concept. Both arrive as WordRuns (no reserved Kw), so
+                // recognize them before the User-name fallback — otherwise
+                // `some type called items` is eaten as a two-word name.
+                let is_type_param = matches!(self.peek(), (Item::Tok(Tok::WordRun(w)), _)
+                    if w == ["anything"].as_slice() || w == ["some", "type"].as_slice());
+                if is_type_param {
+                    // One bump: the WordRun already carries both words of
+                    // `some type` (word runs break only at keywords).
+                    self.bump();
+                    // The option tail composes with type parameters too
+                    // (`returns some type?` — the option of whatever the
+                    // call site's element type is).
+                    return self.parse_option_suffix(TypeExpr::TypeParam);
+                }
                 // usertype: any name word run
                 match self.peek_tok() {
                     Some(Tok::WordRun(_)) => {
@@ -318,6 +343,69 @@ impl<'src> Parser<'src> {
     // ------------------------------------------------------------------
     // Declarations (7.8 clauses, 7.11 structures, 5.1 tests, 7.13 use)
     // ------------------------------------------------------------------
+
+    /// `a type called <name> is a <type>` (8.4, M1–M2): one line, no block.
+    /// The name is an ordinary name (multi-word allowed, like any name); the
+    /// type is the full type grammar (aliases of aliases compose).
+    fn type_alias_decl(&mut self) -> PResult<ast::TypeAliasDecl> {
+        let start = self.expect_kw(Kw::A, "the word `a` (as in `a type called score is a number`)")?;
+        // The `type` head word: not a keyword, so it arrived as a one-word
+        // name-run — take it directly.
+        match self.peek() {
+            (Item::Tok(Tok::WordRun(w)), span) if w == &["type"] => {
+                self.bump();
+                let _ = span;
+            }
+            _ => {
+                let (item, span) = self.peek();
+                self.errors.push(
+                    Diagnostic::error(
+                        "E0201",
+                        "I expected the word `type` here (as in `a type called score is a number`).",
+                        span,
+                    )
+                    .with_note(format!("found: {}", item_text(item))),
+                );
+                return Err(());
+            }
+        }
+        self.expect_kw(Kw::Called, "the word `called` (between `type` and the new type's name)")?;
+        let name = self.parse_name("`called` must be followed by the new type's name")?;
+        self.expect_kw(Kw::IsA, "the words `is a` (between the new type's name and its real type)")?;
+        self.splice_absorbed_type_article();
+        let ty = self.parse_type("After `is a`, write the type this new name stands for (like `a number`).")?;
+        let span = start.to(ty_span(&ty));
+        self.end_of_line("the type alias line")?;
+        Ok(ast::TypeAliasDecl { name, ty, span })
+    }
+
+    /// The `is a` phrase absorbs the article of a compound type head:
+    /// `is a list of number` lexes as IsA, `"list"`, `of` (likewise map/pair).
+    /// Splice the two tokens back into the single `a list of` phrase token so
+    /// `parse_type` sees the ordinary grammar. Parser-local — the frozen
+    /// phrase set is untouched (docs/13 §2).
+    fn splice_absorbed_type_article(&mut self) {
+        let merged = match self.items.get(self.pos) {
+            Some((Item::Tok(Tok::WordRun(w)), _)) if w == &["list"] => Some(Kw::AListOf),
+            Some((Item::Tok(Tok::WordRun(w)), _)) if w == &["map"] => Some(Kw::AMapFrom),
+            Some((Item::Tok(Tok::WordRun(w)), _)) if w == &["pair"] => Some(Kw::APairOf),
+            _ => None,
+        };
+        let Some(kw) = merged else { return };
+        // The head's companion preposition must follow (`list of`,
+        // `map from`, `pair of`) — anything else is not a type head.
+        let companion = matches!(self.items.get(self.pos + 1).map(|(i, _)| i), Some(Item::Kw(Kw::Of | Kw::From)));
+        let correct = match kw {
+            Kw::AMapFrom => matches!(self.items.get(self.pos + 1).map(|(i, _)| i), Some(Item::Kw(Kw::From))),
+            _ => matches!(self.items.get(self.pos + 1).map(|(i, _)| i), Some(Item::Kw(Kw::Of))),
+        };
+        if !companion || !correct {
+            return;
+        }
+        let start = self.items[self.pos].1;
+        let end = self.items[self.pos + 1].1;
+        self.items.splice(self.pos..self.pos + 2, [(Item::Kw(kw), start.to(end))]);
+    }
 
     /// `function name {clause} block` (7.8, M0 clauses: takes/returns/can fail).
     /// Clause order is fixed (7.8: trivially parseable — that is the point).
@@ -1447,7 +1535,23 @@ impl<'src> Parser<'src> {
                     }
                 }
                 // Re-lex and parse the interpolation body as an expression.
-                let (program, mut errs) = parse(&inner);
+                // The body is re-parsed as its own source fragment, so its
+                // spans start at 0 — pad the fragment with the newlines that
+                // precede the string in the real file and every diagnostic
+                // inside `{…}` lands on the true line and column (M2's
+                // "exactly where" contract; multi-line strings included).
+                let pad = "\n".repeat(span.start.min(self.src.len()));
+                let padded = format!("{pad}{inner}");
+                let (program, mut errs) = parse(&padded);
+                let shift = pad.len();
+                for e in &mut errs {
+                    e.span.start += shift;
+                    e.span.end += shift;
+                    for (ls, _) in &mut e.labels {
+                        ls.start += shift;
+                        ls.end += shift;
+                    }
+                }
                 self.errors.append(&mut errs);
                 let expr = match program.items.into_iter().next() {
                     Some(AstItem::Stmt(Stmt::ExprStmt { expr, .. })) => expr,
@@ -1901,7 +2005,19 @@ impl Parser<'_> {
             and_args.push(Arg { expr: Box::new(e), span });
         }
         let mut with_args = Vec::new();
-        while self.peek_kw() == Some(Kw::With) {
+        // 7.9/7.11: a labeled-argument chain continues with `and` when the
+        // `and` opens the next `name <additive>` label — the construction
+        // exemplar's own shape (`greet with name "bo" and punctuation "!"`).
+        // Any other `and` (value continuation, bare argument) was already
+        // consumed by the and-loop above or ends the call.
+        loop {
+            let is_with = self.peek_kw() == Some(Kw::With);
+            let is_and_next_label = self.peek_kw() == Some(Kw::And)
+                && !with_args.is_empty()
+                && self.peek_and_then_field_name();
+            if !is_with && !is_and_next_label {
+                break;
+            }
             self.bump();
             let label = self.parse_name("`with` must be followed by the argument's name")?;
             // The label's value-head word can be lexed INTO the label run:

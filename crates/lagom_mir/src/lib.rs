@@ -2208,29 +2208,38 @@ pub fn is_event(i: &Instr) -> bool {
 // ---------------------------------------------------------------------------
 
 /// The bounded in-memory event ring (fixed budget, oldest evicted — 26.5's
-/// "no unbounded recording, ever").
+/// "no unbounded recording, ever"). The dropped count is reported, not
+/// hidden: a truncated ring must not silently present itself as complete.
 pub struct EventRing {
     events: Vec<LomEvent>,
     capacity: usize,
+    dropped: usize,
 }
 
 impl EventRing {
     pub fn new(capacity: usize) -> EventRing {
-        EventRing { events: Vec::new(), capacity }
+        EventRing { events: Vec::new(), capacity, dropped: 0 }
     }
 
     pub fn push(&mut self, event: LomEvent) {
         if self.capacity == 0 {
+            self.dropped += 1;
             return;
         }
         if self.events.len() >= self.capacity {
             self.events.remove(0);
+            self.dropped += 1;
         }
         self.events.push(event);
     }
 
     pub fn events(&self) -> &[LomEvent] {
         &self.events
+    }
+
+    /// How many events were evicted (oldest first) to stay within the budget.
+    pub fn dropped(&self) -> usize {
+        self.dropped
     }
 
     pub fn len(&self) -> usize {
@@ -2252,8 +2261,16 @@ pub enum LomEvent {
 }
 
 /// Render a dev-build failure report from the ring (26.5's payoff artifact;
-/// doc 09 owns the final format — M0 ships the v1 shape). `src` turns offsets
-/// into line numbers ("bound at line 12").
+/// doc 09 owns the final format). `src` turns offsets into line numbers
+/// ("bound at line 12") and lets the report quote each binding's own line —
+/// the provenance chain in source words, not just line numbers.
+///
+/// The report answers the 26.5 questions in order: what happened (the
+/// failure), what the program was doing (the call chain and bindings), and
+/// the concept the failure teaches (26.5's answer 8, via the
+/// [`concept_for_message`] lesson table — a report teaches only what it
+/// knows; unmatched messages get no footer). When the ring evicted events
+/// the report says so — a truncated history never poses as complete.
 pub fn failure_report(ring: &EventRing, function: &str, src: &str) -> String {
     let mut out = String::new();
     out.push_str("— what happened —\n");
@@ -2261,6 +2278,13 @@ pub fn failure_report(ring: &EventRing, function: &str, src: &str) -> String {
     if ring.is_empty() {
         out.push_str("(no recorded events — the failure happened before any binding was recorded.)\n");
         return out;
+    }
+    if ring.dropped() > 0 {
+        out.push_str(&format!(
+            "(the {} oldest events were dropped to stay inside the fixed event budget — this report shows the most recent {}.)\n",
+            ring.dropped(),
+            ring.len()
+        ));
     }
     out.push_str("— what the program was doing —\n");
     for e in ring.events() {
@@ -2270,14 +2294,57 @@ pub fn failure_report(ring: &EventRing, function: &str, src: &str) -> String {
             }
             LomEvent::Bind { name, value, site } => {
                 let line = line_of(src, *site);
-                out.push_str(&format!("`{name}` became {value} (line {line}).\n"));
+                let mut row = format!("`{name}` became {value} (line {line})");
+                if let Some(source_line) = source_line_of(src, *site) {
+                    row.push_str(&format!(": `{source_line}`"));
+                }
+                row.push('\n');
+                out.push_str(&row);
             }
             LomEvent::Failure { message } => {
                 out.push_str(&format!("it failed with: {message}\n"));
             }
         }
     }
+    // 26.5's answer 8: the concept, linked from the failure's own words.
+    if let Some(failure) = ring.events().iter().rev().find_map(|e| match e {
+        LomEvent::Failure { message } => Some(message.as_str()),
+        _ => None,
+    }) {
+        if let Some(lesson) = concept_for_message(failure) {
+            out.push_str(&format!("— the concept —\n{lesson}\n"));
+        }
+    }
     out
+}
+
+/// The trimmed source line containing byte offset `off` (the report's
+/// quoted provenance). `None` when the offset is outside the source.
+fn source_line_of(src: &str, off: usize) -> Option<String> {
+    let off = off.min(src.len());
+    let start = src[..off].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let end = src[start..].find('\n').map(|i| start + i).unwrap_or(src.len());
+    let line = src.get(start..end)?.trim();
+    if line.is_empty() { None } else { Some(line.to_string()) }
+}
+
+/// The lesson matching a failure message, or `None` (an honest report
+/// teaches only what it knows — never guesses a concept).
+pub fn concept_for_message(message: &str) -> Option<&'static str> {
+    let m = message.to_ascii_lowercase();
+    if m.contains("past the end") || m.contains("cannot be negative") {
+        Some("a list index counts from 0 and stops before the list's size — `at` reads one item that must exist")
+    } else if m.contains("is not a number") || m.contains("is not a decimal") {
+        Some("text and numbers are different kinds of values; `number from` parses text that must look like a number")
+    } else if m.contains("divide by zero") || m.contains("divide evenly by zero") || m.contains("remainder of zero") {
+        Some("dividing by zero has no answer — check the bottom value before dividing")
+    } else if m.contains("end of input") {
+        Some("`ask` reads one line; a program that asks more times than there are answers runs out of input")
+    } else if m.contains("overflow") {
+        Some("`number` is a 64-bit integer (D-10); values past its largest size cannot be stored honestly")
+    } else {
+        None
+    }
 }
 
 fn fmt_args(args: &[(String, String)]) -> String {
@@ -2293,6 +2360,96 @@ fn fmt_args(args: &[(String, String)]) -> String {
 /// The 1-based line containing byte offset `off`.
 pub fn line_of(src: &str, off: usize) -> usize {
     src[..off.min(src.len())].bytes().filter(|b| *b == b'\n').count() + 1
+}
+
+/// The rendered step/value timeline from a dev run — `--trace`'s data
+/// (26.5: what the program did, in order, with the values it bound). Shares
+/// the ring with the failure report, so a trace and its post-mortem agree.
+/// Truncation is stated, never hidden (same honesty rule as the report).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraceReport {
+    /// The steps in ring order — oldest first, newest last.
+    pub steps: Vec<TraceStep>,
+    /// How many oldest events were evicted before these steps were recorded.
+    pub dropped: usize,
+    /// The run's end: completed, or the failure/panic message.
+    pub ended: String,
+}
+
+/// One timeline step: what the program did and the values it used.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TraceStep {
+    /// `ask` entered a function: the call and its arguments.
+    Call { function: String, args: Vec<(String, String)> },
+    /// A binding was made (26.5's provenance: the value and its site).
+    Bind { name: String, value: String, line: usize },
+    /// A failure was produced (handled or not — the trace shows the flow).
+    Failure { message: String },
+}
+
+impl std::fmt::Display for TraceReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.dropped > 0 {
+            writeln!(
+                f,
+                "(the {} oldest steps were dropped to stay inside the fixed event budget — this trace shows the most recent {}.)",
+                self.dropped,
+                self.steps.len()
+            )?;
+        }
+        if self.steps.is_empty() {
+            writeln!(f, "(no recorded steps — nothing bound or called during the run.)")?;
+        }
+        for (i, step) in self.steps.iter().enumerate() {
+            match step {
+                TraceStep::Call { function, args } => {
+                    writeln!(f, "{:>4}. call {} ({})", i + 1, function, fmt_args(args))?;
+                }
+                TraceStep::Bind { name, value, line } => {
+                    writeln!(f, "{:>4}. bound `{name}` = {value} (line {line})", i + 1)?;
+                }
+                TraceStep::Failure { message } => {
+                    writeln!(f, "{:>4}. failure: {message}", i + 1)?;
+                }
+            }
+        }
+        writeln!(f, "end: {}", self.ended)
+    }
+}
+
+/// The run's end, stated in the timeline's own words — mir cannot see the
+/// interpreter, so the driver translates its outcome into this.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TraceEnd {
+    Completed,
+    Failed(String),
+    Panicked(String),
+}
+
+/// Render the timeline from a dev run's ring and its end status.
+pub fn trace_report(ring: &EventRing, ended: &TraceEnd, src: &str) -> TraceReport {
+    let steps = ring
+        .events()
+        .iter()
+        .map(|e| match e {
+            LomEvent::FunctionEntry { function, args } => TraceStep::Call {
+                function: function.clone(),
+                args: args.clone(),
+            },
+            LomEvent::Bind { name, value, site } => TraceStep::Bind {
+                name: name.clone(),
+                value: value.clone(),
+                line: line_of(src, *site),
+            },
+            LomEvent::Failure { message } => TraceStep::Failure { message: message.clone() },
+        })
+        .collect();
+    let ended = match ended {
+        TraceEnd::Completed => "the run completed.".to_string(),
+        TraceEnd::Failed(message) => format!("an unhandled failure: {message}"),
+        TraceEnd::Panicked(message) => format!("a panic: {message}"),
+    };
+    TraceReport { steps, dropped: ring.dropped(), ended }
 }
 
 // ---------------------------------------------------------------------------
@@ -2764,6 +2921,60 @@ mod tests {
         ring.push(LomEvent::Bind { name: "c".into(), value: "3".into(), site: 0 });
         assert_eq!(ring.len(), 2);
         assert!(matches!(ring.events()[0], LomEvent::Bind { ref name, .. } if name == "b"));
+    }
+
+    /// M2: the report quotes each binding's own source line — provenance in
+    /// source words, not bare line numbers (26.5's "in source words").
+    #[test]
+    fn failure_report_quotes_each_bindings_source_line() {
+        let src = "make bottom equal to 0\nsay bottom";
+        let mut ring = EventRing::new(8);
+        ring.push(LomEvent::Bind {
+            name: "bottom".to_string(),
+            value: "0".to_string(),
+            site: src.find("bottom").unwrap_or(0),
+        });
+        ring.push(LomEvent::Failure {
+            message: "cannot divide by zero.".to_string(),
+        });
+        let report = failure_report(&ring, "main", src);
+        assert!(report.contains("`bottom` became 0 (line 1): `make bottom equal to 0`"), "{report}");
+    }
+
+    /// M2: a truncated ring says so — the report never poses as complete.
+    #[test]
+    fn truncated_ring_is_reported_not_hidden() {
+        let src = "say 1";
+        let mut ring = EventRing::new(4);
+        for k in 0..10 {
+            ring.push(LomEvent::Bind {
+                name: format!("x{k}"),
+                value: k.to_string(),
+                site: 0,
+            });
+        }
+        assert_eq!(ring.dropped(), 6);
+        let report = failure_report(&ring, "main", src);
+        assert!(report.contains("6 oldest events were dropped"), "{report}");
+    }
+
+    /// M2: 26.5's answer 8 — the report links the concept the failure
+    /// teaches, and stays silent for messages no lesson matches.
+    #[test]
+    fn failure_report_links_the_concept_only_when_known() {
+        let src = "say 1";
+        let mut ring = EventRing::new(8);
+        ring.push(LomEvent::Failure {
+            message: "index 5 is past the end of this list (2 items).".to_string(),
+        });
+        let report = failure_report(&ring, "main", src);
+        assert!(report.contains("— the concept —"), "{report}");
+        assert!(report.contains("counts from 0"), "{report}");
+
+        let mut quiet = EventRing::new(8);
+        quiet.push(LomEvent::Failure { message: "something no lesson covers".to_string() });
+        let report = failure_report(&quiet, "main", src);
+        assert!(!report.contains("the concept"), "{report}");
     }
 
     #[test]

@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 lagom_mir.workspace = true
 lagom_diagnostics.workspace = true
+lagom_sema.workspace = true
 
 [dev-dependencies]
 lagom_parser.workspace = true

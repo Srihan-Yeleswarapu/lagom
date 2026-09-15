@@ -354,6 +354,24 @@ pub fn lookup(code: &str) -> Option<String> {
             "map a list of 1, 2, 3 using it plus 1",
             "Combinators (11.2)",
         ),
+        "E0371" => (
+            "There is already a type with this name.",
+            "Each type name can mean only one type. Structures, kinds, and aliases share one naming space — pick new words for the new type.",
+            "a type called high score is a number",
+            "Type aliases (8.4)",
+        ),
+        "E0372" => (
+            "A type cannot be defined in terms of itself.",
+            "Following the words after `is a` must reach a real type — `number`, `text`, a structure you made — not come back around to the name being defined.",
+            "a type called points is a score",
+            "Type aliases (8.4)",
+        ),
+        "E0373" => (
+            "The alias names a type that does not exist.",
+            "The words after `is a` must name a type that exists: `number`, `text`, `a list of …`, a `structure`, a `kind`, or another alias.",
+            "a type called score is a number",
+            "Type aliases (8.4)",
+        ),
         "E0101" => (
             "The lexer could not read this character.",
             "Every character must belong to the language: identifiers, the operator symbols, or text.",
@@ -368,13 +386,59 @@ pub fn lookup(code: &str) -> Option<String> {
     ))
 }
 
-/// Every code the M0 compiler emits, grouped by stage (codes are stable
-/// identifiers: E01xx lexer, E02xx parser, E03xx semantics).
+/// Every code the compiler emits, grouped by stage (codes are stable
+/// identifiers: E01xx lexer, E02xx parser, E03xx semantics). The M2 index is
+/// the full table, so `lagom explain <code>` is discoverable without the
+/// compiler having to fail first.
 pub fn code_index() -> String {
     let mut out = String::new();
-    out.push_str("  lexer   E0101–E010x: characters and text that cannot be read\n");
-    out.push_str("  parser  E0201–E020x: lines that do not fit the grammar\n");
-    out.push_str("  sema    E03xx: names, types, capabilities, and structure rules\n");
-    out.push_str("\nTry `lagom explain E0330` (duplicate name), `lagom explain E0302` (unhandled\nfailure), or `lagom explain E0344` (unknown name).\n");
+    out.push_str("  lexer   E0101–E0108: characters and text that cannot be read\n");
+    out.push_str("  parser  E0201–E0209: lines that do not fit the grammar\n");
+    out.push_str("  sema    E0302, E0330–E0373: names, types, capabilities, structure rules, and type aliases\n");
+    out.push_str("\nEvery diagnostic names its code; run `lagom explain <code>` for the full\nteaching page. A few to start with:\n\n  E0344  the name is not defined (typos, use-before-make)\n  E0302  a can-fail call must be wrapped in attempt\n  E0330  a name can only mean one thing\n  E0360  the value is not the type the annotation promised\n\nM2 runtime lessons (from failure reports):\n  R001  list indexes count from 0 and stop before the size\n  R002  text and numbers are different kinds of values\n  R003  dividing by zero has no answer\n  R004  ask reads one line per question\n  R005  number is a 64-bit integer\n");
     out
+}
+
+/// The runtime lesson pages (M2): the concept footers the LOM failure
+/// report links to. The report teaches one sentence at the crash site;
+/// `lagom explain R00n` carries the full write-up (docs-in-the-compiler,
+/// 26.1).
+pub fn runtime_lesson(code: &str) -> Option<String> {
+    let body = match code {
+        "R001" => (
+            "A list index counts from 0 and stops before the list's size.",
+            "`things at n` reads one item. The first item is `at 0`; the last of n items is `at n minus 1`. Asking past the end — or before the start — has no item to hand back, so the program stops there.",
+            "check the index against `size of things` before reading, or loop with `repeat for each item in things`",
+            "Lists and indexing (7.6, D-9)",
+        ),
+        "R002" => (
+            "Text and numbers are different kinds of values.",
+            "What `ask` hands you is text — the characters someone typed. `\"42\"` and `42` look alike but behave differently: only a number can be added, only text can be read from. `number from` parses text into a number, and it can fail when the characters are not digits.",
+            "attempt number from answer if it fails then\n    say \"that was not a number\"\notherwise\n    say result",
+            "Types and conversion (8.2, D-39)",
+        ),
+        "R003" => (
+            "Dividing by zero has no answer.",
+            "There is no number that `0` can be multiplied by to give the top value, so the division cannot produce an honest result. Lagom stops instead of guessing.",
+            "if bottom is not equal to 0\n    gives back top divided by bottom",
+            "Numbers and division (7.3, D-7)",
+        ),
+        "R004" => (
+            "`ask` reads one line per question.",
+            "Every `ask` in the program waits for one answer line. When the answers run out — the input ended — there is nothing left to read, so the program stops at that `ask`.",
+            "count the `ask`s and feed one answer line each, or ask fewer questions",
+            "Input (7.1)",
+        ),
+        "R005" => (
+            "`number` is a 64-bit integer.",
+            "A `number` can hold values up to 9,223,372,036,854,775,807. Arithmetic that grows past that cannot be stored honestly, so Lagom reports the overflow instead of silently wrapping around (D-10) — the same rule in debug and release.",
+            "use `decimal` for magnitudes beyond integer range, or restructure the calculation",
+            "Numbers (8.2, D-10)",
+        ),
+        _ => return None,
+    };
+    let (what, why, fix, concept) = body;
+    Some(format!(
+        "{code} — {what}\n\n{why}\n\nTo fix, write:\n\n    {fix}\n\nConcept: {concept}\n"
+    ))
 }

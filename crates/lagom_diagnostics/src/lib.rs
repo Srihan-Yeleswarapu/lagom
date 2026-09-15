@@ -42,6 +42,11 @@ pub struct Diagnostic {
     pub explanation: Option<String>,
     /// The "fix" — a concrete suggested rewrite, rendered as lagom source.
     pub fix: Option<String>,
+    /// The M2 causal guarantee: *why the fix solves the original problem*
+    /// (never rendered as a bare "this makes it compile" — when absent, the
+    /// renderer falls back to the explanation, and student mode never
+    /// invents a justification the checker cannot back).
+    pub fix_why: Option<String>,
     /// The "concept" — the `lagom explain` code the error links to.
     pub concept: Option<&'static str>,
     /// Secondary spans with labels (e.g. "created here as text").
@@ -75,6 +80,7 @@ impl Diagnostic {
             span,
             explanation: None,
             fix: None,
+            fix_why: None,
             concept: None,
             labels: Vec::new(),
             notes: Vec::new(),
@@ -95,6 +101,15 @@ impl Diagnostic {
 
     pub fn with_fix(mut self, fix: impl Into<String>) -> Self {
         self.fix = Some(fix.into());
+        self
+    }
+
+    /// Attach the causal justification for the suggested fix (M2's rule:
+    /// a suggestion ships only with the reason it solves the original
+    /// problem, so the student can verify it — and so a fix-after-fix
+    /// cycle is visible before it starts).
+    pub fn with_fix_why(mut self, why: impl Into<String>) -> Self {
+        self.fix_why = Some(why.into());
         self
     }
 
@@ -184,6 +199,16 @@ pub fn render_student(file: &SourceFile, d: &Diagnostic) -> String {
         out.push_str("\nTo fix, write:\n\n    ");
         out.push_str(fix);
         out.push_str("\n");
+        // The fix-why footer (M2): every suggestion carries the reason it
+        // addresses the root cause. Without it, a suggestion that merely
+        // silences the error would look identical to one that repairs it.
+        if let Some(why) = &d.fix_why {
+            let _ = fmt::Write::write_fmt(&mut out, format_args!("\nThis fixes it because: {why}\n"));
+        } else if let Some(why) = &d.explanation {
+            // Fall back to the rule itself — still a causal statement, never
+            // a bare "the compiler stops complaining".
+            let _ = fmt::Write::write_fmt(&mut out, format_args!("\nThis fixes it because: {why}\n"));
+        }
     }
     if let Some(concept) = &d.concept {
         let _ = fmt::Write::write_fmt(

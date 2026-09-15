@@ -62,6 +62,15 @@ fn format_item(out: &mut String, item: &Item) {
                 out.push('\n');
             }
         }
+        Item::TypeAlias(a) => {
+            // One canonical line: the article spelling is uniform, the target
+            // type renders in its 7.10 word style.
+            out.push_str(&format!(
+                "a type called {} is a {}\n",
+                a.name.display(),
+                a.ty.display()
+            ));
+        }
         Item::Test(t) => {
             out.push_str(&format!("test \"{}\"\n", t.name));
             format_block(out, &t.body, 1);

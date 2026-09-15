@@ -16,6 +16,54 @@ pub use lagom_mir::{
     failure_report, instrument, line_of, EventRing, LomConfig, LomEvent,
 };
 
+/// The lesson write-up linked from the failure report (26.5: answer 8 —
+/// "the concept" — comes from the `lagom explain` pipeline; the runtime
+/// links the *lesson* whose content the failure names).
+pub fn concept_link(code: &str) -> Option<&'static str> {
+    match code {
+        "index" | "bounds" => Some(
+            "a list index counts from 0, and stops before the list's size — `at` reads one item that must exist",
+        ),
+        "convert" | "number" => Some(
+            "text and numbers are different kinds of values; `number from` parses text that must look like a number",
+        ),
+        "divide" | "zero" => Some(
+            "dividing by zero has no answer — check the bottom value before dividing",
+        ),
+        "ask" | "input" => Some(
+            "`ask` reads one line; a program that asks more times than there are answers runs out of input",
+        ),
+        "overflow" => Some(
+            "`number` is a 64-bit integer (D-10); values past its largest size cannot be stored honestly",
+        ),
+        _ => None,
+    }
+}
+
+/// Add the concept footer to a rendered report when the failure message
+/// matches a known lesson (26.5's answer 8). Appends nothing when no lesson
+/// matches — an honest report teaches only what it knows.
+pub fn with_concept_link(report: &str, message: &str) -> String {
+    let m = message.to_ascii_lowercase();
+    let code = if m.contains("past the end") || m.contains("negative") {
+        "index"
+    } else if m.contains("not a number") || m.contains("is not a decimal") {
+        "convert"
+    } else if m.contains("divide by zero") || m.contains("remainder of zero") {
+        "divide"
+    } else if m.contains("end of input") {
+        "ask"
+    } else if m.contains("overflow") {
+        "overflow"
+    } else {
+        return report.to_string();
+    };
+    match concept_link(code) {
+        Some(lesson) => format!("{report}\n— the concept —\n{lesson}\n"),
+        None => report.to_string(),
+    }
+}
+
 /// The ring capacity M0 ships with (26.5's bounded ring — the report shows
 /// the *last* `capacity` events, never unbounded memory).
 pub const RING_CAPACITY: usize = 256;
@@ -82,11 +130,12 @@ say doubled
         let mut prog = frontend(SRC);
         instrument(&mut prog, LomConfig::RELEASE);
         let probe_free = prog.items.iter().all(|i| match i {
-            lagom_mir::MirItem::Function(f) | lagom_mir::MirItem::Main(f) | lagom_mir::MirItem::Test(f) => f
+            lagom_mir::MirItem::Function(f)
+            | lagom_mir::MirItem::Main(f)
+            | lagom_mir::MirItem::Test(f) => f
                 .blocks
                 .iter()
                 .all(|b| b.instrs.iter().all(|ins| !lagom_mir::is_event(ins))),
-            _ => true,
         });
         assert!(probe_free, "release builds must carry no probe instructions");
     }
@@ -119,10 +168,25 @@ say doubled
         ring.push(LomEvent::Failure {
             message: "you divided by zero".to_string(),
         });
-        let report = failure_report(&ring, "lagom program", SRC);
+        let report = with_concept_link(
+            &failure_report(&ring, "lagom program", SRC),
+            "you divided by zero",
+        );
         assert!(report.contains("`double` with `x` = 0"), "{report}");
         assert!(report.contains("`doubled` became 0 (line"), "{report}");
         assert!(report.contains("it failed with: you divided by zero"), "{report}");
+    }
+
+    /// 26.5's answer 8: the concept footer names the lesson the failure
+    /// teaches — and never fires for messages no lesson matches (an honest
+    /// report teaches only what it knows).
+    #[test]
+    fn known_failures_link_their_concept_and_unknown_ones_stay_honest() {
+        let hit = with_concept_link("— what happened —\n", "index 5 is past the end of this list (2 items).");
+        assert!(hit.contains("— the concept —"), "{hit}");
+        assert!(hit.contains("counts from 0"), "{hit}");
+        let quiet = with_concept_link("— what happened —\n", "something no lesson covers");
+        assert!(!quiet.contains("the concept"), "{quiet}");
     }
 
     #[test]
