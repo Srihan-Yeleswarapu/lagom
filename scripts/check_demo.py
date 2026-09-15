@@ -31,7 +31,8 @@ import re, subprocess, os, sys, tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MD = os.path.join(ROOT, "demo.md")
-L = os.path.join(ROOT, "target", "release", "lagom.exe")
+L = os.path.join(ROOT, "target", "release",
+                 "lagom.exe" if os.name == "nt" else "lagom")
 
 # Milestones whose language the compiler implements (doc 10's roadmap:
 # M0, M1 done; M2 done). A section labeled for a later milestone is future
