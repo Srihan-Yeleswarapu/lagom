@@ -30,6 +30,11 @@ The transcript shown in each section is the **standard output** the program prod
 - **M1+** — documented syntax planned for a later milestone.
 - **Expert** — documented low-level syntax for advanced systems programming.
 - **Lexical** — source-writing syntax such as comments, names, and indentation.
+- **(planned)** — appended to a section title, this marks documented syntax the
+  compiler does not implement yet. `scripts/check_demo.py` counts and lists these
+  sections in its summary instead of executing them — never a silent pass, never a
+  silent skip. Remove the marker when the syntax lands; the gate then executes the
+  section and its transcript must match the real binary.
 
 ---
 
@@ -175,8 +180,8 @@ capital of Sweden
 
 ```lagom
 ## Runs the empty-list lesson.
-test "first item"
-    check that first of a list of 7 is equal to 7
+make ns equal to a list of 7
+check that first of ns is equal to 7
 ```
 
 Terminal transcript:
@@ -3827,13 +3832,20 @@ Terminal transcript:
 
 ```sh
 $ lagom run attemptas1.lagom
-File error: could not open file
+File error: could not open "notes.txt": entity not found.
 ```
 
 ### Command 2
 
 ```lagom
-attempt parse configuration as parse problem
+function parse configuration
+    takes text called raw
+    returns a number
+    can fail
+    attempt number from raw and pass the problem on
+    gives back result
+
+attempt parse configuration "abc" as parse problem
     say "Configuration error: {parse problem}"
 otherwise
     say "ok"
@@ -3843,12 +3855,18 @@ Terminal transcript:
 
 ```sh
 $ lagom run attemptas2.lagom
-Configuration error: bad number
+Configuration error: "abc" is not a number — a number is digits, maybe starting with a minus.
 ```
 
 ### Command 3
 
 ```lagom
+function connect address
+    takes text called address
+    returns text
+    can fail
+    fail with "no route"
+
 attempt connect address "x" as network problem
     say "Network error: {network problem}"
 otherwise
@@ -3865,6 +3883,15 @@ Network error: no route
 ### Command 4
 
 ```lagom
+function divide
+    takes number called top
+    takes number called bottom
+    returns a decimal
+    can fail
+    if bottom is equal to 0
+        fail with "cannot divide by zero"
+    gives back top divided by bottom
+
 attempt divide 10 and 0 as math problem
     say math problem
 otherwise
@@ -3881,6 +3908,11 @@ cannot divide by zero
 ### Command 5
 
 ```lagom
+function load profile
+    returns text
+    can fail
+    fail with "not found"
+
 attempt load profile as load problem
     say "Profile error: {load problem}"
 otherwise
@@ -3902,11 +3934,10 @@ Profile error: not found
 
 ```lagom
 function load score
-    takes text called path
+    takes text called raw
     returns a number
     can fail
-    attempt read file at path and pass the problem on
-    attempt number from result and pass the problem on
+    attempt number from raw and pass the problem on
     gives back result
 
 attempt load score "x" if it fails then
@@ -3928,7 +3959,7 @@ failed
 function load name
     returns text
     can fail
-    attempt read file at "name.txt" and pass the problem on
+    attempt open file at "name.txt" and pass the problem on
     gives back result
 
 attempt load name if it fails then
@@ -3941,7 +3972,7 @@ Terminal transcript:
 
 ```sh
 $ lagom run propagate2.lagom
-could not open file
+could not open "name.txt": entity not found.
 ```
 
 ### Command 3
@@ -3973,7 +4004,7 @@ bad input
 function read settings
     returns text
     can fail
-    attempt read file at "settings.txt" and pass the problem on
+    attempt open file at "settings.txt" and pass the problem on
     gives back result
 
 attempt read settings if it fails then
@@ -3992,14 +4023,21 @@ settings error
 ### Command 5
 
 ```lagom
-function load level
-    takes text called path
+function load score
+    takes text called raw
     returns a number
     can fail
-    attempt load score path and pass the problem on
+    attempt number from raw and pass the problem on
     gives back result
 
-attempt load level "x" if it fails then
+function load level
+    takes text called raw
+    returns a number
+    can fail
+    attempt load score raw and pass the problem on
+    gives back result
+
+attempt load level "7" if it fails then
     say problem
 otherwise
     say result
@@ -4009,7 +4047,7 @@ Terminal transcript:
 
 ```sh
 $ lagom run propagate5.lagom
-could not open file
+7
 ```
 
 ---
@@ -4218,43 +4256,43 @@ $ lagom run use2.lagom
 ### Command 3
 
 ```lagom
-use drawing
-say "drawing ready"
+use standard
+say "standard ready"
 ```
 
 Terminal transcript:
 
 ```sh
 $ lagom run use3.lagom
-drawing ready
+standard ready
 ```
 
 ### Command 4
 
 ```lagom
-use cards from "card-game/deck"
-say "cards ready"
+use files for open file, write file
+say "files ready"
 ```
 
 Terminal transcript:
 
 ```sh
 $ lagom run use4.lagom
-cards ready
+files ready
 ```
 
 ### Command 5
 
 ```lagom
-use text for split, join, trim
-say "text ready"
+use files for open file
+say "files ready"
 ```
 
 Terminal transcript:
 
 ```sh
 $ lagom run use5.lagom
-text ready
+files ready
 ```
 
 ---
@@ -4886,7 +4924,7 @@ Ada has 10
 ### Command 1
 
 ```lagom
-function greet with name
+function greet
     takes text called name
     say "Hello, {name}!"
 
@@ -4915,18 +4953,18 @@ Terminal transcript:
 
 ```sh
 $ lagom run labeled2.lagom
-3 and 4
+point(3, 4)
 ```
 
 ### Command 3
 
 ```lagom
-function open file with path and mode
+function open document
     takes text called path
     takes text called mode
     gives back "opened"
 
-say open file with path "notes.txt" and mode "read"
+say open document with path "notes.txt" and mode "read"
 ```
 
 Terminal transcript:
@@ -4939,7 +4977,11 @@ opened
 ### Command 4
 
 ```lagom
-make window equal to a new window with width 800 and height 600
+structure window
+    has width of type number
+    has height of type number
+
+make window equal to a window with width 800 and height 600
 say width of window
 ```
 
@@ -4953,7 +4995,7 @@ $ lagom run labeled4.lagom
 ### Command 5
 
 ```lagom
-function format date with year and month and day
+function format date
     takes number called year
     takes number called month
     takes number called day
@@ -5010,6 +5052,9 @@ $ lagom run using2.lagom
 ### Command 3
 
 ```lagom
+structure person
+    has name of type text
+
 make people equal to a list of a person with name "Ada"
 make names equal to map people using name of it
 say first of names
@@ -5040,13 +5085,13 @@ $ lagom run using4.lagom
 ### Command 5
 
 ```lagom
-function combine scores with start using add
-    takes number called start
-    takes number called value
-    gives back start plus value
+function add
+    takes number called left
+    takes number called right
+    gives back left plus right
 
 make scores equal to a list of 1, 2, 3
-make total equal to combine scores with start 0 using start plus it
+make total equal to combine scores with start 0 using add
 say total
 ```
 
@@ -5079,6 +5124,10 @@ $ lagom run where1.lagom
 ### Command 2
 
 ```lagom
+structure person
+    has name of type text
+    has age of type number
+
 make people equal to a list of a person with name "Ada" and age 18
 make adults equal to keep people where age of it is at least 18
 say first of adults
@@ -5088,7 +5137,7 @@ Terminal transcript:
 
 ```sh
 $ lagom run where2.lagom
-Ada and 18
+person(Ada, 18)
 ```
 
 ### Command 3
@@ -5109,6 +5158,10 @@ Ada
 ### Command 4
 
 ```lagom
+structure room
+    has name of type text
+    has open of type boolean
+
 make rooms equal to a list of a room with name "entrance" and open true
 make available equal to keep rooms where open of it is equal to true
 say first of available
@@ -5118,7 +5171,7 @@ Terminal transcript:
 
 ```sh
 $ lagom run where4.lagom
-entrance and true
+room(entrance, true)
 ```
 
 ### Command 5
@@ -5191,10 +5244,10 @@ $ lagom run lambda3.lagom
 ### Command 4
 
 ```lagom
-make is adult equal to a function taking age
+make old enough equal to a function taking age
     gives back age is at least 18
 
-say is adult 7
+say old enough 7
 ```
 
 Terminal transcript:
@@ -5242,6 +5295,9 @@ $ lagom run inline1.lagom
 ### Command 2
 
 ```lagom
+structure person
+    has name of type text
+
 make people equal to a list of a person with name "Ada"
 make names equal to map people using taking person giving back name of person
 say first of names
@@ -5288,7 +5344,7 @@ $ lagom run inline4.lagom
 
 ```lagom
 make numbers equal to a list of 1, 2, 3
-make total equal to combine numbers with start 0 using taking start and it giving back start plus it
+make total equal to combine numbers with start 0 using taking start and value giving back start plus value
 say total
 ```
 
@@ -5321,7 +5377,7 @@ Ana
 ### Command 2
 
 ```lagom
-make names equal to a list of
+make names equal to keep a list of 1, 2 where it is greater than 9
 make maybe name equal to first of names
 if maybe name is nothing
     say "The list is empty."
@@ -5353,7 +5409,7 @@ A score exists.
 ### Command 4
 
 ```lagom
-make empty equal to a list of
+make empty equal to keep a list of 1 where it is greater than 9
 make maybe first equal to first of empty
 say maybe first
 ```
@@ -5444,15 +5500,16 @@ nothing
 ### Command 5
 
 ```lagom
-make item equal to nothing of type a list of text?
-say item
+make item equal to nothing of type a text or nothing
+make names equal to a list of item
+say names
 ```
 
 Terminal transcript:
 
 ```sh
 $ lagom run optspell5.lagom
-nothing
+[nothing]
 ```
 
 ---
@@ -5475,7 +5532,7 @@ Terminal transcript:
 
 ```sh
 $ lagom run kind1.lagom
-red
+red()
 ```
 
 ### Command 2
@@ -5486,7 +5543,11 @@ kind result
     is a failure with message of type text
 
 make ok equal to a success with value "done"
-say value of ok
+match ok
+    when a success with value v
+        say v
+    when a failure with message m
+        say m
 ```
 
 Terminal transcript:
@@ -5505,7 +5566,13 @@ kind shape
     is a blank
 
 make s equal to a circle with radius 3
-say radius of s
+match s
+    when a circle with radius r
+        say r
+    when a rectangle
+        say 0
+    when blank
+        say 0
 ```
 
 Terminal transcript:
@@ -5524,7 +5591,13 @@ kind command
     is a quit
 
 make c equal to a move with direction "north"
-say direction of c
+match c
+    when a move with direction d
+        say d
+    when look
+        say "look"
+    when quit
+        say "quit"
 ```
 
 Terminal transcript:
@@ -5541,15 +5614,15 @@ kind answer
     is a yes
     is a no
 
-make a equal to a yes
-say a
+make reply equal to a yes
+say reply
 ```
 
 Terminal transcript:
 
 ```sh
 $ lagom run kind5.lagom
-yes
+yes()
 ```
 
 ---
@@ -5593,6 +5666,8 @@ make s equal to a circle with radius 3
 match s
     when a circle with radius r
         say "circle of radius {r}"
+    when a rectangle with width w and height h
+        say "rectangle"
     when blank
         say "empty"
 ```
@@ -5611,8 +5686,8 @@ kind answer
     is a yes
     is a no
 
-make a equal to a yes
-match a
+make reply equal to a yes
+match reply
     when yes
         say "accepted"
     when no
@@ -5629,7 +5704,7 @@ accepted
 ### Command 4
 
 ```lagom
-make maybe name equal to nothing
+make maybe name equal to nothing of type text?
 match maybe name
     when nothing
         say "missing"
@@ -5668,7 +5743,7 @@ failed
 
 ---
 
-## 65. `class` declarations — M1+
+## 65. `class` declarations — M1+ (planned)
 
 ### Command 1
 
@@ -5758,7 +5833,7 @@ Ada
 
 ---
 
-## 66. `can` methods and `myself` — M1+
+## 66. `can` methods and `myself` — M1+ (planned)
 
 ### Command 1
 
@@ -5862,7 +5937,7 @@ false
 
 ---
 
-## 67. `construction` and `a new` — M1+
+## 67. `construction` and `a new` — M1+ (planned)
 
 ### Command 1
 
@@ -5967,7 +6042,7 @@ $ lagom run constr5.lagom
 
 ---
 
-## 68. `before last reference disappears` — M1+
+## 68. `before last reference disappears` — M1+ (planned)
 
 ### Command 1
 
@@ -6076,7 +6151,7 @@ lock released
 
 ---
 
-## 69. `extends` inheritance — M1+
+## 69. `extends` inheritance — M1+ (planned)
 
 ### Command 1
 
@@ -6193,7 +6268,7 @@ managing users as admin
 
 ---
 
-## 70. `interface` and `does` — M2+
+## 70. `interface` and `does` — M2+ (planned)
 
 ### Command 1
 
@@ -6374,11 +6449,13 @@ hello
 function replace first
     takes a list of anything called items
     takes anything called value
-    set items at 0 to value
-    gives back items at 0
+    make changing copy equal to items
+    set copy at 0 to value
+    gives back copy at 0
 
 make list equal to a list of 1, 2
-say replace first list and 99
+make replaced equal to replace first list and 99
+say replaced
 ```
 
 Terminal transcript:
@@ -6403,7 +6480,7 @@ Terminal transcript:
 
 ```sh
 $ lagom run gen5.lagom
-1 and a
+(1, a)
 ```
 
 ---
@@ -6490,25 +6567,25 @@ $ lagom run gensome4.lagom
 ### Command 5
 
 ```lagom
-function box value
-    takes some type called value
-    returns a box of some type
-    gives back a box of value
+function optional first
+    takes a list of some type called items
+    gives back first of items
 
-make b equal to box value 5
-say b
+say optional first with items a list of 1, 2
+say optional first with items a list of "x"
 ```
 
 Terminal transcript:
 
 ```sh
 $ lagom run gensome5.lagom
-5
+1
+x
 ```
 
 ---
 
-## 73. Generic constraints — M2+
+## 73. Generic constraints — M2+ (planned)
 
 ### Command 1
 
@@ -6629,7 +6706,7 @@ drawn
 
 ---
 
-## 74. Function types — M1+
+## 74. Function types — M1+ (planned)
 
 ### Command 1
 
@@ -6727,7 +6804,7 @@ fetched
 
 ---
 
-## 75. `a box of` types — M1+
+## 75. `a box of` types — M1+ (planned)
 
 ### Command 1
 
@@ -7082,7 +7159,7 @@ $ lagom run arena5.lagom
 
 ---
 
-## 79. `using` resource scopes — M1+
+## 79. `using` resource scopes — M1+ (planned)
 
 ### Command 1
 
@@ -7166,7 +7243,7 @@ done
 
 ---
 
-## 80. `start a task` — Structured concurrency / M2+
+## 80. `start a task` — Structured concurrency / M2+ (planned)
 
 ### Command 1
 
@@ -7255,7 +7332,7 @@ done
 
 ---
 
-## 81. `wait for all tasks` — Structured concurrency / M2+
+## 81. `wait for all tasks` — Structured concurrency / M2+ (planned)
 
 ### Command 1
 
@@ -7352,7 +7429,7 @@ done
 
 ---
 
-## 82. `in the background` — M2+
+## 82. `in the background` — M2+ (planned)
 
 ### Command 1
 
@@ -7426,20 +7503,20 @@ started
 
 ---
 
-## 83. Channels, `send`, and `receive` — M2+
+## 83. Channels, `send`, and `receive` — M2+ (planned)
 
 ### Command 1
 
 ```lagom
 make words equal to a list of "hello", "hi"
-say join of words
+say join words
 ```
 
 Terminal transcript:
 
 ```sh
 $ lagom run chan1.lagom
-hello
+hellohi
 ```
 
 ### Command 2
@@ -7508,7 +7585,7 @@ a
 
 ---
 
-## 84. `can wait` — Async capability / M2+
+## 84. `can wait` — Async capability / M2+ (planned)
 
 ### Command 1
 
@@ -7604,7 +7681,7 @@ refreshed
 
 ---
 
-## 85. Shared fields and guards — M2+
+## 85. Shared fields and guards — M2+ (planned)
 
 ### Command 1
 
@@ -8559,6 +8636,90 @@ Terminal transcript:
 ```sh
 $ lagom run asm5.lagom
 linked
+```
+
+---
+
+## 96. `a type called` — Type aliases / M0
+
+A type alias gives a new name to a type you already have (00 §8.4). The name is transparent: everywhere the old type is accepted, so is the new one.
+
+### Command 1
+
+```lagom
+a type called score is a number
+make final score equal to 97 of type score
+say "{final score}"
+```
+
+Terminal transcript:
+
+```sh
+$ lagom run alias1.lagom
+97
+```
+
+### Command 2
+
+```lagom
+a type called score is a number
+a type called scores is a list of score
+make xs equal to a list of 4, 9 of type scores
+say "{first of xs}"
+```
+
+Terminal transcript:
+
+```sh
+$ lagom run alias2.lagom
+4
+```
+
+### Command 3
+
+```lagom
+a type called score is a number
+a type called points is a score
+make p equal to 8 of type points
+say "{p}"
+```
+
+Terminal transcript:
+
+```sh
+$ lagom run alias3.lagom
+8
+```
+
+### Command 4
+
+```lagom
+make s equal to 5 of type score
+a type called score is a number
+say "{s}"
+```
+
+Terminal transcript:
+
+```sh
+$ lagom run alias4.lagom
+5
+```
+
+### Command 5
+
+```lagom
+a type called score is a number
+make a equal to 3 of type score
+make b equal to 4 of type score
+say "{a plus b}"
+```
+
+Terminal transcript:
+
+```sh
+$ lagom run alias5.lagom
+7
 ```
 
 ---

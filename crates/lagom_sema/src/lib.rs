@@ -256,6 +256,11 @@ pub enum Type {
     NumericLit,
     /// The type of a bare `nothing` (§8.5) — only comparable against options.
     NothingLit,
+    /// The type parameter (12.1/12.2): `takes anything called x` / `takes
+    /// some type called x`. The top type — every value assigns into it, and
+    /// every occurrence in one function body is the same type (12.1's
+    /// per-call-site unification).
+    Anything,
     /// Recovered/unknown after a diagnostic.
     Error,
 }
@@ -281,6 +286,7 @@ impl Type {
             Type::Failure => "a failure value".into(),
             Type::NumericLit => "number".into(),
             Type::NothingLit => "nothing".into(),
+            Type::Anything => "anything".into(),
             Type::Error => "an unknown type (because of an earlier error)".into(),
         }
     }
@@ -306,11 +312,14 @@ impl From<&TypeExpr> for Type {
                     Type::Struct(name)
                 } else {
                     // A user name may denote a structure OR a kind (7.12);
-                    // the Checker's tables decide at check time (see                    // `user_type`), so `From` defaults to struct and the                    // checker rewrites kind references where it sees them.
+                    // the Checker's tables decide at check time (see
+                    // `user_type`), so `From` defaults to struct and the
+                    // checker rewrites kind references where it sees them.
                     Type::Struct(name)
                 }
             }
             TypeExpr::OptionT(t) => Type::Option(Box::new(t.as_ref().into())),
+            TypeExpr::TypeParam => Type::Anything,
             TypeExpr::Inferred => Type::Error,
         }
     }
@@ -359,6 +368,13 @@ pub struct Checker<'a> {
     src: &'a str,
     functions: HashMap<String, Callable>,
     structs: HashMap<String, CheckedStructure>,
+    /// Type aliases (8.4): alias name → the fully-resolved real type.
+    /// Transparent by design — `score` used anywhere a type is expected
+    /// behaves exactly as the type it names.
+    aliases: HashMap<String, Type>,
+    /// Raw alias target spans, kept from pass 1 so cycle diagnostics can
+    /// point at the alias line (drained by `resolve_alias_table`).
+    pending_alias_spans: HashMap<String, Span>,
     /// `kind` name → its variant table (7.12). Variant payloads are keyed
     /// `(variant name, field name)`; a fieldless variant has no entries.
     kinds: HashMap<String, CheckedKind>,
@@ -403,6 +419,8 @@ pub fn check(program: &Program, src: &str) -> CheckedProgram {
         src,
         functions: HashMap::new(),
         structs: HashMap::new(),
+        aliases: HashMap::new(),
+        pending_alias_spans: HashMap::new(),
         kinds: HashMap::new(),
         used_modules: Vec::new(),
         scopes: vec![Scope { bindings: HashMap::new(), order: Vec::new() }],
@@ -520,10 +538,24 @@ impl<'a> Checker<'a> {
         for item in &program.items {
             match item {
                 ast::Item::Use(u) => self.register_use(u),
-                ast::Item::Function(f) => self.register_function_sig(f),
                 ast::Item::Structure(s) => self.register_structure(s),
                 ast::Item::Kind(k) => self.register_kind(k),
+                ast::Item::TypeAlias(a) => self.register_type_alias(a),
+                // Signatures register after the alias table resolves (see
+                // below) so alias-typed params/returns are final.
+                ast::Item::Function(_) => {}
                 _ => {}
+            }
+        }
+        // Aliases resolve order-free (7.13): all raw targets are registered
+        // first, then each is flattened — so `a type called tally is a count`
+        // may precede `a type called count is a number`. Signatures register
+        // AFTER the table flattens, so alias-typed params/returns land in
+        // the callables fully resolved.
+        self.resolve_alias_table();
+        for item in &program.items {
+            if let ast::Item::Function(f) = item {
+                self.register_function_sig(f);
             }
         }
         // Pass 2: check bodies.
@@ -541,7 +573,7 @@ impl<'a> Checker<'a> {
                         fields: s
                             .fields
                             .iter()
-                            .map(|f| (f.name.display(), (&f.ty).into(), f.name.span))
+                            .map(|f| (f.name.display(), self.user_type((&f.ty).into()), f.name.span))
                             .collect(),
                     }))
                 }
@@ -555,7 +587,7 @@ impl<'a> Checker<'a> {
                                 v.name.display(),
                                 v.fields
                                     .iter()
-                                    .map(|(n, t, s)| (n.display(), t.into(), *s))
+                                    .map(|(n, t, s)| (n.display(), self.user_type(t.into()), *s))
                                     .collect(),
                                 v.span,
                             )
@@ -563,6 +595,9 @@ impl<'a> Checker<'a> {
                         .collect();
                     items.push(CheckedItem::Kind(CheckedKind { name: name.clone(), variants }))
                 }
+                // Aliases carry no runtime or HIR presence (transparent,
+                // 8.4): they were fully consumed by the type tables.
+                ast::Item::TypeAlias(_) => {}
                 ast::Item::Test(t) => items.push(CheckedItem::Test(self.check_test(t))),
                 ast::Item::Stmt(s) => {
                     self.current_body = Body::Top;
@@ -595,6 +630,165 @@ impl<'a> Checker<'a> {
         } else if !self.is_used(&module) {
             self.used_modules.push(module);
         }
+    }
+
+    /// `a type called score is a number` (8.4) — pass 1: record the raw
+    /// target under the alias name (resolution flattens chains afterwards).
+    /// Duplicate names are a teaching error (E0371); an alias that shadows a
+    /// real type (structure/kind) is E0372.
+    fn register_type_alias(&mut self, a: &ast::TypeAliasDecl) {
+        let name = a.name.display();
+        if self.aliases.contains_key(&name) || self.structs.contains_key(&name) || self.kinds.contains_key(&name)
+        {
+            self.diags.push(
+                Diagnostic::error(
+                    "E0371",
+                    format!("There is already a type called `{name}`."),
+                    a.name.span,
+                )
+                .with_explanation("Each type name can mean only one type — a new name needs new words."),
+            );
+            return;
+        }
+        self.pending_alias_spans.insert(name.clone(), a.span);
+        self.aliases.insert(name, (&a.ty).into());
+    }
+
+    /// Flatten the alias table (order-free resolution, 7.13): every target
+    /// resolves to a fully-resolved type with cycle detection. A cycle
+    /// (`a type called a is a b` + `a type called b is a a`) is a teaching
+    /// error (E0372, the self-reference rule applied transitively) and the
+    /// cyclic aliases are removed — uses of them then report the unknown
+    /// type name, the actual root cause.
+    fn resolve_alias_table(&mut self) {
+        // Spans for cycle diagnostics (borrowed from the AST during pass 1).
+        let alias_spans: HashMap<String, Span> = self.pending_alias_spans.drain().collect();
+        let raw: Vec<(String, Type)> = self.aliases.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        // Unknown targets (E0373): the words after `is a` must name a type
+        // that exists — a builtin, a structure, a kind, or another alias.
+        // Diagnosed on the alias line, where the mistake is; the alias is
+        // removed so its uses report the unknown name, not a phantom type.
+        let mut unknown: Vec<String> = Vec::new();
+        for (name, ty) in &raw {
+            if let Some(missing) = unknown_alias_ref(ty, &raw) {
+                if let Some(span) = alias_spans.get(name) {
+                    self.diags.push(
+                        Diagnostic::error(
+                            "E0373",
+                            format!("There is no type called `{missing}` — `a type called … is a …` needs a type that exists."),
+                            *span,
+                        )
+                        .with_explanation("A type alias gives a new name to a type you already have — the words after `is a` must name one (like `number`, `text`, or a `structure` you made)."),
+                    );
+                }
+                unknown.push(name.clone());
+            }
+        }
+        for name in &unknown {
+            self.aliases.remove(name);
+        }
+        let raw: Vec<(String, Type)> = raw.into_iter().filter(|(n, _)| !unknown.contains(n)).collect();
+        let mut resolved: HashMap<String, Type> = HashMap::new();
+        let mut cyclic: Vec<String> = Vec::new();
+        for (name, _) in &raw {
+            match self.resolve_one_alias(name, &raw, &mut resolved, &mut Vec::new()) {
+                Ok(ty) => {
+                    resolved.insert(name.clone(), ty);
+                }
+                Err(()) => cyclic.push(name.clone()),
+            }
+        }
+        if !cyclic.is_empty() {
+            // Diagnose every alias on the cycle, deduped.
+            let mut seen: Vec<String> = Vec::new();
+            for name in &cyclic {
+                if seen.contains(name) {
+                    continue;
+                }
+                seen.push(name.clone());
+                if let Some(span) = alias_spans.get(name) {
+                    self.diags.push(
+                        Diagnostic::error(
+                            "E0372",
+                            format!("A type cannot be defined in terms of itself: `{name}` is part of a circle of type definitions."),
+                            *span,
+                        )
+                        .with_explanation("A type alias gives a new name to a type you already have — following the names after `is a` must reach a real type, not come back around."),
+                    );
+                }
+            }
+            for name in cyclic {
+                self.aliases.remove(&name);
+            }
+        }
+        for (k, v) in resolved {
+            if self.aliases.contains_key(&k) {
+                self.aliases.insert(k, v);
+            }
+        }
+    }
+
+    /// Walk one alias to its fully-resolved type. `stack` is the chain of
+    /// names being resolved — re-visiting one is the cycle.
+    fn resolve_one_alias(
+        &self,
+        name: &str,
+        raw: &[(String, Type)],
+        resolved: &mut HashMap<String, Type>,
+        stack: &mut Vec<String>,
+    ) -> Result<Type, ()> {
+        if let Some(ty) = resolved.get(name) {
+            return Ok(ty.clone());
+        }
+        if stack.iter().any(|s| s == name) {
+            return Err(());
+        }
+        let Some((_, ty)) = raw.iter().find(|(n, _)| n == name) else {
+            // Not an alias: the name must denote a structure or kind (the
+            // registration check already ruled out unknown names — anything
+            // else is an earlier-error recovery; error type is fine).
+            return Ok(Type::Struct(name.to_string()));
+        };
+        stack.push(name.to_string());
+        let out = self.resolve_type_alias_refs(ty.clone(), raw, resolved, stack)?;
+        stack.pop();
+        Ok(out)
+    }
+
+    /// Resolve every alias reference inside one raw target type.
+    fn resolve_type_alias_refs(
+        &self,
+        t: Type,
+        raw: &[(String, Type)],
+        resolved: &mut HashMap<String, Type>,
+        stack: &mut Vec<String>,
+    ) -> Result<Type, ()> {
+        Ok(match t {
+            Type::Struct(name)
+                if raw.iter().any(|(n, _)| *n == name)
+                    && !self.structs.contains_key(&name)
+                    && !self.kinds.contains_key(&name) =>
+            {
+                let inner = self.resolve_one_alias(&name, raw, resolved, stack)?;
+                inner
+            }
+            Type::Struct(name) if self.kinds.contains_key(&name) => Type::Kind(name),
+            Type::List(e) => Type::List(Box::new(self.resolve_type_alias_refs(*e, raw, resolved, stack)?)),
+            Type::Map(k, v) => Type::Map(
+                Box::new(self.resolve_type_alias_refs(*k, raw, resolved, stack)?),
+                Box::new(self.resolve_type_alias_refs(*v, raw, resolved, stack)?),
+            ),
+            Type::Pair(a, b) => Type::Pair(
+                Box::new(self.resolve_type_alias_refs(*a, raw, resolved, stack)?),
+                Box::new(self.resolve_type_alias_refs(*b, raw, resolved, stack)?),
+            ),
+            Type::Option(e) => Type::Option(Box::new(self.resolve_type_alias_refs(*e, raw, resolved, stack)?)),
+            Type::Function(ps, r) => Type::Function(
+                ps.into_iter().map(|p| self.resolve_type_alias_refs(p, raw, resolved, stack)).collect::<Result<Vec<_>, ()>>()?,
+                Box::new(self.resolve_type_alias_refs(*r, raw, resolved, stack)?),
+            ),
+            other => other,
+        })
     }
 
     fn register_function_sig(&mut self, f: &ast::FunctionDecl) {
@@ -635,7 +829,7 @@ impl<'a> Checker<'a> {
         let fields: Vec<(String, Type, Span)> = s
             .fields
             .iter()
-            .map(|f| (f.name.display(), (&f.ty).into(), f.name.span))
+            .map(|f| (f.name.display(), self.user_type((&f.ty).into()), f.name.span))
             .collect();
         self.structs.insert(
             name,
@@ -670,7 +864,8 @@ impl<'a> Checker<'a> {
                         "E0361",
                         format!("The kind `{name}` already has a variant called `{vname}`."),
                         v.name.span,
-                    ),
+                    )
+                    .with_explanation("A variant's name is how `match` tells the kinds apart — each variant needs its own name."),
                 );
                 continue;
             }
@@ -700,7 +895,29 @@ impl<'a> Checker<'a> {
     /// `Type::Struct(name)` whose name is a registered `kind` is rewritten.
     fn user_type(&self, t: Type) -> Type {
         match t {
+            // Type aliases (8.4) are transparent: the alias name resolves to
+            // its fully-resolved real type (the table was resolved after
+            // registration, so chains are already flat and the recursion
+            // terminates). Shadowing a *structure/kind* name is diagnosed at
+            // registration, so a raw `Type::Struct(name)` here is a real
+            // struct/kind reference, never an alias.
+            Type::Struct(name) if self.aliases.contains_key(&name) => self
+                .aliases
+                .get(&name)
+                .cloned()
+                .unwrap_or(Type::Error),
             Type::Struct(name) if self.kinds.contains_key(&name) => Type::Kind(name),
+            // Alias/kind references resolve at any depth — `a list of score`
+            // and `a list of shape` are types the same way their elements
+            // are.
+            Type::List(e) => Type::List(Box::new(self.user_type(*e))),
+            Type::Map(k, v) => Type::Map(Box::new(self.user_type(*k)), Box::new(self.user_type(*v))),
+            Type::Pair(a, b) => Type::Pair(Box::new(self.user_type(*a)), Box::new(self.user_type(*b))),
+            Type::Option(e) => Type::Option(Box::new(self.user_type(*e))),
+            Type::Function(ps, r) => Type::Function(
+                ps.into_iter().map(|p| self.user_type(p)).collect(),
+                Box::new(self.user_type(*r)),
+            ),
             other => other,
         }
     }
@@ -908,7 +1125,9 @@ impl<'a> Checker<'a> {
     fn check_stmt(&mut self, s: &ast::Stmt) -> CheckedStmt {
         match s {
             Stmt::Make { mutable, name, value, annotation, span } => {
-                let expected = annotation.as_ref().map(|t| t.into());
+                // The annotation resolves aliases (8.4) like every type
+                // position — `of type score` and `of type number` are one.
+                let expected = annotation.as_ref().map(|t| self.user_type(t.into()));
                 let mut vt = self.check_expr(value, expected.as_ref());
                 // The annotation is a contract: check the value against it and
                 // the binding gets the annotated type (8.1).
@@ -1165,7 +1384,7 @@ impl<'a> Checker<'a> {
                             format!("This pattern matches {} but the matched value is {}.", lit_ty.display(), scrutinee.display()),
                             *span,
                         )
-                        .with_explanation("A `when` pattern must match the type of the value in `match`.'"),
+                        .with_explanation("A `when` pattern must match the type of the value in `match`."),
                     );
                 }
                 CheckedPattern::Literal { value: value.clone(), span: *span }
@@ -1671,7 +1890,11 @@ impl<'a> Checker<'a> {
                         target.base.span,
                     )
                     .with_label(b.span, String::from("made here (immutable)"))
-                    .with_fix(format!("make changing {base_name} equal to …")),
+                    .with_fix(format!("make changing {base_name} equal to …"))
+                    // M2: the causal footer — why the declaration is the fix
+                    // (deleting the mutation would also silence the error and
+                    // break the program; the fix must address the cause).
+                    .with_fix_why("`changing` is what makes a binding mutable — only a `changing` binding accepts `set`, `increase`, or `decrease`"),
                 );
             }
         }
@@ -1829,7 +2052,8 @@ impl<'a> Checker<'a> {
                             "E0345",
                             format!("You can only negate a number, but this is {}.", it.ty.display()),
                             *span,
-                        ),
+                        )
+                        .with_explanation("A leading `-` turns a number negative — the value after it must be a number."),
                     );
                 }
                 TypedExpr { expr: e.clone(), ty: it.ty }
@@ -2184,7 +2408,8 @@ impl<'a> Checker<'a> {
                                 "E0350",
                                 format!("This {sname} gives `{n}` twice."),
                                 span,
-                            ),
+                            )
+                            .with_explanation("A construction sets each field once — a field needs one value."),
                         );
                     }
                 }
@@ -2565,7 +2790,8 @@ impl<'a> Checker<'a> {
     fn check_resolved_call(&mut self, call: &ast::CallExpr, _expected: Option<&Type>) -> TypedExpr {
         // M1 call suffixes (R-3): `where <orexpr>` desugars to the inline
         // lambda `taking it giving back <expr>` — one desugaring rule, checked
-        // as the lambda it means. It must exist before arity checking adds        // its argument.
+        // as the lambda it means. It must exist before arity checking adds
+        // its argument.
         let call = self.desugar_where(call);
         let call = self.desugar_using(&call);        // The `using` lambda is checked AFTER the leading list argument (the
         // combinator callees below), so the element type can seed the lambda's
@@ -2608,6 +2834,43 @@ impl<'a> Checker<'a> {
         let sig = self.functions.get(&callee).cloned();
         match sig {
             None => {
+                // Function-value application (11.1): a callee *binding* that
+                // holds a function applies its arguments — `make f equal to
+                // double` then `f of 21`, `f 5`, `f of f of 3`. Rewrite to the
+                // proven runtime shape `call <callee> <args…>` (MIR's CallClosure
+                // path) — one dispatcher, no second application semantics.
+                // Field/index reads fall through below: their callee is a
+                // structure/indexed binding, not a function binding.
+                if matches!(
+                    self.lookup(&callee),
+                    Some(Binding { ty: Type::Function(_, _), .. })
+                ) {
+                    let mut synthetic = CallExpr {
+                        callee: Name { words: vec!["call".into()], span: call.callee.span },
+                        first: Some(Box::new(ast::Arg {
+                            expr: Box::new(ast::Expr::Name { name: call.callee.clone(), span: call.callee.span }),
+                            span: call.callee.span,
+                        })),
+                        preps: Vec::new(),
+                        and_args: Vec::new(),
+                        with_args: Vec::new(),
+                        using_arg: call.using_arg.clone(),
+                        where_expr: call.where_expr.clone(),
+                        span: call.span,
+                    };
+                    if let Some(f) = &call.first {
+                        synthetic.and_args.push((**f).clone());
+                    }
+                    for (_, a) in &call.preps {
+                        synthetic.and_args.push(a.clone());
+                    }
+                    synthetic.and_args.extend(call.and_args.iter().cloned());
+                    let out = self.check_call(&synthetic, None);
+                    if !with_scope.is_empty() {
+                        self.pop_scope();
+                    }
+                    return out;
+                }
                 // Flowing field/index reads (7.6/7.11): `name of p`,
                 // `things at 2` — a non-function callee with exactly one
                 // prepositional argument is a read, not a call. For `of`, the
@@ -2658,7 +2921,8 @@ impl<'a> Checker<'a> {
                             "E0351",
                             format!("`{callee}` is a value, not a function — it cannot take arguments."),
                             call.callee.span,
-                        ),
+                        )
+                        .with_explanation("Only functions take arguments — compute with the value instead (for example, `total plus 3`), or call a function that exists."),
                     );
                 } else {
                     let d = self.unknown_name(&callee, call.callee.span);
@@ -2793,7 +3057,8 @@ impl<'a> Checker<'a> {
                                             "E0352",
                                             format!("`first of` needs a list, but this is {}.", other.display()),
                                             checked[0].span(),
-                                        ),
+                                        )
+                                        .with_explanation("`first of` answers a list's first item — `nothing` when the list is empty (D-34)."),
                                     );
                                     (Type::Error, false)
                                 }
@@ -2812,7 +3077,8 @@ impl<'a> Checker<'a> {
                                             "E0352",
                                             format!("`size of` needs a list, map, or text, but this is {}.", other.display()),
                                             checked[0].span(),
-                                        ),
+                                        )
+                                        .with_explanation("`size of` counts what has items: a list, a map, or a piece of text."),
                                     );
                                 }
                             }
@@ -2845,7 +3111,8 @@ impl<'a> Checker<'a> {
                                     format!("`{callee}` is in the `math` module — write `use math` at the top of the file."),
                                     call.callee.span,
                                 )
-                                .with_fix("use math"),
+                                .with_fix("use math")
+                                .with_fix_why("the name belongs to the `math` module, and a module's functions are only in scope once the file uses it"),
                             );
                         }
                         if n != 1 {
@@ -2867,7 +3134,8 @@ impl<'a> Checker<'a> {
                                     format!("`{callee}` is in the `math` module — write `use math` at the top of the file."),
                                     call.callee.span,
                                 )
-                                .with_fix("use math"),
+                                .with_fix("use math")
+                                .with_fix_why("the name belongs to the `math` module, and a module's functions are only in scope once the file uses it"),
                             );
                         }
                         if n != 2 {
@@ -3143,7 +3411,7 @@ impl<'a> Checker<'a> {
                     self.diags.push(
                         Diagnostic::error(
                             "E0343",
-                            format!("`{sname}` has no field called `{field}."),
+                            format!("`{sname}` has no field called `{field}`."),
                             span,
                         )
                         .with_note(format!("its fields are: {fields}")),
@@ -3224,14 +3492,32 @@ impl<'a> Checker<'a> {
         TypedExpr { expr: rebuilt, ty }
     }
 
+    /// `binding origin` (M2 diagnostics): where a name was made — the
+    /// line a secondary label quotes so the error explains the value's
+    /// provenance, not just its current type.
+    fn binding_label(&self, name: &str, what: &str) -> Option<(Span, String)> {
+        let b = self.scopes.iter().rev().find_map(|s| s.bindings.get(name))?;
+        Some((b.span, format!("{what} (made at line {})", lagom_diagnostics::SourceFile::new("", self.src).line_col(b.span.start).0)))
+    }
+
     fn unhandled_failure(&self, callee: &str, span: Span) -> Diagnostic {
+        // M2: the fix quotes the student's actual call — the root cause is
+        // *this unhandled call*, so the fix wraps exactly it, not a skeleton
+        // the student has to transplant (a transplant invites a fix-after-fix
+        // cycle when the call has arguments or `and` arguments).
+        let call = self
+            .src
+            .get(span.start..span.end.min(self.src.len()))
+            .unwrap_or("")
+            .trim();
         Diagnostic::error(
             "E0302",
             format!("`{callee}` can fail, so this call must be wrapped in `attempt`."),
             span,
         )
         .with_explanation("A function that can fail must be handled: wrap the call in `attempt … if it fails then … otherwise …`, bind the problem with `as`, or pass it on with `and pass the problem on`.")
-        .with_fix(format!("attempt {callee} … if it fails then\n    say problem\notherwise\n    say result"))
+        .with_fix(format!("attempt {call} if it fails then\n    say problem\notherwise\n    say result"))
+        .with_fix_why(format!("the `attempt` turns the error into a value your program handles on the `if it fails` branch — the failure from `{callee}` can no longer escape unhandled"))
     }
 
     fn bad_arity(&self, callee: &str, want: usize, got: usize, span: Span) -> Diagnostic {
@@ -3248,12 +3534,12 @@ impl<'a> Checker<'a> {
         match &f.ty {
             Type::Function(params, _) if params.len() == 1 => {}
             Type::Function(params, _) => {
-                self.diags.push(
-                    Diagnostic::error(
-                        "E0369",
-                        format!("`{callee}` applies a function taking one value, but this function takes {}.", params.len()),
-                        f.span(),
-                    ),
+                self.diags.push(                                Diagnostic::error(
+                                    "E0369",
+                                    format!("`{callee}` applies a function taking one value, but this function takes {}.", params.len()),
+                                    f.span(),
+                                )
+                                .with_explanation("The combinator calls its function once per element — the function takes exactly the element."),
                 );
             }
             Type::Error => {}
@@ -3382,7 +3668,15 @@ impl<'a> Checker<'a> {
                 (Type::NothingLit, other) | (other, Type::NothingLit) => {
                     matches!(other, Type::Option(_) | Type::NothingLit)
                 }
-                (a, b) => unify_numeric(a, b).is_some() || a == b,
+                (a, b) => {
+                    unify_numeric(a, b).is_some()
+                        || a == b
+                        // R-6: options compare transparently — `first of xs
+                        // is equal to 7` reads the contained value, the same
+                        // value reading 8.5 gives `say` of an option.
+                        || option_holds(a, b)
+                        || option_holds(b, a)
+                }
             };
             if !ok {
                 self.diags.push(
@@ -3403,14 +3697,33 @@ impl<'a> Checker<'a> {
             let numeric = (lt.ty.is_numeric() || matches!(lt.ty, Type::Error))
                 && (rt.ty.is_numeric() || matches!(rt.ty, Type::Error));
             if !numeric {
-                self.diags.push(
-                    Diagnostic::error(
-                        "E0356",
-                        format!("`is {}` needs two numbers, but got {} and {}.", op_word(op), lt.ty.display(), rt.ty.display()),
-                        span,
-                    )
-                    .with_explanation("Ordering (bigger/smaller) only makes sense for numbers."),
-                );
+                let mut d = Diagnostic::error(
+                    "E0356",
+                    format!("`is {}` needs two numbers, but got {} and {}.", op_word(op), lt.ty.display(), rt.ty.display()),
+                    span,
+                )
+                .with_explanation("Ordering (bigger/smaller) only makes sense for numbers.");
+                // M2 provenance: point at where the non-numeric value was
+                // made, so the student sees the value's origin, not just its
+                // current type at the comparison.
+                for side in [&lt, &rt] {
+                    if let Expr::Name { name, .. } = &side.expr {
+                        if let Some((sp, label)) = self.binding_label(&name.display(), "the value was made here") {
+                            d = d.with_label(sp, label);
+                        }
+                    }
+                }
+                if matches!(rt.ty, Type::Text) || matches!(lt.ty, Type::Text) {
+                    // The right side is usually what the student meant to be
+                    // text — quote it as the value the literal rewrite keeps.
+                    let right_text = match &right {
+                        Expr::Text { value, .. } => format!("\"{value}\""),
+                        _ => String::from("…"),
+                    };
+                    d = d.with_fix(format!("is equal to {right_text}"));
+                    d = d.with_fix_why("text has no bigger/smaller order in Lagom — equality is the comparison text supports, and this keeps the text value the program already has");
+                }
+                self.diags.push(d);
             }
             return TypedExpr { expr: e_binary(op, &lt.expr, &rt.expr, span), ty: Type::Boolean };
         }
@@ -3661,16 +3974,44 @@ impl<'a> Checker<'a> {
             // absent case of `a T or nothing`); `nothing?`-to-`nothing?` is
             // plain equality via the fallthrough.
             (Type::Option(_), Type::NothingLit) => true,
+            // `anything` is the top type (8.2/12.1: "called T elsewhere",
+            // inferred from use) — every concrete value is assignable into
+            // it, and the checker unifies per call site.
+            (Type::Anything, _) => true,
+            // §12.1 inside containers: `takes a list of anything called items`
+            // takes a list of concrete values (the checker unifies per call
+            // site; monomorphization happens in MIR).
+            (Type::List(w), Type::List(_)) if matches!(**w, Type::Anything) => true,
             (a, b) => a == b,
         };
         if !ok {
-            self.diags.push(
-                Diagnostic::error(
-                    "E0360",
-                    format!("{what} needs {}, but got {}.", want.display(), got.ty.display()),
-                    got.span(),
-                ),
-            );
+            // M2 provenance: when the mismatched value is a binding, name
+            // where it was made — the origin of the wrong type is usually
+            // the actual root cause, not the annotated use site. The fix is
+            // the value or the annotation, stated causally (never a bare
+            // "drop the annotation so the error goes away").
+            let mut d = Diagnostic::error(
+                "E0360",
+                format!("{what} needs {}, but got {}.", want.display(), got.ty.display()),
+                got.span(),
+            )
+            .with_fix(format!(
+                "use {} here — or, if {} is what you meant, change the annotation to `of type {}`",
+                article_value(want.display()),
+                got.ty.display(),
+                got.ty.display()
+            ))
+            .with_fix_why(format!(
+                "a value has one type — either give it the {} it needs or change the annotation to {}",
+                want.display(),
+                got.ty.display()
+            ));
+            if let Expr::Name { name, .. } = &got.expr {
+                if let Some((sp, label)) = self.binding_label(&name.display(), "the value was made here") {
+                    d = d.with_label(sp, label);
+                }
+            }
+            self.diags.push(d);
         }
     }
 }
@@ -3687,6 +4028,28 @@ fn e_binary(op: BinOp, left: &Expr, right: &Expr, span: Span) -> Expr {
         left: Box::new(left.clone()),
         right: Box::new(right.clone()),
         span,
+    }
+}
+
+/// True when `t` is a user-type reference that names neither a declared
+/// structure/kind nor another alias — the unknown-target case for aliases.
+fn unknown_alias_ref(t: &Type, raw: &[(String, Type)]) -> Option<String> {
+    match t {
+        Type::Struct(name) => Some(name.clone()),
+        Type::Kind(name) => Some(name.clone()),
+        _ => None,
+    }
+    .filter(|name| !raw.iter().any(|(n, _)| n == name))
+}
+
+/// The fix text for "use a {T} value here": containers read naturally with
+/// the article inside (`a list of numbers`), so the outer article is only
+/// added for the words that need it (D-10's reading-first fix text).
+fn article_value(display: String) -> String {
+    if display.starts_with("a ") || display.starts_with("an ") || display.ends_with("s") {
+        display
+    } else {
+        format!("a {display} value")
     }
 }
 
@@ -3792,6 +4155,15 @@ fn unify_numeric(a: &Type, b: &Type) -> Option<Type> {
     }
 }
 
+/// R-6: does `opt` (possibly an option) hold a value of `v`'s type — the
+/// value reading an option comparison takes (`first of xs is equal to 7`).
+fn option_holds(opt: &Type, v: &Type) -> bool {
+    match opt {
+        Type::Option(inner) => matches!(v, Type::Option(_) | Type::NothingLit) || **inner == *v,
+        _ => false,
+    }
+}
+
 fn same_key_type(map: &Type, key: &Type) -> bool {
     match map {
         Type::Map(k, _) => unify_numeric(k, key).is_some() || **k == *key,
@@ -3824,19 +4196,68 @@ fn numeric_or_same(want: &Type, got: &Type) -> bool {
 
 /// Simple did-you-mean: prefix/substring match against known names (full
 /// edit-distance arrives with the M1 tooling pass).
+/// Candidate names for an unknown-name error, best first: prefix/substring
+/// containment (the old rule) plus single-edit distance (one substitution,
+/// insertion, deletion, or adjacent transposition) so `scoer` finds `score`.
+/// Distance is capped so unrelated short names are never proposed.
 fn did_you_mean(name: &str, candidates: &[String]) -> Vec<String> {
     let lower = name.to_lowercase();
-    let mut hits: Vec<String> = candidates
-        .iter()
-        .filter(|c| {
-            let cl = c.to_lowercase();
-            cl.contains(&lower) || lower.contains(&cl)
-        })
-        .cloned()
-        .collect();
-    hits.sort();
-    hits.truncate(3);
-    hits
+    let mut scored: Vec<(usize, &String)> = Vec::new();
+    for c in candidates {
+        let cl = c.to_lowercase();
+        if cl == lower {
+            continue; // exact match would not have been an error
+        }
+        let d = one_edit_distance(&lower, &cl);
+        // Containment (`score` in `scores`) only counts for names of at
+        // least 3 characters — a 2-letter name sits inside half the
+        // dictionary (`it` in `split`) and the suggestion misleads.
+        let containment = (cl.contains(&lower) || lower.contains(&cl)) && lower.chars().count() >= 3;
+        if containment || d <= 2 {
+            scored.push((d, c));
+        }
+    }
+    scored.sort();
+    scored.dedup_by(|a, b| a.1 == b.1);
+    scored.into_iter().map(|(_, c)| c.clone()).take(3).collect()
+}
+
+/// Optimal-string-alignment distance (Damerau-Levenshtein without adjacent
+/// transposition reuse) — enough for single-typo name suggestions, and small
+/// enough to compute on the scope's names for every error.
+fn one_edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let (al, bl) = (a.len(), b.len());
+    if al == 0 {
+        return bl;
+    }
+    if bl == 0 {
+        return al;
+    }
+    let inf = al + bl;
+    // d[i][j]: distance between a[..i] and b[..j]; rows are 1-indexed with a
+    // guard row/column of `inf` so the transposition neighbour reads stay in
+    // bounds (the classic OSA formulation).
+    let mut d = vec![vec![inf; bl + 2]; al + 2];
+    for (i, row) in d.iter_mut().enumerate().skip(1) {
+        row[1] = i - 1;
+    }
+    for (j, cell) in d[1].iter_mut().enumerate().skip(1) {
+        *cell = j - 1;
+    }
+    for i in 1..=al {
+        for j in 1..=bl {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            d[i + 1][j + 1] = (d[i][j] + cost)
+                .min(d[i + 1][j] + 1)
+                .min(d[i][j + 1] + 1);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                d[i + 1][j + 1] = d[i + 1][j + 1].min(d[i - 1][j - 1] + 1);
+            }
+        }
+    }
+    d[al + 1][bl + 1]
 }
 
 // ---------------------------------------------------------------------------
@@ -4039,6 +4460,43 @@ say describe f\n";
         );
         // Combinator over a non-list → E0370.
         check_err("make broken equal to map 5 using it plus 1", "E0370");
+    }
+
+    #[test]
+    fn type_aliases_are_transparent() {
+        // 8.4: the alias IS the type — annotations, params, returns, and list
+        // element types all accept it, and it needs no runtime presence.
+        check_ok(
+            "a type called score is a number\nmake s equal to 15 of type score\nsay s",
+        );
+        check_ok(
+            "a type called score is a number\na type called scores is a list of score\nmake xs equal to a list of 1, 2 of type scores\nsay size of xs",
+        );
+        check_ok(
+            "a type called score is a number\n\nfunction total\n    takes score called s\n    returns a score\n    gives back s plus 1\n\nsay total 4",
+        );
+        // Chain: an alias of an alias, declared in either order (7.13).
+        check_ok(
+            "a type called tally is a count\na type called count is a number\nmake t equal to 3 of type tally\nsay t",
+        );
+        check_ok(
+            "a type called count is a number\na type called tally is a count\nmake t equal to 3 of type tally\nsay t",
+        );
+        // Transparent: a score IS a number (ordering compares numbers).
+        check_ok(
+            "a type called score is a number\nmake s equal to 2 of type score\nif s is greater than 1\n    say \"big\"",
+        );
+        // Errors: duplicate alias / shadowing a real type / self-reference /
+        // a two-alias cycle.
+        check_err("a type called score is a number\na type called score is a text", "E0371");
+        check_err(
+            "structure player\n    has name of type text\n\na type called player is a number",
+            "E0371",
+        );
+        check_err("a type called score is a score", "E0372");
+        check_err("a type called left is a right\na type called right is a left", "E0372");
+        // Unknown target: the words after `is a` name no type.
+        check_err("a type called gem is a jewel", "E0373");
     }
 
     #[test]
@@ -4300,6 +4758,21 @@ say describe f\n";
     #[test]
     fn unknown_name_diagnoses() {
         check_err("say scoer", "E0344");
+    }
+
+    /// M2: suggestions must not mislead. `it` is contained in `split`, but
+    /// proposing `split` for an unknown 2-letter name sends the student the
+    /// wrong way — containment requires a 3+ character name, and the typo
+    /// path (`scoer` → `score`) still suggests.
+    #[test]
+    fn short_unknown_names_get_no_false_suggestion() {
+        let diags = check_err("make split equal to \"a, b\"\nsay it", "E0344");
+        let e = diags.iter().find(|d| d.code == "E0344").expect("E0344");
+        assert!(e.fix.is_none(), "no misleading suggestion, got: {:?}", e.fix);
+        // And the typo path still works.
+        let diags = check_err("make score equal to 1\nsay scoer", "E0344");
+        let e = diags.iter().find(|d| d.code == "E0344").expect("E0344");
+        assert!(e.fix.as_deref().unwrap_or_default().contains("score"), "suggests the real name: {:?}", e.fix);
     }
 
     #[test]

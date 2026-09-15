@@ -77,21 +77,35 @@ lagom run
 |---|---|
 | `lagom run` | compile and run `main.lagom` (or `lagom run file.lagom`) |
 | `lagom run --release` | optimized build |
-| `lagom run --trace` | run on the teaching interpreter — live probes and a failure report when things go wrong |
+| `lagom run --trace` | run on the teaching interpreter — live probes, a failure report when things go wrong, and a step/value timeline of the run |
 | `lagom build [file] [-o out]` | compile to a native executable |
 | `lagom test [file]` | run this file's `test` blocks |
 | `lagom check [file]` | parse and check; show diagnostics |
 | `lagom fmt [file] [--write]` | canonically format (print, or rewrite with `--write`) |
 | `lagom explain <code>` | the teaching write-up for an error code |
 | `lagom words` | the reserved words |
+| `lagom play` | the REPL — evaluate line by line, teaching mode shows each new binding with its type |
+| `lagom doc [file]` | render `##` doc comments to markdown; `--check` verifies `>>>` examples |
+| `lagom add <name> <path>` | vendor a package into `packages/` and record it in `Lagom.toml` |
+| `lagom profile [file]` | run with per-function call counts and the compile-time breakdown |
 
-Everything works from any directory on a single `.lagom` file — no project manifest needed.
+Everything works from any directory on a single `.lagom` file — no project manifest needed. In a folder with a `Lagom.toml`, `run`/`build`/`test` also compile every vendored package in `packages/`, and `lagom add`/`remove` manage them.
 
 ## Status
 
-**M1: data and safety.** Everything from M0 — `lagom run`, `build`, `test`, `check`, `fmt`, `new`, `explain`, `words` — plus the M1 feature set: kinds and `match` with patterns (including pair destructuring), the full option/result model (`text?`, `a T or nothing`, `when something with value`, `attempt … if it fails then … otherwise …`), closures (`taking … giving back`, `it`, `where`) with `map`/`keep`/`combine`, file reading and writing, and JSON — each verified to behave identically on the interpreter (`--trace`) and the native Cranelift backend. Validation programs ([file organizer](validation/file_organizer.lagom), [CSV parser](validation/csv_parser.lagom)) run on both backends, and every diagnostic on the M1 surface has a `lagom explain` write-up.
+**M2: intelligence and tooling (current).** Everything from M1, plus:
 
-M0 details: Rust bootstrap; lexer → parser → sema → HIR → MIR → LIR → Cranelift, scoped in [00 §33](docs/00-architecture.md#33-mvp-proposal) and [doc 10](docs/10-roadmap.md). `doc`, `play`, `add`, and `profile` are M2+ (doc 09/10).
+- **Type aliases (8.4):** `a type called score is a number` — transparent names, order-free, with cycle detection; listed with `lagom words --types`.
+- **Causal diagnostics:** every fix comes with why it solves the problem (`This fixes it because …`), provenance labels quote where a bad value was made, and ambiguous intent says so instead of guessing. Intentionally-broken programs are regression-tested to reject misleading fixes.
+- **`lagom play`:** the REPL — incremental evaluation on the interpreter, teaching mode showing each new binding with its type, `#replay` re-running the accepted history deterministically.
+- **`lagom doc`:** `##` doc comments become markdown pages; `## >>>` examples are real statements checked against `## =` expected output with `--check`.
+- **`lagom add`/`remove`:** a package workflow — vendored sources in `packages/`, recorded in `Lagom.toml`, pinned in `Lagom.lock`, merged into every build.
+- **`lagom profile`:** exact per-function call counts from the LOM event ring (dev runs only) plus the compile-time breakdown.
+- **Richer trace/replay:** `lagom run --trace` now prints the step/value timeline of the run; seeded runs replay to byte-identical timelines.
+
+M1 remains the baseline: kinds and `match` with patterns, the full option/result model, closures with `map`/`keep`/`combine`, files, and JSON — verified to behave identically on the interpreter and the native Cranelift backend.
+
+M0 details: Rust bootstrap; lexer → parser → sema → HIR → MIR → LIR → Cranelift, scoped in [00 §33](docs/00-architecture.md#33-mvp-proposal) and [doc 10](docs/10-roadmap.md).
 
 ## Reference notes
 

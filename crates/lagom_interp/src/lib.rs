@@ -24,6 +24,7 @@
 //!   nothing extra".
 
 use lagom_diagnostics::Span;
+use lagom_sema::Type;
 use lagom_mir::{
     BinOp, BlockId, Conv, EventRing, FileOp, FormatPart, Instr, LocalId, LomConfig, LomEvent,
     MathOp, MirFunction, MirItem, MirProgram, Operand, Term, TextOp, UnOp, failure_report,
@@ -226,6 +227,11 @@ pub struct Interp {
     /// resolve by name against this (MIR carries field *names*; the
     /// declaration order lives in the program table).
     struct_fields: HashMap<String, Vec<String>>,
+    /// The entry frame's final named locals — `(name, type, value)` in
+    /// declaration order, captured when the script body returns. This is the
+    /// REPL's teaching data (26.4: inferred types shown after each line);
+    /// compiler temporaries (`%…`) are excluded. Empty outside a run.
+    entry_scope: Vec<(String, Type, Value)>,
 }
 
 impl Interp {
@@ -258,7 +264,7 @@ impl Interp {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.subsec_nanos() as u64 ^ d.as_secs())
             .unwrap_or(0x2545_F491_4F6C_DD1D);
-        Interp { host: Host::with_seed(Vec::new(), nanos), ring, dev, struct_fields }
+        Interp { host: Host::with_seed(Vec::new(), nanos), ring, dev, struct_fields, entry_scope: Vec::new() }
     }
 
     pub fn host(&mut self) -> &mut Host {
@@ -267,6 +273,12 @@ impl Interp {
 
     pub fn ring(&self) -> Option<&EventRing> {
         self.ring.as_ref()
+    }
+
+    /// The entry frame's final named locals — `(name, type, value)` — filled
+    /// by the last `run` of a program with a script body (26.4's REPL data).
+    pub fn entry_scope(&self) -> &[(String, Type, Value)] {
+        &self.entry_scope
     }
 
     /// Run the script body (§19.1) to completion, or to the first unhandled
@@ -427,6 +439,20 @@ impl Interp {
                 Term::Continue { target } => pc = target,
                 Term::Return { value } => {
                     let v = self.read(&value, &locals);
+                    // The script body's final scope is the REPL's teaching
+                    // data (26.4): one snapshot per run, temporaries out.
+                    if f.is_entry {
+                        self.entry_scope = f
+                            .locals
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, l)| !l.name.starts_with('%'))
+                            .map(|(i, l)| {
+                                let lv = locals.get(i).cloned().unwrap_or(Value::Nothing);
+                                (l.name.clone(), l.ty.clone(), lv)
+                            })
+                            .collect();
+                    }
                     return Err(Exit::Return(v));
                 }
                 Term::Fail { message, catch, .. } => {

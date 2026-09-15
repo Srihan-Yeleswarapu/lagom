@@ -14,10 +14,15 @@
 mod interp;
 mod native;
 mod pipeline;
+mod repl;
 
 pub use pipeline::{
     frontend, render_diagnostics, render_diagnostics_in, Frontend, FrontendError,
 };
 pub use lagom_diagnostics::Verbosity;
-pub use interp::{needs_input, run_interpreted, run_tests_interpreted};
+pub use interp::{
+    call_counts, needs_input, run_fe, run_full, run_interpreted, run_tests_interpreted, run_traced,
+    run_traced_fe,
+};
 pub use native::{build_native, compile_object, link, CompiledObject, NativeBuild};
+pub use repl::{Session, StepOutcome};

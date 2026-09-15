@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use lagom_driver::{render_diagnostics_in, Verbosity, FrontendError};
 
 /// A command's failure, and how `main` turns it into an exit code.
+#[derive(Debug)]
 pub enum CliError {
     /// A plain CLI-level problem (usage, missing files).
     Message(String),

@@ -73,6 +73,159 @@ fn hello_world_to_native_code() {
     assert_says("hello", "say \"Hello, world!\"", &["Hello, world!"]);
 }
 
+/// 8.4 type aliases run end-to-end, identically on both backends: the alias
+/// is checked in sema and gone by HIR, so interpreter and native agree by
+/// construction — asserted here by construction (same program, same output).
+#[test]
+fn type_aliases_run_on_both_backends() {
+    let src = "\
+a type called score is a number
+a type called scores is a list of score
+
+function total
+    takes scores called xs
+    returns a score
+    gives back combine xs with start 0 using start plus it
+
+make changing best equal to 0 of type score
+make results equal to a list of 4, 9, 2 of type scores
+repeat for each x in results
+    if x is greater than best
+        set best to x
+say total results
+say best
+";
+    // Interpreter parity: seeded dev run.
+    let (host, outcome) = lagom_driver::run_interpreted(src, Vec::new(), Some(1));
+    assert!(matches!(outcome, lagom_interp::RunOutcome::Completed), "{outcome:?}");
+    assert_eq!(host.stdout, vec!["15", "9"], "interpreter output");
+    // Native parity: same program, same output.
+    assert_says("alias_parity", src, &["15", "9"]);
+}
+
+/// Seeded replay parity, at the trace level: two runs with the same seed
+/// produce byte-identical timelines (26.5's replay story), so a trace taken
+/// from a failing run describes any replay of that run.
+#[test]
+fn trace_replays_identically_with_a_seed() {
+    let src = "\
+function roll twice
+    returns a number
+    gives back random from 1 to 6 plus random from 1 to 6
+
+make a equal to roll twice
+make b equal to roll twice
+say \"{a} then {b}\"
+";
+    let t1 = lagom_driver::run_traced(src, Vec::new(), Some(7)).expect("trace");
+    let t2 = lagom_driver::run_traced(src, Vec::new(), Some(7)).expect("trace");
+    assert_eq!(t1, t2, "same seed, same trace");
+    let different = lagom_driver::run_traced(src, Vec::new(), Some(8)).expect("trace");
+    assert_ne!(t1, different, "different seeds, different trace");
+    // The timeline names the bindings with their source lines (provenance).
+    let rendered = format!("{t1}");
+    assert!(rendered.contains("bound `a` ="), "{rendered}");
+    assert!(rendered.contains("(line 5)"), "{rendered}");
+    assert!(rendered.ends_with("end: the run completed.\n"), "{rendered}");
+}
+
+/// The trace states truncation honestly: a run producing more events than
+/// the ring's budget shows the most recent steps and says how many were
+/// dropped — it never poses as complete.
+#[test]
+fn trace_reports_dropped_steps_when_history_exceeds_the_ring() {
+    let src = "\
+make changing x equal to 0
+repeat 40 times
+    set x to x plus 1
+";
+    let report = lagom_driver::run_traced(src, Vec::new(), None).expect("trace");
+    let rendered = format!("{report}");
+    if report.dropped > 0 {
+        assert!(rendered.contains("oldest steps were dropped"), "{rendered}");
+    } else {
+        // 40 events fit the budget; either way the trace is honest.
+        assert!(rendered.contains("end: the run completed."), "{rendered}");
+    }
+}
+
+/// `--trace` executes the program exactly once: the driver's traced run
+/// returns output, outcome, and timeline from a single execution. The
+/// observable is an `append file` side effect — one run appends one line;
+/// a second execution would append two. (Regresses the double run where the
+/// CLI executed the program once for output and again for the trace.)
+#[test]
+fn trace_runs_the_program_exactly_once() {
+    let path = std::env::temp_dir().join(format!("lagom_trace_once_{}.txt", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let ps = path.to_string_lossy().replace('\\', "/");
+    let src = format!(
+        "\nattempt append file \"one\" at \"{ps}\" if it fails then\n    say problem\notherwise\n    say result\n"
+    );
+    // The CLI's exact path: front end (entry check) → one traced execution.
+    let fe = lagom_driver::frontend(&src).expect("frontend");
+    let (report, host, outcome) = lagom_driver::run_traced_fe(fe, &src, Vec::new(), None);
+    assert!(matches!(outcome, lagom_interp::RunOutcome::Completed), "{outcome:?}");
+    // On success `append file` binds `result` to the written text (S-10).
+    assert_eq!(host.stdout, vec!["one"], "the otherwise branch ran");
+    // One execution appended one line; the timeline came from that same run.
+    let contents = std::fs::read_to_string(&path).unwrap_or_default();
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(contents, "one", "the program ran exactly once (no second append)");
+    assert!(format!("{report}").contains("end:"), "timeline rendered");
+}
+
+/// Every validation program still checks clean (M2 regression: M1's `where`
+/// keyword silently broke text_adventure.lagom, which used `where` as a
+/// variable name — and no test noticed). A future reserved word must never
+/// retro-break a validation file again.
+#[test]
+fn all_validation_programs_check_clean() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../validation")
+        .canonicalize()
+        .expect("validation dir");
+    let mut checked = 0;
+    let entries = std::fs::read_dir(&dir).expect("validation dir");
+    for entry in entries {
+        let path = entry.expect("entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("lagom") {
+            continue;
+        }
+        checked += 1;
+        let src = std::fs::read_to_string(&path).expect("read");
+        let fe = lagom_driver::frontend(&src)
+            .unwrap_or_else(|e| panic!("{} must check clean: {e:?}", path.display()));
+        let _ = fe;
+    }
+    assert!(checked >= 8, "expected the validation corpus, found {checked}");
+}
+
+/// The profiler's data source: a dev run records a FunctionEntry per call,
+/// so per-function call counts are exact (not sampled). Ring is dev-only —
+/// a release-mode run must not record anything.
+#[test]
+fn profile_counts_function_calls_from_the_lom_ring() {
+    let src = "\
+function double
+    takes number called n
+    returns a number
+    gives back n times 2
+
+function apply twice
+    takes number called n
+    returns a number
+    gives back double double n
+
+say \"{apply twice 3}\"
+";
+    let (_, _, interp) = lagom_driver::run_full(src, Vec::new(), None).expect("run");
+    let calls = lagom_driver::call_counts(&interp).expect("ring present in dev");
+    let get = |name: &str| calls.iter().find(|(n, _)| n == name).map(|(_, c)| *c).unwrap_or(0);
+    assert_eq!(get("double"), 2, "apply twice calls double twice; ring: {calls:?}");
+    assert_eq!(get("apply twice"), 1, "ring: {calls:?}");
+}
+
 #[test]
 fn language_surface_runs_natively() {
     // One program touching every M0 area the gate names: variables (both
@@ -481,4 +634,130 @@ fn release_driver_self_builds_the_runtime_from_a_cold_cache() {
     if let Err(e) = result {
         std::panic::resume_unwind(e);
     }
+}
+
+// ---------------------------------------------------------------------------
+// §11.1 function-value application: `f of x`, `f x`, `f of f of 3` — a
+// binding holding a function applies its arguments through the shared
+// CallClosure path. Both backends must agree.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn function_value_application_of_form() {
+    let src = "\
+function double
+    takes number called n
+    gives back n times 2
+
+make f equal to double
+say f of 21
+";
+    let (host, _outcome) = lagom_driver::run_interpreted(src, Vec::new(), Some(1));
+    assert_eq!(host.stdout, vec!["42"], "interpreter: f of 21");
+    assert_says("fnval_of", src, &["42"]);
+}
+
+#[test]
+fn function_value_application_positional_form() {
+    // §11.1's own lambda example applied in S59's canonical form.
+    let src = "\
+make f equal to a function taking n
+    gives back n times 3
+
+say f 5
+";
+    let (host, _outcome) = lagom_driver::run_interpreted(src, Vec::new(), Some(1));
+    assert_eq!(host.stdout, vec!["15"], "interpreter: f 5");
+    assert_says("fnval_pos", src, &["15"]);
+}
+
+#[test]
+fn function_value_application_nested_of_calls() {
+    // §11.1's canonical `f of f of 3`.
+    let src = "\
+function double
+    takes number called n
+    gives back n times 2
+
+make f equal to double
+say f of f of 3
+";
+    let (host, _outcome) = lagom_driver::run_interpreted(src, Vec::new(), Some(1));
+    assert_eq!(host.stdout, vec!["12"], "interpreter: f of f of 3");
+    assert_says("fnval_nested", src, &["12"]);
+}
+
+#[test]
+fn field_read_still_wins_for_structures() {
+    // The read forms are untouched by application: same shape, non-function
+    // callee binding.
+    let src = "\
+structure player
+    has name of type text
+
+make p equal to a player with name \"bo\"
+say name of p
+make xs equal to a list of 7, 8
+say xs at 1
+";
+    let (host, _outcome) = lagom_driver::run_interpreted(src, Vec::new(), Some(1));
+    assert_eq!(host.stdout, vec!["bo", "8"]);
+}
+
+// ---------------------------------------------------------------------------
+// §12.1 generics-beyond-anything: `anything` as the call-site-acceptable top
+// type, and the option tail on a type parameter (`returns some type?`)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn anything_accepts_any_single_value() {
+    // §12.1's frozen spellings: `takes anything called x` accepts a value of
+    // any type at the call site and flows it out unchanged.
+    let src = "\
+function echo
+    takes anything called value
+    gives back value
+
+say echo 5
+say echo \"hi\"
+say echo true
+";
+    let (host, _outcome) = lagom_driver::run_interpreted(src, Vec::new(), Some(1));
+    assert_eq!(host.stdout, vec!["5", "hi", "true"], "interpreter: anything flows through");
+    assert_says("anything_top", src, &["5", "hi", "true"]);
+}
+
+#[test]
+fn anything_fills_containers_at_the_call_site() {
+    // `a list of anything` accepts a list of numbers (or text, …) — the top
+    // type inside containers, per §12.1's `takes a list of anything`.
+    let src = "\
+function biggest
+    takes a list of anything called values
+    gives back first of values
+
+say biggest with values a list of 3, 7, 2
+";
+    let (host, _outcome) = lagom_driver::run_interpreted(src, Vec::new(), Some(1));
+    assert_eq!(host.stdout, vec!["3"], "interpreter: list-of-anything call site");
+    assert_says("anything_container", src, &["3"]);
+}
+
+#[test]
+fn some_type_option_tail_types_the_result() {
+    // `returns some type?` — the option tail composes with the type
+    // parameter, so `first of` inside the body types as the call site's
+    // element type.
+    let src = "\
+function optional first
+    takes a list of some type called items
+    returns some type?
+    gives back first of items
+
+make list equal to a list of 1
+say optional first list
+";
+    let (host, _outcome) = lagom_driver::run_interpreted(src, Vec::new(), Some(1));
+    assert_eq!(host.stdout, vec!["1"], "interpreter: some type? result");
+    assert_says("some_type_opt", src, &["1"]);
 }

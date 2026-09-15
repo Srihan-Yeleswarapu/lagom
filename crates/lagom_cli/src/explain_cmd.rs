@@ -1,4 +1,4 @@
-//! `lagom explain` — the teaching write-up for an error code.
+//! `lagom explain` — the teaching write-up for an error or lesson code.
 
 use super::args::{CliError, CliResult};
 use super::explain;
@@ -11,7 +11,11 @@ pub fn cmd_explain(rest: &[String]) -> CliResult {
         );
         return Ok(());
     };
-    match explain::lookup(code) {
+    // Runtime lessons (R00n) and compiler codes (E0nnn) share one command:
+    // the LOM failure report names both kinds (26.5's answer 8).
+    let writeup = explain::lookup(code)
+        .or_else(|| explain::runtime_lesson(code));
+    match writeup {
         Some(writeup) => print!("{writeup}"),
         None => {
             return Err(CliError::Message(format!(

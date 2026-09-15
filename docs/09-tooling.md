@@ -17,6 +17,21 @@
 9. **Editors and playground** — the M0 grammar assets (tree-sitter + textmate), the M2 VS Code extension, and the M4 hosted Wasm playground for zero-install K-12 onboarding ([§26.4 of 00](00-architecture.md#264-editor-support)).
 10. **REPL (`lagom play`)** — incremental evaluation over the interpreter backend, teaching mode (inferred types shown after each line), and history/session semantics.
 
+## Decision D-40: the executable-example contract (`## >>>` / `## =`)
+
+*M2, applied 2026-09. 00 §26.6 mandates only "every example in every doc compiles and runs"; this pins what "runs" means. No `>>>` examples existed in any doc before M2, so nothing frozen is redefined — this is the first written contract for the form.*
+
+- **`## >>> <statement>`** starts one example and quotes its first statement; **consecutive `## >>>` lines are one example** (a multi-statement session, like a REPL — later statements see earlier bindings). Any other `##` line ends the example.
+- The example runs with the **whole file in scope** (the Rust doctest rule): the file's functions, structures, kinds, and aliases are visible to it.
+- **`## = <text>`** pins what the example *produces*, one line per `=`. Pins are checked when present (the Rust doctest rule: an unpinned example must still compile and run); a present pin is a hard contract. The produced value is:
+  1. the `say` output the example printed (one `=` per printed line), or — when the example printed nothing —
+  2. the **value of the example's last binding** (`make` is the example's teaching point; rendering is `Value::format`, the S-9 one-formatting-place rule — the same words the play echo prints).
+- The evaluator is **the play session engine** (`lagom_driver::Session`) — the same incremental evaluation, teaching echo, and seeded determinism as `lagom play`. One evaluator, no second semantics.
+- **Unsupported forms fail loudly**: a `=` after an example that produced nothing (no `say`, no value-producing statement) is a *check error naming the example and its file line* — never a false pass. Compile errors and wrong pinned values render as the student diagnostic, with the expected/actual diff.
+- Rendering in the doc site: the `>>>` lines show as the example; `=` lines show as its output.
+
+Rationale for the last-statement rule: the teaching docs' natural example is `make x equal to double 2` with `## = 4` — a binding, not a print. Requiring `say` for every example would force noise into every doc; borrowing the binding echo (already specified for the REPL in 26.4's teaching mode) keeps `=` meaning "what the student sees". When both `say` output and a final value exist, the `say` lines win — they are what the run visibly printed.
+
 ## Decisions inherited from 00 (binding here)
 
 - D-22 (all tools are compiler-library clients), D-28 (diagnostics and tooling validated with real users from M0), the layers-as-checks rule applied to editor completions ([§0 of 00](00-architecture.md#0-how-to-read-this-document-layers)).

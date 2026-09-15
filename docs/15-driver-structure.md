@@ -14,13 +14,14 @@ compiler crates. It is split by concern, one owner each:
 |---|---|---|
 | `pipeline` | the shared front end | source → parse → check → HIR → MIR → verify; `Frontend` (with the facts back ends need: `has_entry`, `test_count`), `FrontendError`, diagnostic rendering |
 | `native` | the native back end | object code, the runtime-rlib search order (`LAGOM_RT_LIB` → bundled `<exe dir>/lib/lagom/` → workspace target dir), the rustc link step, the scratch `NativeBuild` dir's lifecycle |
-| `interp` | the interpreter back end | `run_interpreted`, `run_tests_interpreted` over the shared front end |
+| `interp` | the interpreter back end | one execution core (`run_fe`/`run_full`: front end → one run → host + outcome + `Interp` with the LOM ring); every entry point is a projection of it — `run_interpreted`, `run_traced`/`run_traced_fe`/`run_traced_full` (trace + output + outcome from a single execution), `call_counts`, `run_tests_interpreted` — so no path ever executes the program twice |
 
 `lib.rs` is the public face only: it re-exports the surface the CLI and the
 integration tests use (`frontend`, `render_diagnostics`, `Frontend`,
 `FrontendError`, `needs_input`, `build_native`, `compile_object`,
-`CompiledObject`, `link`, `NativeBuild`, `run_interpreted`,
-`run_tests_interpreted`). The split is internal structure, not API churn —
+`CompiledObject`, `link`, `NativeBuild`, `run_fe`, `run_full`,
+`run_interpreted`, `run_traced`, `run_traced_fe`, `run_traced_full`,
+`call_counts`, `run_tests_interpreted`). The split is internal structure, not API churn —
 callers did not change.
 
 ## The CLI modules
