@@ -92,6 +92,23 @@ pub enum Kw {
     Structure,
     Has,
     OfType,
+    /// `class` (10.2) — a class declaration head.
+    Class,
+    /// `can` (10.2) — a method declaration head. The phrase `can fail` wins
+    /// over this in every context, so the function-clause spelling is safe.
+    Can,
+    /// `construction` (10.3) — a named-constructor clause head.
+    Construction,
+    /// `before last reference disappears` (10.4) — the finalizer clause head.
+    BeforeLastReferenceDisappears,
+    /// `extends` (10.5) — single inheritance, the only inheritance word.
+    Extends,
+    /// `interface` (10.6) — the substitution-contract declaration head.
+    Interface,
+    /// `does` (10.6) — interface conformance on a class header.
+    Does,
+    StartTask,
+    KeepGoing,
     WaitForAllTasks,
 
     // expressions
@@ -116,8 +133,12 @@ pub enum Kw {
     True,
     False,
     Nothing,
+    /// `a new <class> with …` (10.2/10.3) — class construction. A phrase so
+    /// the article word can never be eaten as a plain name head.
+    ANew,
     AListOf,
     AMapFrom,
+    AChannelOf,
     APairOf,
 
     // types & conversion-call heads (dual context: type position vs `number from …` call)
@@ -521,8 +542,15 @@ impl LogicalLine {
 }
 
 /// Should `next_line_text` join `prev`?
-fn joins_previous(prev: &LogicalLine, next_line_text: &str) -> bool {
-    let _ = next_line_text;
+fn joins_previous(prev: &LogicalLine, _next_line_text: &str) -> bool {
+    // §70's frozen method form `can compare to` / `can compare to takes …`:
+    // a `can` header whose last word is the reserved `to` is a method NAME
+    // ending in `to` (the header's only legal continuation is a clause on its
+    // own line — never a `to`-phrase), so the continuation rule must not fire.
+    let joined = prev.joined.trim();
+    if joined.starts_with("can ") && joined.ends_with(" to") {
+        return false;
+    }
     prev.incomplete_tail()
 }
 
@@ -535,6 +563,11 @@ fn joins_previous(prev: &LogicalLine, next_line_text: &str) -> bool {
 const PHRASES: &[&[&str]] = &[
     &["and", "pass", "the", "problem", "on"],
     &["wait", "for", "all", "tasks"],
+    // 14.2: `start a task` and `keep going` are phrase-tokens too — no name
+    // run may absorb them, and the spawn's body-block is unambiguous.
+    &["start", "a", "task"],
+    &["keep", "going"],
+    &["a", "channel", "of"],
     &["is", "not", "equal", "to"],
     &["is", "greater", "than"],
     &["is", "less", "than"],
@@ -569,6 +602,15 @@ const PHRASES: &[&[&str]] = &[
     &["giving", "back"],
     &["is", "a"],
     &["or", "nothing"],
+    // M2 classes (10.2): `a new` before the single-word `a` so the article
+    // belongs to the construction phrase; `can` after `can fail`.
+    &["a", "new"],
+    // 10.4: the finalizer header — four plain words, matched as one phrase
+    // before any single-word head (10.2 comment applies: longest match wins).
+    &["before", "last", "reference", "disappears"],
+    &["class"],
+    &["can"],
+    &["construction"],
     // single-word keywords
     &["kind"],
     &["match"],
@@ -598,6 +640,9 @@ const PHRASES: &[&[&str]] = &[
     &["fail"],
     &["while"],
     &["using"],
+    &["extends"],
+    &["interface"],
+    &["does"],
     &["times"],
     &["stop"],
     &["next"],
@@ -661,6 +706,7 @@ fn phrase_kw(phrase: &[&str]) -> Kw {
         ["can", "fail"] => CanFail,
         ["a", "list", "of"] => AListOf,
         ["a", "map", "from"] => AMapFrom,
+        ["a", "channel", "of"] => AChannelOf,
         ["a", "pair", "of"] => APairOf,
         ["if", "it", "fails"] => IfItFails,
         ["of", "type"] => OfType,
@@ -669,6 +715,16 @@ fn phrase_kw(phrase: &[&str]) -> Kw {
         ["giving", "back"] => GivingBack,
         ["is", "a"] => IsA,
         ["or", "nothing"] => OrNothing,
+        ["a", "new"] => ANew,
+        ["class"] => Class,
+        ["can"] => Can,
+        ["extends"] => Extends,
+        ["interface"] => Interface,
+        ["does"] => Does,
+        // 14.2 structured tasks: `start a task` is a phrase-token so no name
+        // run can absorb it; `wait for all tasks` already is one above.
+        ["start", "a", "task"] => StartTask,
+        ["keep", "going"] => KeepGoing,
         ["kind"] => Kind,
         ["match"] => Match,
         ["when"] => When,
@@ -686,6 +742,8 @@ fn phrase_kw(phrase: &[&str]) -> Kw {
         ["false"] => False,
         ["nothing"] => Nothing,
         ["function"] => Function,
+        ["construction"] => Construction,
+        ["before", "last", "reference", "disappears"] => BeforeLastReferenceDisappears,
         ["structure"] => Structure,
         ["repeat"] => Repeat,
         ["increase"] => Increase,

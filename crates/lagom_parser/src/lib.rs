@@ -11,9 +11,9 @@
 
 use lagom_ast as ast;
 use lagom_ast::{
-    Arg, AttemptTail, BinOp, Block, CallExpr, Expr, FieldDecl, FunctionDecl, InterpPart, KindDecl,
-    LambdaBody, Name, Param, Pattern, PatternLiteral, Prep, Program, Repeat, Stmt, StructureDecl,
-    Target, TestDecl, TypeExpr, UseDecl, VariantDecl,
+    Arg, AttemptTail, BinOp, Block, CallExpr, ClassDecl, Expr, FieldDecl, FunctionDecl, InterfaceDecl,
+    InterpPart, KindDecl, LambdaBody, Name, Param, Pattern, PatternLiteral, Prep, Program, Repeat,
+    Stmt, StructureDecl, Target, TestDecl, TypeExpr, UseDecl, VariantDecl,
 };
 use lagom_diagnostics::{Diagnostic, Span};
 use lagom_lexer::{lex, Item, Kw, Tok};
@@ -184,6 +184,14 @@ impl<'src> Parser<'src> {
                     Ok(s) => items.push(AstItem::Structure(s)),
                     Err(()) => self.skip_decl(),
                 },
+                Item::Kw(Kw::Class) => match self.class_decl() {
+                    Ok(c) => items.push(AstItem::Class(c)),
+                    Err(()) => self.skip_decl(),
+                },
+                Item::Kw(Kw::Interface) => match self.interface_decl() {
+                    Ok(i) => items.push(AstItem::Interface(i)),
+                    Err(()) => self.skip_decl(),
+                },
                 Item::Kw(Kw::Kind) => match self.kind_decl() {
                     Ok(k) => items.push(AstItem::Kind(k)),
                     Err(()) => self.skip_decl(),
@@ -280,6 +288,12 @@ impl<'src> Parser<'src> {
                 let v = self.parse_type("After `to`, write the value type.")?;
                 Ok(TypeExpr::Map(Box::new(k), Box::new(v)))
             }
+            // 14.3: `a channel of T` — the typed FIFO channel.
+            Some(Kw::AChannelOf) => {
+                self.bump();
+                let elem = self.parse_type("After `a channel of`, write the message type.")?;
+                Ok(TypeExpr::Channel(Box::new(elem)))
+            }
             Some(Kw::APairOf) => {
                 self.bump();
                 let a = self.parse_type("`a pair of` needs the first type.")?;
@@ -294,15 +308,34 @@ impl<'src> Parser<'src> {
                 // recognize them before the User-name fallback — otherwise
                 // `some type called items` is eaten as a two-word name.
                 let is_type_param = matches!(self.peek(), (Item::Tok(Tok::WordRun(w)), _)
-                    if w == ["anything"].as_slice() || w == ["some", "type"].as_slice());
+                    if w == ["anything"].as_slice()
+                        || w == ["some", "type"].as_slice()
+                        || (w.last().map(|s| s.as_str()) == Some("that")
+                            && match &w[..w.len() - 1] {
+                                [s] if s == "anything" => true,
+                                [s, t] if s == "some" && t == "type" => true,
+                                _ => false,
+                            }));
                 if is_type_param {
                     // One bump: the WordRun already carries both words of
                     // `some type` (word runs break only at keywords).
+                    // 12.3's constraint suffix: `that does <interface>` —
+                    // `that` is no keyword either, so it rides the same run
+                    // (`anything that does …`); split it back out first so
+                    // the suffix parser sees a clean `that` run.
+                    let trailing_that = matches!(&self.peek().0,
+                        Item::Tok(Tok::WordRun(w)) if w.last().map(|s| s.as_str()) == Some("that"));
+                    let run_span = self.peek().1;
                     self.bump();
+                    if trailing_that {
+                        self.items
+                            .insert(self.pos, (Item::Tok(Tok::WordRun(vec!["that".to_string()])), run_span));
+                    }
+                    let iface = self.parse_constraint_suffix()?;
                     // The option tail composes with type parameters too
                     // (`returns some type?` — the option of whatever the
                     // call site's element type is).
-                    return self.parse_option_suffix(TypeExpr::TypeParam);
+                    return self.parse_option_suffix(TypeExpr::TypeParam { iface });
                 }
                 // usertype: any name word run
                 match self.peek_tok() {
@@ -322,6 +355,34 @@ impl<'src> Parser<'src> {
                 }
             }
         }
+    }
+
+    /// 12.3's constraint suffix on a type parameter: `that does <interface>`
+    /// (optional). `that` and `does` arrive as WordRuns (`does` is a keyword
+    /// only inside class headers' `does` lists — here it follows a plain
+    /// word), so the suffix is matched by word shape: run "that", keyword
+    /// `does`, then the interface's name run.
+    fn parse_constraint_suffix(&mut self) -> PResult<Option<(String, Span)>> {
+        let at = self.peek().1;
+        let is_that = matches!(self.peek(), (Item::Tok(Tok::WordRun(w)), _)
+            if w == ["that"].as_slice());
+        if !is_that {
+            return Ok(None);
+        }
+        self.bump();
+        if !matches!(self.peek_kw(), Some(Kw::Does)) {
+            let (_, span) = self.peek();
+            self.errors.push(Diagnostic::error(
+                "E0201",
+                "I expected the word `does` here (a constraint reads `that does <interface>`).",
+                span,
+            ));
+            return Err(());
+        }
+        self.bump();
+        let name = self.parse_name("`that does` must be followed by the interface's name")?;
+        let _ = at;
+        Ok(Some((name.display(), at.to(name.span))))
     }
 
     /// The option-type suffixes (8.5, R-18): after a type, `?` or the word
@@ -412,6 +473,16 @@ impl<'src> Parser<'src> {
     fn function_decl(&mut self) -> PResult<FunctionDecl> {
         let start = self.expect_kw(Kw::Function, "the word `function`")?;
         let name = self.parse_name("`function` must be followed by a name")?;
+        // 10.3: the receiver word is the construction's first parameter — a
+        // user function may not collide with the mangled construction name.
+        if name.words.len() == 2 && name.words[0] == "construction" {
+            self.errors.push(Diagnostic::error(
+                "E0201",
+                "`construction` starts a class's named constructor — a function cannot use it as its own name.",
+                name.span,
+            ));
+            return Err(());
+        }
         // 7.8 layout: the header line ends, then the body block opens — and the
         // `takes`/`returns`/`can fail` clauses live at the *top* of that same
         // block, at body indent (7.8's example: clauses and statements share it).
@@ -505,6 +576,403 @@ impl<'src> Parser<'src> {
             .map(|f: &FieldDecl| f.span)
             .unwrap_or(start);
         Ok(StructureDecl { name, fields, span: start.to(end) })
+    }
+
+    /// `interface name ⏎ INDENT { can <name> [body] } DEDENT` (10.6). A `can`
+    /// line without a body is a requirement; with a body it is a default
+    /// implementation (10.6: "default methods included via `can` bodies"),
+    /// synthesized as a receiver-first function of the interface's own name —
+    /// sema re-targets copies to the conforming class.
+    fn interface_decl(&mut self) -> PResult<InterfaceDecl> {
+        let start = self.expect_kw(Kw::Interface, "the word `interface`")?;
+        let name = self.parse_name("`interface` must be followed by the interface's name")?;
+        self.end_of_line("the interface header")?;
+        let Some(_is) = self.eat_tok(&Tok::Indent) else {
+            let (_, span) = self.peek();
+            self.errors.push(Diagnostic::error(
+                "E0202",
+                "This interface needs its methods indented under its header.",
+                span,
+            ));
+            return Err(());
+        };
+        let mut methods: Vec<(Name, Option<FunctionDecl>)> = Vec::new();
+        loop {
+            if self.at_dedent() || self.at_eof() {
+                break;
+            }
+            if self.at_newline() {
+                self.bump();
+                continue;
+            }
+            match self.peek_kw() {
+                Some(Kw::Can) => {
+                    let mstart = self.peek().1;
+                    self.bump();
+                    let mut mname = self.parse_name("`can` must be followed by the method's name")?;
+                    // Same `to`-tail rule as class methods (§70's `can compare to`).
+                    if self.peek_kw() == Some(Kw::To) {
+                        let to_span = self.bump().1;
+                        mname.words.push("to".to_string());
+                        mname.span = mname.span.to(to_span);
+                    }
+                    self.end_of_line("the method header")?;
+                    // The body is optional: absent = requirement, present =
+                    // default (same block layout as a class method's).
+                    self.eat_newline_before_indent();
+                    let Some(block_open) = self.eat_tok(&Tok::Indent) else {
+                        methods.push((mname, None));
+                        continue;
+                    };
+                    let mut params = vec![Param {
+                        name: Name { words: vec!["myself".to_string()], span: mname.span },
+                        ty: TypeExpr::User(name.clone()),
+                        span: mname.span,
+                    }];
+                    let mut returns = None;
+                    let mut can_fail = false;
+                    loop {
+                        match self.peek_kw() {
+                            Some(Kw::Takes) => {
+                                self.bump();
+                                params.push(self.takes_clause()?);
+                            }
+                            Some(Kw::Returns) => {
+                                self.bump();
+                                let ty =
+                                    self.parse_type("After `returns`, write a type (like `a number`).")?;
+                                returns = Some(ty);
+                                self.end_of_line("the `returns` clause")?;
+                            }
+                            Some(Kw::CanFail) => {
+                                self.bump();
+                                can_fail = true;
+                                self.end_of_line("the `can fail` clause")?;
+                            }
+                            _ => break,
+                        }
+                    }
+                    let body = self.block_after_open(block_open)?;
+                    let full_name = format!("method {} {}", name.display(), mname.display());
+                    let fd = FunctionDecl {
+                        name: Name { words: vec![full_name], span: mname.span },
+                        params,
+                        returns,
+                        can_fail,
+                        body,
+                        span: mstart.to(self.peek().1),
+                    };
+                    methods.push((mname, Some(fd)));
+                }
+                _ => {
+                    let (item, span) = self.peek();
+                    self.errors.push(
+                        Diagnostic::error("E0201", "I expected `can` here.", span)
+                            .with_explanation(
+                                "An interface's body is `can <name>` method lines — with a body for a default implementation.",
+                            )
+                            .with_note(format!("found: {}", item_text(item))),
+                    );
+                    return Err(());
+                }
+            }
+        }
+        self.expect_tok(Tok::Dedent, "the end of this interface's body (un-dent)")?;
+        let end = methods
+            .last()
+            .map(|(n, f)| f.as_ref().map_or(n.span, |d| d.span))
+            .unwrap_or(start);
+        Ok(InterfaceDecl { name, methods, span: start.to(end) })
+    }
+
+    /// `class name ⏎ INDENT { has … | can <name> … block } DEDENT` (10.2).
+    /// Methods are parsed straight into receiver-first functions (R-2: "methods
+    /// are functions that take the object first"): the receiver param is named
+    /// `myself` (10.2's reserved receiver word) and typed by the class's own
+    /// name, so field reads on `myself` type-check like any struct's.
+    fn class_decl(&mut self) -> PResult<ClassDecl> {
+        let start = self.expect_kw(Kw::Class, "the word `class`")?;
+        let name = self.parse_name("`class` must be followed by the class's name")?;
+        // Header suffixes (10.5/10.6): `extends <class>` and
+        // `does <interface>, <interface>` — comma or `and` separated.
+        let mut extends = None;
+        let mut does = Vec::new();
+        loop {
+            match self.peek_kw() {
+                Some(Kw::Extends) => {
+                    self.bump();
+                    let base = self.parse_name("`extends` must be followed by the base class's name")?;
+                    extends = Some(base);
+                }
+                Some(Kw::Does) => {
+                    self.bump();
+                    loop {
+                        let iface =
+                            self.parse_name("`does` must be followed by an interface's name")?;
+                        does.push(iface);
+                        if self.eat_tok(&Tok::Comma).is_none() && self.eat_kw(Kw::And).is_none() {
+                            break;
+                        }
+                    }
+                }
+                _ => break,
+            }
+        }
+        self.end_of_line("the class header")?;
+        let Some(_is) = self.eat_tok(&Tok::Indent) else {
+            let (_, span) = self.peek();
+            self.errors.push(Diagnostic::error(
+                "E0202",
+                "This class needs fields and methods indented under its header.",
+                span,
+            ));
+            return Err(());
+        };
+        let mut fields = Vec::new();
+        let mut constructions: Vec<FunctionDecl> = Vec::new();
+        let mut methods: Vec<(Name, FunctionDecl)> = Vec::new();
+        let mut deinit: Option<FunctionDecl> = None;
+        loop {
+            if self.at_dedent() || self.at_eof() {
+                break;
+            }
+            if self.at_newline() {
+                self.bump();
+                continue;
+            }
+            match self.peek_kw() {
+                Some(Kw::Has) => {
+                    let fstart = self.peek().1;
+                    self.bump();
+                    let fname = self.parse_name("`has` must be followed by the field's name")?;
+                    self.expect_kw(Kw::OfType, "the words `of type`")?;
+                    let ty = self.parse_type("After `of type`, write the field's type.")?;
+                    let tspan = ty_span(&ty);
+                    self.end_of_line("the field line")?;
+                    fields.push(FieldDecl { name: fname, ty, span: fstart.to(tspan) });
+                }
+                Some(Kw::Construction) => {
+                    // 10.3: `construction` — a named constructor. The clause
+                    // body parses exactly like a function's (takes-clauses,
+                    // then the indented block); the parser synthesizes a
+                    // receiver-first function (R-2) named `construction <class>`
+                    // whose implicit tail is `gives back myself` (10.3: the
+                    // construction hands back the new object). Sema enforces
+                    // the Swift rule on the body and dispatches the call by
+                    // argument names (D-14).
+                    let cstart = self.peek().1;
+                    self.bump();
+                    self.end_of_line("the `construction` header")?;
+                    self.eat_newline_before_indent();
+                    let block_open = self.eat_tok(&Tok::Indent);
+                    let Some(block_open) = block_open else {
+                        let (_, span) = self.peek();
+                        self.errors.push(Diagnostic::error(
+                            "E0202",
+                            "This construction clause needs a body indented under its header.",
+                            span,
+                        ));
+                        return Err(());
+                    };
+                    let mut params = Vec::new();
+                    params.push(Param {
+                        name: Name { words: vec!["myself".to_string()], span: cstart },
+                        ty: TypeExpr::User(name.clone()),
+                        span: cstart,
+                    });
+                    loop {
+                        match self.peek_kw() {
+                            Some(Kw::Takes) => {
+                                self.bump();
+                                params.push(self.takes_clause()?);
+                            }
+                            Some(Kw::CanFail) => {
+                                self.bump();
+                                self.end_of_line("the `can fail` clause")?;
+                            }
+                            _ => break,
+                        }
+                    }
+                    let body = self.block_after_open(block_open)?;
+                    // Implicit tail: the construction hands back the new
+                    // object (10.3). The span is the body's so it lowers with
+                    // the body.
+                    let body_stmts = body.stmts.clone();
+                    constructions.push(FunctionDecl {
+                        name: Name {
+                            words: vec![format!("construction {}", name.display())],
+                            span: cstart,
+                        },
+                        params,
+                        returns: Some(TypeExpr::User(name.clone())),
+                        can_fail: false,
+                        body: Block {
+                            stmts: {
+                                let mut s = body_stmts;
+                                s.push(Stmt::GiveBack {
+                                    value: Expr::Name {
+                                        name: Name {
+                                            words: vec!["myself".to_string()],
+                                            span: cstart,
+                                        },
+                                        span: cstart,
+                                    },
+                                    span: cstart,
+                                });
+                                s
+                            },
+                            span: body.span,
+                        },
+                        span: cstart.to(self.peek().1),
+                    });
+                }
+                Some(Kw::BeforeLastReferenceDisappears) => {
+                    // 10.4: the finalizer clause. The parser synthesizes a
+                    // receiver-first function (R-2) named `deinit <class>`;
+                    // sema enforces R-20.3 (finalizers cannot fail) and the
+                    // backends hook it to the last-reference drop. There is
+                    // no `takes`/`returns`/`can fail` grammar on a finalizer
+                    // — cleanup takes nothing, returns nothing, cannot fail.
+                    let dstart = self.peek().1;
+                    self.bump();
+                    self.end_of_line("the `before last reference disappears` header")?;
+                    self.eat_newline_before_indent();
+                    let block_open = self.eat_tok(&Tok::Indent);
+                    let Some(block_open) = block_open else {
+                        let (_, span) = self.peek();
+                        self.errors.push(Diagnostic::error(
+                            "E0202",
+                            "This finalizer needs a body indented under its header.",
+                            span,
+                        ));
+                        return Err(());
+                    };
+                    let body = self.block_after_open(block_open)?;
+                    let full_name = format!("deinit {}", name.display());
+                    let fd = FunctionDecl {
+                        name: Name { words: vec![full_name.clone()], span: dstart },
+                        params: vec![Param {
+                            name: Name { words: vec!["myself".to_string()], span: dstart },
+                            ty: TypeExpr::User(name.clone()),
+                            span: dstart,
+                        }],
+                        returns: None,
+                        can_fail: false,
+                        body,
+                        span: dstart.to(self.peek().1),
+                    };
+                    if deinit.is_some() {
+                        self.errors.push(Diagnostic::error(
+                            "E0376",
+                            format!("`{}` already has a `before last reference disappears` clause.", name.display()),
+                            dstart,
+                        ));
+                        return Err(());
+                    }
+                    let _ = &full_name;
+                    deinit = Some(fd);
+                }
+                Some(Kw::Can) => {
+                    let mstart = self.peek().1;
+                    self.bump();
+                    let mut mname = self.parse_name("`can` must be followed by the method's name")?;
+                    // §70's frozen form `can compare to`: the method name may
+                    // end in the reserved word `to`. When the header line ends
+                    // right after a dangling `to`, the word cannot open any
+                    // clause — it joins the name (mirrors the call-site rule
+                    // in `finish_call`).
+                    // §70's frozen form `can compare to`: the method name may
+                    // end in the reserved word `to`. The lexer's join rule
+                    // (`joins_previous`) leaves such a header un-joined, so the
+                    // dangling `to` sits at end-of-line — it cannot open any
+                    // clause, so it joins the name.
+                    if self.peek_kw() == Some(Kw::To) {
+                        let to_span = self.bump().1;
+                        mname.words.push("to".to_string());
+                        mname.span = mname.span.to(to_span);
+                    }
+                    self.end_of_line("the method header")?;
+                    // Method body with the function clause system (10.2: `can`
+                    // methods may declare `can fail`) — same layout as 7.8.
+                    self.eat_newline_before_indent();
+                    let block_open = self.eat_tok(&Tok::Indent);
+                    let Some(block_open) = block_open else {
+                        let (_, span) = self.peek();
+                        self.errors.push(Diagnostic::error(
+                            "E0202",
+                            "This method needs a body indented under its header.",
+                            span,
+                        ));
+                        return Err(());
+                    };
+                    let mut params = Vec::new();
+                    // R-2 lowering: the receiver leads the parameter list, so
+                    // `myself` is in scope in the body exactly like any
+                    // parameter (10.2's reserved receiver word).
+                    params.push(Param {
+                        name: Name { words: vec!["myself".to_string()], span: mname.span },
+                        ty: TypeExpr::User(name.clone()),
+                        span: mname.span,
+                    });
+                    let mut returns = None;
+                    let mut can_fail = false;
+                    loop {
+                        match self.peek_kw() {
+                            Some(Kw::Takes) => {
+                                self.bump();
+                                params.push(self.takes_clause()?);
+                            }
+                            Some(Kw::Returns) => {
+                                self.bump();
+                                let ty =
+                                    self.parse_type("After `returns`, write a type (like `a number`).")?;
+                                returns = Some(ty);
+                                self.end_of_line("the `returns` clause")?;
+                            }
+                            Some(Kw::CanFail) => {
+                                self.bump();
+                                can_fail = true;
+                                self.end_of_line("the `can fail` clause")?;
+                            }
+                            _ => break,
+                        }
+                    }
+                    let body = self.block_after_open(block_open)?;
+                    // R-2 lowering: the receiver leads the parameter list. The
+                    // mangled name is unspellable as a user call head (`method`
+                    // is reserved once a class exists) — sema dispatches method
+                    // calls on the receiver's type.
+                    let full_name = format!("method {} {}", name.display(), mname.display());
+                    let fd = FunctionDecl {
+                        name: Name { words: vec![full_name], span: mname.span },
+                        params,
+                        returns,
+                        can_fail,
+                        body,
+                        span: mstart.to(self.peek().1),
+                    };
+                    methods.push((mname, fd));
+                }
+                _ => {
+                    let (item, span) = self.peek();
+                    self.errors.push(
+                        Diagnostic::error("E0201", "I expected `has` or `can` here.", span)
+                            .with_explanation(
+                                "A class's body is `has <field> of type <T>` fields and `can <name>` methods.",
+                            )
+                            .with_note(format!("found: {}", item_text(item))),
+                    );
+                    return Err(());
+                }
+            }
+        }
+        self.expect_tok(Tok::Dedent, "the end of this class's body (un-dent)")?;
+        let end = methods
+            .last()
+            .map(|(_, f)| f.span)
+            .or_else(|| fields.last().map(|f| f.span))
+            .unwrap_or(start);
+        Ok(ClassDecl { name, fields, constructions, methods, extends, does, deinit, span: start.to(end) })
     }
 
     /// The `has name of type T` field lines under a structure header (7.11).
@@ -774,6 +1242,12 @@ impl<'src> Parser<'src> {
                 Ok(Some(Stmt::FailWith { value, span }))
             }
             Item::Kw(Kw::Attempt) => self.attempt_stmt().map(Some),
+            Item::Kw(Kw::StartTask) => self.start_task_stmt().map(Some),
+            Item::Kw(Kw::WaitForAllTasks) => {
+                self.bump();
+                self.end_of_line("`wait for all tasks`")?;
+                Ok(Some(Stmt::WaitForAllTasks { span }))
+            }
             Item::Kw(Kw::Match) => self.match_stmt().map(Some),
             Item::Kw(Kw::CheckThat) => {
                 self.bump();
@@ -959,6 +1433,22 @@ impl<'src> Parser<'src> {
                 Err(())
             }
         }
+    }
+
+    /// `start a task [keep going]` (14.2): one spawn per statement. The
+    /// `keep going` suffix rides the spawn's header line, before the body
+    /// block (the demo's frozen surface). The body is the task's region.
+    fn start_task_stmt(&mut self) -> PResult<Stmt> {
+        let start = self.expect_kw(Kw::StartTask, "the words `start a task`")?;
+        let keep_going = if self.peek_kw() == Some(Kw::KeepGoing) {
+            self.bump();
+            true
+        } else {
+            false
+        };
+        let body = self.block("After `start a task`, indent the task's body.")?;
+        let span = start.to(body.span);
+        Ok(Stmt::StartTask { body, keep_going, span })
     }
 
     /// `attempt orexpr [tail]` — ONE production for statement and expression
@@ -1260,6 +1750,13 @@ impl<'src> Parser<'src> {
     /// `comparison = additive [("is" cmpword | cmpword) additive]`
     fn comparison(&mut self) -> PResult<Expr> {
         let left = self.additive()?;
+        self.continue_comparison(left)
+    }
+
+    /// The comparison operators that may follow an additive expression
+    /// (`left` already parsed by the caller). Shared by `comparison` and
+    /// by `finish_call`'s first argument.
+    fn continue_comparison(&mut self, left: Expr) -> PResult<Expr> {
         let op = match self.peek_kw() {
             Some(Kw::CmpEqualTo) => Some(BinOp::Equal),
             Some(Kw::CmpNotEqualTo) => Some(BinOp::NotEqual),
@@ -1425,6 +1922,14 @@ impl<'src> Parser<'src> {
             Item::Kw(Kw::AListOf) => self.list_lit(),
             Item::Kw(Kw::AMapFrom) => self.map_lit(),
             Item::Kw(Kw::APairOf) => self.pair_lit(),
+            // 14.3: `a channel of T` in value position — the type phrase IS
+            // the construction; the element type must still parse.
+            Item::Kw(Kw::AChannelOf) => {
+                let start = self.expect_kw(Kw::AChannelOf, "the words `a channel of`")?;
+                let elem = self.parse_type("After `a channel of`, write the message type.")?;
+                let span = start.to(ty_span(&elem));
+                Ok(Expr::ChannelLit { elem: Box::new(elem), span })
+            }
             // The block lambda (11.1): `a function [taking n and m …] block`.
             Item::Kw(Kw::A) | Item::Kw(Kw::An)
                 if matches!(self.items.get(self.pos + 1), Some((Item::Kw(Kw::Function), _))) =>
@@ -1465,6 +1970,10 @@ impl<'src> Parser<'src> {
                 let end = self.expect_tok(Tok::RParen, "a closing parenthesis")?;
                 Ok(Expr::Group { inner: Box::new(inner), span: span.to(end) })
             }
+            // Class construction (10.2/10.3): `a new counter with count 5` —
+            // the same reader shape as struct construction; sema checks full
+            // field initialization (the Swift rule) against the class table.
+            Item::Kw(Kw::ANew) => self.new_object(),
             Item::Tok(Tok::WordRun(_)) => self.try_name_or_call(),
             // Conversion heads are type words used as call heads: `number from answer` (D-39).
             Item::Kw(Kw::Number)
@@ -1643,6 +2152,61 @@ impl<'src> Parser<'src> {
 
     fn try_name_or_call(&mut self) -> PResult<Expr> {
         let callee = self.parse_name("a value or a call")?;
+        // 7.1/S-14: `say`/`ask` are ordinary standard-module functions whose
+        // readable sentence form puts the value after the head word. When a
+        // multi-word run starts with one of them and an infix operator
+        // follows (`say age plus 1`), the operator belongs to the *argument*
+        // — split the head off and let the additive ladder read the rest
+        // (say(age + 1)); `(say age) plus 1` is not a derivable reading
+        // because `say` returns nothing. A comparison, though, is exactly
+        // R-4's ambiguous spelling: diagnose, never misparse.
+        if callee.words.len() >= 2
+            && matches!(callee.words[0].as_str(), "say" | "ask")
+            && matches!(
+                self.peek_kw(),
+                Some(
+                    Kw::Plus
+                        | Kw::Minus
+                        | Kw::TimesWord
+                        | Kw::DividedBy
+                        | Kw::DividedEvenlyBy
+                        | Kw::Modulo
+                )
+            )
+        {
+            let tail_span = callee.span;
+            self.push_back_name(Name { words: callee.words[1..].to_vec(), span: tail_span });
+            let head = Name { words: vec![callee.words[0].clone()], span: callee.span };
+            return self.finish_call(head);
+        }
+        if callee.words.len() >= 2
+            && matches!(callee.words[0].as_str(), "say" | "ask")
+            && matches!(
+                self.peek_kw(),
+                Some(
+                    Kw::CmpEqualTo
+                        | Kw::CmpNotEqualTo
+                        | Kw::CmpGreaterThan
+                        | Kw::CmpLessThan
+                        | Kw::CmpAtLeast
+                        | Kw::CmpAtMost
+                        | Kw::IsNothing
+                        | Kw::IsSomething
+                )
+            )
+        {
+            let (_, cspan) = self.peek();
+            self.errors.push(
+                Diagnostic::error(
+                    "E0210",
+                    "A comparison cannot end a `say`/`ask` sentence — it is ambiguous here.",
+                    cspan,
+                )
+                .with_note("arguments bind at the additive level (R-4), so `is equal to`, `is less than`, and their siblings would be read as a comparison on the whole call")
+                .with_fix("wrap the comparison in parentheses so it names its own value: say (count is less than 3)"),
+            );
+            return Err(());
+        }
         // no argument tokens follow → plain name
         if !self.starts_flowcall_argument() {
             let span = callee.span;
@@ -1749,6 +2313,34 @@ impl<'src> Parser<'src> {
         self.eat_kw(Kw::A);
         self.eat_kw(Kw::An);
         let name = self.parse_name("`a` must be followed by the structure's name")?;
+        let fields = self.construction_fields(&name)?;
+        let end = fields
+            .last()
+            .map(|(_, v)| expr_span(v))
+            .unwrap_or(start);
+        Ok(Expr::StructLit { name, fields, span: start.to(end) })
+    }
+
+    /// `a new <class> with <field> <value> [and <field> <value>]…` (10.2):
+    /// the class-construction reader. Field spelling, and-conjunction, and
+    /// value-head splitting match `struct_lit`'s construction reader exactly
+    /// — the two differ only in the keyword that opens them (`a new` vs
+    /// `a`) and the node they build.
+    fn new_object(&mut self) -> PResult<Expr> {
+        let start = self.bump().1;
+        let name = self.parse_name("`a new` must be followed by the class's name")?;
+        let fields = self.construction_fields(&name)?;
+        let end = fields
+            .last()
+            .map(|(_, v)| expr_span(v))
+            .unwrap_or(start);
+        Ok(Expr::NewObject { name, fields, span: start.to(end) })
+    }
+
+    /// The `with <field> <value> [and <field> <value>]…` reader shared by
+    /// struct (7.11) and class (10.2) construction. Caller has consumed the
+    /// article (and `new`) and read the type's name.
+    fn construction_fields(&mut self, _name: &Name) -> PResult<Vec<(Name, Expr)>> {
         let mut fields: Vec<(Name, Expr)> = Vec::new();
         while self.peek_kw() == Some(Kw::With) || self.peek_kw() == Some(Kw::And) {
             let conj = self.peek_kw();
@@ -1800,7 +2392,7 @@ impl<'src> Parser<'src> {
                 let (_, span) = self.peek();
                 self.errors.push(Diagnostic::error(
                     "E0207",
-                    format!("`{} {}` needs a value.", name.display(), fname.display()),
+                    format!("`{} {}` needs a value.", _name.display(), fname.display()),
                     span,
                 ));
                 return Err(());
@@ -1836,8 +2428,7 @@ impl<'src> Parser<'src> {
                 }
             }
         }
-        let end = fields.last().map(|(_, v)| expr_span(v)).unwrap_or(start);
-        Ok(Expr::StructLit { name, fields, span: start.to(end) })
+        Ok(fields)
     }
 
     /// After `and` (already peeked): does a `name <additive>` field follow?
@@ -1952,9 +2543,13 @@ impl Parser<'_> {
 
     /// The unified call grammar (7.15, R-1): first positional arg, prepositional
     /// args, `and`-separated args, then `with`-labeled suffixes.
-    fn finish_call(&mut self, callee: Name) -> PResult<Expr> {
+    fn finish_call(&mut self, mut callee: Name) -> PResult<Expr> {
         let start = callee.span;
         let first = if self.starts_additive() {
+            // R-4: arguments bind at the additive level — a comparison that
+            // follows belongs to the enclosing context (7.15:
+            // `check that double 2 is equal to 4` compares the whole call;
+            // `say (count is less than 3)` parenthesizes).
             let e = self.additive()?;
             let span = expr_span(&e);
             Some(Box::new(Arg { expr: Box::new(e), span }))
@@ -1971,6 +2566,20 @@ impl Parser<'_> {
                 _ => break,
             };
             self.bump();
+            // §70's frozen method-call form `compare to of v with other "y"`:
+            // the method's name absorbs the prep word (`compare to`). With no
+            // first argument the prep would dangle — a call with no receiver —
+            // so the bare-prep shape cannot be a real argument position: the
+            // word joins the callee's name instead, and the NEXT prep is the
+            // argument's. (`set <name> to …` never reaches `finish_call`; a
+            // first positional argument or another prep always precedes any
+            // real `to` argument.)
+            if prep == Prep::To && first.is_none() && preps.is_empty() {
+                let to_span = self.items[self.pos - 1].1;
+                callee.words.push("to".to_string());
+                callee.span = callee.span.to(to_span);
+                continue;
+            }
             let e = self.additive()?;
             let span = expr_span(&e);
             preps.push((prep, Arg { expr: Box::new(e), span }));
@@ -2206,7 +2815,9 @@ fn ty_span(t: &TypeExpr) -> Span {
         TypeExpr::User(n) => n.span,
         // Compound types' inner spans are Box'd; the type starts at the inner
         // head word in practice — but we only need an end anchor here.
-        TypeExpr::List(t) | TypeExpr::Map(t, _) | TypeExpr::Pair(t, _) => ty_span_b(t),
+        TypeExpr::List(t) | TypeExpr::Map(t, _) | TypeExpr::Pair(t, _) | TypeExpr::Channel(t) => {
+            ty_span_b(t)
+        }
         _ => Span::default(),
     }
 }
@@ -2217,7 +2828,8 @@ fn ty_span_b(t: &TypeExpr) -> Span {
 
 fn expr_span(e: &Expr) -> Span {
     match e {
-        Expr::Int { span, .. }
+        Expr::NewObject { span, .. }
+        | Expr::Int { span, .. }
         | Expr::Float { span, .. }
         | Expr::Text { span, .. }
         | Expr::Bool { span, .. }
@@ -2231,6 +2843,7 @@ fn expr_span(e: &Expr) -> Span {
         | Expr::ListLit { span, .. }
         | Expr::MapLit { span, .. }
         | Expr::PairLit { span, .. }
+        | Expr::ChannelLit { span, .. }
         | Expr::StructLit { span, .. }
         | Expr::VariantLit { span, .. }
         | Expr::SomeValue { span, .. }
@@ -2254,6 +2867,9 @@ fn pattern_span(p: &Pattern) -> Span {
 fn kw_text(kw: Kw) -> &'static str {
     use Kw::*;
     match kw {
+        Extends => "extends",
+        Interface => "interface",
+        Does => "does",
         Make => "make",
         Changing => "changing",
         EqualTo => "equal to",
@@ -2290,9 +2906,17 @@ fn kw_text(kw: Kw) -> &'static str {
         Use => "use",
         For => "for",
         Structure => "structure",
+        Class => "class",
+        Can => "can",
+        Construction => "construction",
+        BeforeLastReferenceDisappears => "before last reference disappears",
+        ANew => "a new",
         Has => "has",
         OfType => "of type",
         WaitForAllTasks => "wait for all tasks",
+        StartTask => "start a task",
+        KeepGoing => "keep going",
+        AChannelOf => "a channel of",
         Kind => "kind",
         Match => "match",
         When => "when",

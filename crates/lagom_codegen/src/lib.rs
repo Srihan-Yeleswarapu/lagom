@@ -230,6 +230,8 @@ struct RtFns {
     map_new: FuncId,
     map_push: FuncId,
     struct_new: FuncId,
+    object_new: FuncId,
+    object_push: FuncId,
     struct_push: FuncId,
     pair_new: FuncId,
     format_new: FuncId,
@@ -242,11 +244,21 @@ struct RtFns {
     set_dev: FuncId,
     register_struct: FuncId,
     register_lambda: FuncId,
+    register_deinit: FuncId,
+    register_iface_method: FuncId,
+    register_iface_fn: FuncId,
+    call_iface: FuncId,
     variant_tag: FuncId,
     pair_get: FuncId,
     closure_new: FuncId,
     closure_push: FuncId,
     call_closure: FuncId,
+    // 14.2/14.3: tasks and channels.
+    spawn_task: FuncId,
+    drain_tasks: FuncId,
+    new_channel: FuncId,
+    send_channel: FuncId,
+    receive_channel: FuncId,
     map_list: FuncId,
     combine_list: FuncId,
     split_text: FuncId,
@@ -298,6 +310,8 @@ impl RtFns {
             map_push: imp(module, "rt_map_push", 6, 0),
             struct_new: imp(module, "rt_struct_new", 3, 1),
             struct_push: imp(module, "rt_struct_push", 5, 0),
+            object_new: imp(module, "rt_object_new", 3, 1),
+            object_push: imp(module, "rt_object_push", 5, 0),
             pair_new: imp(module, "rt_pair_new", 5, 1),
             format_new: imp(module, "rt_format_new", 1, 1),
             format_push_lit: imp(module, "rt_format_push_lit", 4, 0),
@@ -309,11 +323,24 @@ impl RtFns {
             set_dev: imp(module, "rt_set_dev", 1, 0),
             register_struct: imp(module, "rt_register_struct", 4, 0),
             register_lambda: imp(module, "rt_register_lambda", 3, 0),
+            // 10.4: the class→finalizer hook (function address + class name).
+            register_deinit: imp(module, "rt_register_deinit", 3, 0),
+            // 12.3/10.6 vtables: rows (iface, class, method) and the callee
+            // addresses behind them, plus the dispatcher itself.
+            register_iface_method: imp(module, "rt_register_iface_method", 8, 0),
+            register_iface_fn: imp(module, "rt_register_iface_fn", 4, 0),
+            call_iface: imp(module, "rt_call_iface", 7, 1),
             variant_tag: imp(module, "rt_variant_tag", 4, 1),
             pair_get: imp(module, "rt_pair_get", 5, 1),
             closure_new: imp(module, "rt_closure_new", 3, 1),
             closure_push: imp(module, "rt_closure_push", 3, 0),
             call_closure: imp(module, "rt_call_closure", 6, 1),
+            // 14.2/14.3: tasks and channels.
+            spawn_task: imp(module, "rt_spawn_task", 3, 0),
+            drain_tasks: imp(module, "rt_drain_tasks", 2, 1),
+            new_channel: imp(module, "rt_new_channel", 1, 0),
+            send_channel: imp(module, "rt_send_channel", 5, 0),
+            receive_channel: imp(module, "rt_receive_channel", 4, 1),
             map_list: imp(module, "rt_map_list", 7, 1),
             combine_list: imp(module, "rt_combine_list", 8, 1),
             split_text: imp(module, "rt_split_text", 6, 1),
@@ -567,6 +594,87 @@ impl<'a> Backend<'a> {
             let nptr = self.data_ptr(&mut fb, blob);
             let nlen = fb.ins().iconst(I64, f.name.len() as i64);
             self.rt_call(&mut fb, self.rt.register_lambda, &[addr, nptr, nlen]);
+        }
+
+        // 10.4 finalizers: every class with a `before last reference
+        // disappears` clause registers its deinit function by address and
+        // class name; the runtime calls it when an object of that class is
+        // dropped from its last reference. Same mechanics as lambda
+        // registration (uniform user ABI; the runtime supplies the receiver).
+        for (class_name, fn_name) in self.lir.deinits.clone() {
+            let Some(&id) = self.fn_ids.get(&fn_name) else {
+                continue;
+            };
+            let fref = self.module.declare_func_in_func(id, fb.func);
+            let addr = fb.ins().func_addr(I64, fref);
+            let cblob = self.declare_ro(class_name.as_bytes());
+            let cptr = self.data_ptr(&mut fb, cblob);
+            let clen = fb.ins().iconst(I64, class_name.len() as i64);
+            self.rt_call(&mut fb, self.rt.register_deinit, &[addr, cptr, clen]);
+        }
+
+        // 12.3/10.6 vtables: one row per (interface, class, method-callee)
+        // plus the callee's own address+arity, so `rt_call_iface` resolves
+        // the receiver's runtime class to the implementing function — the
+        // native counterpart of the interpreter's `iface_dispatch` map.
+        for (iface, rows) in self.lir.iface_dispatch.clone() {
+            for (class, fn_name) in rows {
+                let ip = self.declare_ro(iface.as_bytes());
+                let cp = self.declare_ro(class.as_bytes());
+                // The row's method is the requirement name: the callee is
+                // `method <class> <method>` — the trailing words after the
+                // class. Both are registered: the method matches the dispatch
+                // request, the callee names the implementing function.
+                let m = fn_name
+                    .strip_prefix(&format!("method {class} "))
+                    .map(|m| m.to_string())
+                    .unwrap_or_else(|| fn_name.clone());
+                let mp = self.declare_ro(m.as_bytes());
+                let fp = self.declare_ro(fn_name.as_bytes());
+                let ip = self.data_ptr(&mut fb, ip);
+                let il = fb.ins().iconst(I64, iface.len() as i64);
+                let cp = self.data_ptr(&mut fb, cp);
+                let cl = fb.ins().iconst(I64, class.len() as i64);
+                let mp = self.data_ptr(&mut fb, mp);
+                let ml = fb.ins().iconst(I64, m.len() as i64);
+                let fp = self.data_ptr(&mut fb, fp);
+                let fl = fb.ins().iconst(I64, fn_name.len() as i64);
+                self.rt_call(
+                    &mut fb,
+                    self.rt.register_iface_method,
+                    &[ip, il, cp, cl, mp, ml, fp, fl],
+                );
+            }
+        }
+        // Callee addresses: every function a vtable row points at registers
+        // its address and user-param arity (the direct user ABI is transmuted
+        // per arity at dispatch).
+        for (_, rows) in self.lir.iface_dispatch.clone() {
+            for fn_name in rows.into_iter().map(|(_, f)| f).collect::<std::collections::BTreeSet<_>>() {
+                let Some(&id) = self.fn_ids.get(&fn_name) else {
+                    continue;
+                };
+                let arity = self
+                    .lir
+                    .functions
+                    .iter()
+                    .find(|f| f.name == fn_name)
+                    .map(|f| f.params)
+                    .unwrap_or(1);
+                let fref = self.module.declare_func_in_func(id, fb.func);
+                let addr = fb.ins().func_addr(I64, fref);
+                let nptr = {
+                    let blob = self.declare_ro(fn_name.as_bytes());
+                    self.data_ptr(&mut fb, blob)
+                };
+                let nlen = fb.ins().iconst(I64, fn_name.len() as i64);
+                let ar = fb.ins().iconst(I64, arity as i64);
+                self.rt_call(
+                    &mut fb,
+                    self.rt.register_iface_fn,
+                    &[addr, nptr, nlen, ar],
+                );
+            }
         }
 
         // Dev: hand the source to the failure-report renderer.
@@ -879,6 +987,46 @@ impl<'a> Backend<'a> {
                 fb.switch_to_block(on_ok);
                 self.store_pair(fb, st, *dest, (t, p));
             }
+            LirInstr::CallIface { dest, iface, method, args, line } => {
+                // 12.3/10.6 vtable dispatch: pack the (tag, payload) pairs into
+                // a stack array (arg 0 is the receiver) and let the runtime
+                // resolve the receiver's class to the implementing function.
+                // Failure rides the out triple exactly like a user call.
+                let mut packed = Vec::with_capacity(args.len() * 2);
+                for a in args {
+                    let (t, p) = self.operand(fb, st, pad, a);
+                    packed.push(t);
+                    packed.push(p);
+                }
+                let argc = args.len();
+                let arg_slot = fb.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    (argc * 16).max(16) as u32,
+                    3,
+                ));
+                let arg_base = fb.ins().stack_addr(I64, arg_slot, 0);
+                for (i, pair) in packed.chunks(2).enumerate() {
+                    fb.ins().store(MemFlags::new(), pair[0], arg_base, (i * 16) as i32);
+                    fb.ins().store(MemFlags::new(), pair[1], arg_base, (i * 16 + 8) as i32);
+                }
+                let ip = self.declare_ro(iface.as_bytes());
+                let mp = self.declare_ro(method.as_bytes());
+                let ip = self.data_ptr(fb, ip);
+                let il = fb.ins().iconst(I64, iface.len() as i64);
+                let mp = self.data_ptr(fb, mp);
+                let ml = fb.ins().iconst(I64, method.len() as i64);
+                let argc_v = fb.ins().iconst(I64, argc as i64);
+                let (t, p) = self.call_out_status_mode(
+                    fb,
+                    st,
+                    pad,
+                    self.rt.call_iface,
+                    &[ip, il, mp, ml, arg_base, argc_v],
+                    Some(*line),
+                    false,
+                );
+                self.store_pair(fb, st, *dest, (t, p));
+            }
             LirInstr::Say { value, .. } => {
                 let (t, p) = self.operand(fb, st, pad, value);
                 self.rt_call(fb, self.rt.say, &[t, p]);
@@ -896,6 +1044,18 @@ impl<'a> Backend<'a> {
                     let (fptr, flen) = self.declare_ro_i(fb, *fname);
                     let (vt, vp) = self.operand(fb, st, pad, value);
                     self.rt_call(fb, self.rt.struct_push, &[p, fptr, flen, vt, vp]);
+                }
+                self.store_pair(fb, st, *dest, (t, p));
+            }
+            LirInstr::ObjectNew { dest, name, fields, line } => {
+                // Same call shape as struct construction; the runtime builds
+                // the shared, mutable object instead of a struct value.
+                let (nptr, nlen) = self.declare_ro_i(fb, *name);
+                let (t, p) = self.call_out_status(fb, st, pad, self.rt.object_new, &[nptr, nlen], Some(*line));
+                for (fname, value) in fields {
+                    let (fptr, flen) = self.declare_ro_i(fb, *fname);
+                    let (vt, vp) = self.operand(fb, st, pad, value);
+                    self.rt_call(fb, self.rt.object_push, &[p, fptr, flen, vt, vp]);
                 }
                 self.store_pair(fb, st, *dest, (t, p));
             }
@@ -1098,6 +1258,53 @@ impl<'a> Backend<'a> {
                     Some(*line),
                     true,
                 );
+                self.store_pair(fb, st, *dest, (t, p));
+            }
+            // 14.2/14.3: tasks and channels — the runtime owns the queue(s);
+            // the generated code only marshals value boxes.
+            LirInstr::SpawnTask { f, keep_going, .. } => {
+                let (ft, fp) = self.operand(fb, st, pad, f);
+                let kg = fb.ins().iconst(I64, *keep_going as i64);
+                self.rt_call(fb, self.rt.spawn_task, &[ft, fp, kg]);
+            }
+            LirInstr::DrainTasks { line } => {
+                let line_v = fb.ins().iconst(I64, *line);
+                self.call_out_status_mode(
+                    fb,
+                    st,
+                    pad,
+                    self.rt.drain_tasks,
+                    &[line_v],
+                    Some(*line),
+                    true,
+                );
+                // DrainTasks produces no value; `dest` is unused on this arm.
+            }
+            LirInstr::SendChannel { value, channel, line } => {
+                let (ct, cp) = self.operand(fb, st, pad, channel);
+                let (vt, vp) = self.operand(fb, st, pad, value);
+                let line_v = fb.ins().iconst(I64, *line);
+                self.rt_call(fb, self.rt.send_channel, &[ct, cp, vt, vp, line_v]);
+            }
+            LirInstr::ReceiveChannel { dest, channel, line } => {
+                let (ct, cp) = self.operand(fb, st, pad, channel);
+                let line_v = fb.ins().iconst(I64, *line);
+                let (t, p) = self.call_out_status_mode(
+                    fb,
+                    st,
+                    pad,
+                    self.rt.receive_channel,
+                    &[ct, cp, line_v],
+                    Some(*line),
+                    true,
+                );
+                self.store_pair(fb, st, *dest, (t, p));
+            }
+            LirInstr::NewChannel { dest, .. } => {
+                let out = fb.ins().stack_addr(I64, st.out_slot, 0);
+                self.rt_call(fb, self.rt.new_channel, &[out]);
+                let t = fb.ins().stack_load(I64, st.out_slot, 0);
+                let p = fb.ins().stack_load(I64, st.out_slot, 8);
                 self.store_pair(fb, st, *dest, (t, p));
             }
             LirInstr::MapList { dest, list, f, is_map, line } => {

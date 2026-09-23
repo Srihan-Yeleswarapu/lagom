@@ -206,8 +206,22 @@ pub fn render_student(file: &SourceFile, d: &Diagnostic) -> String {
             let _ = fmt::Write::write_fmt(&mut out, format_args!("\nThis fixes it because: {why}\n"));
         } else if let Some(why) = &d.explanation {
             // Fall back to the rule itself — still a causal statement, never
-            // a bare "the compiler stops complaining".
-            let _ = fmt::Write::write_fmt(&mut out, format_args!("\nThis fixes it because: {why}\n"));
+            // a bare "the compiler stops complaining" — but never a bare
+            // restatement of the error line above: a tautology teaches
+            // nothing, so no footer prints at all.
+            let norm = |t: &str| -> String {
+                t.chars()
+                    .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+                    .collect::<String>()
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .to_lowercase()
+            };
+            if norm(why) != norm(&d.message) {
+                let _ =
+                    fmt::Write::write_fmt(&mut out, format_args!("\nThis fixes it because: {why}\n"));
+            }
         }
     }
     if let Some(concept) = &d.concept {

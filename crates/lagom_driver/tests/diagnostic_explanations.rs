@@ -671,3 +671,15 @@ fn genuine_ambiguity_is_reported_not_guessed() {
     let page = Verbosity::Student.render(&file, parsed);
     assert!(page.contains("two readings") || page.contains("cannot tell"), "{page}");
 }
+/// The did-you-mean suggestion carries a causal why (not the restated
+/// rule): the end-task typo regression showed a footer that repeated the
+/// error line verbatim.
+#[test]
+fn did_you_mean_footer_names_the_real_cause() {
+    let page = student_page("make score equal to 10
+say scoer
+", "E0344");
+    assert!(page.contains("did you mean `score`?"), "{page}");
+    assert!(page.contains("This fixes it because:"), "{page}");
+    assert!(page.contains("already has"), "{page}");
+}

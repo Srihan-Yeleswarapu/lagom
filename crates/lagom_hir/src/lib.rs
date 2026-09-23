@@ -39,6 +39,13 @@ use lagom_sema::{
 #[derive(Debug, Clone)]
 pub struct HirProgram {
     pub items: Vec<HirItem>,
+    /// 10.4 finalizers: `(class name, deinit function name)` in declaration
+    /// order — the backends hook each to the last-reference drop of its class.
+    pub deinits: Vec<(String, String)>,
+    /// 12.3: interface → `(class, method callee)` dispatch tables, passed
+    /// through from sema — both backends register them for body-side method
+    /// calls on constrained parameters (the 10.6 vtable).
+    pub iface_dispatch: Vec<(String, Vec<(String, String)>)>,
 }
 
 #[derive(Debug, Clone)]
@@ -162,6 +169,21 @@ pub enum HirStmtKind {
     },
     /// An expression evaluated for effect (`say …`, a bare call).
     Effect(HirExpr),
+    /// `start a task` (14.2): the task body as a zero-param block lambda
+    /// (the same `HirExprKind::Lambda` the closure machinery lowers);
+    /// `keep_going` selects the supervision mode at the join.
+    StartTask {
+        task: HirExpr,
+        keep_going: bool,
+    },
+    /// `wait for all tasks` (14.2): join every task this function spawned so
+    /// far; a task's failure (unless `keep going`) re-raises here.
+    WaitAllTasks,
+    /// `send <v> to <ch>` (14.3): queue a deep-copied value on the channel.
+    SendToChannel {
+        value: Box<HirExpr>,
+        channel: Box<HirExpr>,
+    },
     /// `match <scrutinee>` (7.12): checked arms + optional `otherwise`. Arm
     /// order is source order; MIR lowers to a tag switch.
     Match {
@@ -285,6 +307,13 @@ pub enum HirExprKind {
         name: String,
         fields: Vec<(String, HirExpr, Span)>,
     },
+    /// Class construction (10.2): `a new counter with count 5`. Same field
+    /// shape as struct construction, but the backends build an ARC'd
+    /// reference object (9.3), not a value.
+    NewObject {
+        name: String,
+        fields: Vec<(String, HirExpr, Span)>,
+    },
     List(Vec<HirExpr>),
     Map(Vec<(HirExpr, HirExpr)>),
     Pair(Box<HirExpr>, Box<HirExpr>),
@@ -328,6 +357,18 @@ pub enum HirExprKind {
         /// queue and codegen's lambda table key on it; None = auto-number).
         name: Option<String>,
     },
+    /// `a channel of T` (14.3): construct a typed FIFO channel value. The
+    /// element type only types the queue; both backends build the same
+    /// runtime shape.
+    NewChannel { span: Span },
+    /// `send <v> to <ch>` (14.3): queue a deep-copied value on the channel.
+    SendToChannel {
+        value: Box<HirExpr>,
+        channel: Box<HirExpr>,
+    },
+    /// `receive from <ch>` (14.3): dequeue one message (the empty-wait rule:
+    /// the join barrier runs first, then the dequeue fails on still-empty).
+    ReceiveFrom { channel: Box<HirExpr>, span: Span },
 }
 
 #[derive(Debug, Clone)]
@@ -382,6 +423,7 @@ pub fn lower(program: CheckedProgram) -> HirProgram {
         lambda_bodies: &lambda_bodies,
     };
     let mut items = Vec::new();
+    let mut deinits: Vec<(String, String)> = Vec::new();
     for item in program.items {
         match item {
             CheckedItem::Use { module, span } => items.push(HirItem::Use { module, span }),
@@ -390,12 +432,31 @@ pub fn lower(program: CheckedProgram) -> HirProgram {
                 name: s.name,
                 fields: s.fields,
             })),
+            // A class lowers to its field-table Structure (the backends'
+            // field indexing is positional and shared) plus its methods as
+            // the receiver-first functions they were checked into (R-2).
+            CheckedItem::Class { name, fields, methods, constructions, deinit } => {
+                items.push(HirItem::Structure(HirStructure { name: name.clone(), fields }));
+                for (_, m) in methods {
+                    items.push(HirItem::Function(lx.function(m)));
+                }
+                for c in constructions {
+                    items.push(HirItem::Function(lx.function(c)));
+                }
+                // 10.4: the finalizer rides as an ordinary function; the
+                // (class → finalizer) table tells the backends to hook it to
+                // the last-reference drop.
+                if let Some(d) = deinit {
+                    deinits.push((name.clone(), d.name.clone()));
+                    items.push(HirItem::Function(lx.function(d)));
+                }
+            }
             CheckedItem::Test(t) => items.push(HirItem::Test(lx.function(t))),
             CheckedItem::Kind(k) => items.push(HirItem::Kind(HirKind { name: k.name, variants: k.variants })),
             CheckedItem::Stmt(s) => items.push(HirItem::Main(lx.stmt(s))),
         }
     }
-    HirProgram { items }
+    HirProgram { items, deinits, iface_dispatch: program.iface_dispatch }
 }
 
 /// Owned side tables from sema; the `Lowerer` borrows them.
@@ -561,7 +622,50 @@ impl<'t> Lowerer<'t> {
                     otherwise.map(|b| b.into_iter().map(|s| self.stmt(s)).collect());
                 HirStmtKind::Match { scrutinee: scrut, arms: out_arms, otherwise: out_otherwise }
             }
-            CheckedStmtKind::ExprStmt { expr } => HirStmtKind::Effect(self.expr(expr)),
+            CheckedStmtKind::ExprStmt { expr } => {
+                HirStmtKind::Effect(self.expr(expr))
+            }
+            // 14.2: the task body rides the lambda side table exactly like a
+            // block lambda; MIR enqueues the synthetic function and emits the
+            // spawn. `keep_going` selects the supervision mode at the join.
+            CheckedStmtKind::StartTask {
+                lambda_span,
+                keep_going,
+            } => {
+                // The task body IS a zero-param block lambda: reuse the block
+                // form's lowering (checked statements from the side table,
+                // full-function semantics) so a task body can do anything a
+                // function can. The closure value is discarded at the spawn.
+                let lspan = lambda_span;
+                let (lbody, _ret, body_stmts) = match self.lambda_bodies.get(&lspan) {
+                    Some(stmts) => {
+                        let lowered: Vec<HirStmt> =
+                            stmts.clone().into_iter().map(|s| self.stmt(s)).collect();
+                        (HirExprKind::Nothing, Type::Error, lowered)
+                    }
+                    None => (HirExprKind::Nothing, Type::Error, Vec::new()),
+                };
+                HirStmtKind::StartTask {
+                    task: HirExpr {
+                        kind: HirExprKind::Lambda {
+                            params: Vec::new(),
+                            ret: Type::Error,
+                            body: Box::new(HirExpr {
+                                kind: lbody,
+                                ty: Type::Error,
+                                span: lspan,
+                            }),
+                            body_stmts,
+                            span: lspan,
+                            name: None,
+                        },
+                        ty: Type::Error,
+                        span: lspan,
+                    },
+                    keep_going,
+                }
+            }
+            CheckedStmtKind::WaitForAllTasks => HirStmtKind::WaitAllTasks,
         };
         HirStmt { kind, span }
     }
@@ -707,6 +811,9 @@ impl<'t> Lowerer<'t> {
                     right: Box::new(r),
                 }
             }
+            // 14.3: `a channel of T` — the element type types the queue only;
+            // the runtime value is the channel itself.
+            lagom_ast::Expr::ChannelLit { span, .. } => HirExprKind::NewChannel { span },
             lagom_ast::Expr::ListLit { elements, .. } => HirExprKind::List(
                 elements
                     .into_iter()
@@ -747,6 +854,19 @@ impl<'t> Lowerer<'t> {
                 HirExprKind::Pair(Box::new(f), Box::new(s))
             }
             lagom_ast::Expr::StructLit { name, fields, .. } => HirExprKind::StructLit {
+                name: name.display(),
+                fields: fields
+                    .into_iter()
+                    .map(|(n, v)| {
+                        let vs = lagom_sema::expr_span(&v);
+                        let vty = self.ty(vs, Type::Error);
+                        let mut lowered = self.expr(TypedExpr { expr: v, ty: vty });
+                        lowered.span = vs;
+                        (n.display(), lowered, n.span)
+                    })
+                    .collect(),
+            },
+            lagom_ast::Expr::NewObject { name, fields, .. } => HirExprKind::NewObject {
                 name: name.display(),
                 fields: fields
                     .into_iter()
@@ -854,6 +974,45 @@ impl<'t> Lowerer<'t> {
             .callee_spans
             .get(&call.span)
             .unwrap_or(&call.callee.span);
+        // 14.3 channel builtins: `send v to ch` (a statement-shaped call) and
+        // `receive from ch` (a value-producing read) lower to dedicated ops so
+        // both backends share the queue semantics — not ordinary calls.
+        if callee == "send" {
+            let first = call.first.as_ref().map(|a| (*a.expr).clone());
+            let chan = call
+                .preps
+                .iter()
+                .find(|(p, _)| *p == lagom_ast::Prep::To)
+                .map(|(_, a)| (*a.expr).clone());
+            if let (Some(value), Some(channel)) = (first, chan) {
+                let vspan = lagom_sema::expr_span(&value);
+                let vty = self.ty(vspan, Type::Error);
+                let value = self.expr(TypedExpr { expr: value, ty: vty });
+                let cspan = lagom_sema::expr_span(&channel);
+                let cty = self.ty(cspan, Type::Error);
+                let channel = self.expr(TypedExpr { expr: channel, ty: cty });
+                return HirExprKind::SendToChannel {
+                    value: Box::new(value),
+                    channel: Box::new(channel),
+                };
+            }
+        }
+        if callee == "receive" {
+            let chan = call
+                .preps
+                .iter()
+                .find(|(p, _)| *p == lagom_ast::Prep::From)
+                .map(|(_, a)| (*a.expr).clone());
+            if let Some(channel) = chan {
+                let cspan = lagom_sema::expr_span(&channel);
+                let cty = self.ty(cspan, Type::Error);
+                let channel = self.expr(TypedExpr { expr: channel, ty: cty });
+                return HirExprKind::ReceiveFrom {
+                    channel: Box::new(channel),
+                    span: call.span,
+                };
+            }
+        }
         let is_read = self.reads.contains(&call.span);
         if is_read {
             if let Some((lagom_ast::Prep::Of, a)) = call.preps.first() {

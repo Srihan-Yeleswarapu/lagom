@@ -24,6 +24,10 @@ declarations & statements
   stop  next  function  takes  called  returns  gives back  fail with
   can fail  attempt  and pass the problem on  if it fails  then  as
   test  check that  use  for  structure  has
+  class  can  construction  a new  myself
+  extends  interface  does
+  before last reference disappears
+  start a task  keep going  wait for all tasks
 
 expressions
   and  or  not  is
@@ -33,13 +37,16 @@ expressions
 
 literals & collections
   true  false  nothing
-  a list of  a map from  a pair of
+  a list of  a map from  a pair of  a channel of
 
 types & conversions
   number  decimal  text  boolean  random
 
 options
   is nothing  is something
+
+tasks & channels
+  send  receive
 ";
 
 /// `lagom words --types`: the type surface — the built-ins every program
@@ -51,6 +58,7 @@ types (use with `of type` and `takes … of type`):
 built-in
   number  decimal  text  boolean
   a list of T  a map from K to V  a pair of A and B  a T or nothing
+  a new C with … (10.2: makes an object of class C)
 
 new names (8.4 type aliases)
   a type called <name> is a <type>

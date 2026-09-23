@@ -51,17 +51,46 @@ pub struct CheckedProgram {
     pub read_spans: HashSet<Span>,
     /// Checked block-lambda bodies keyed by the lambda's span (11.1).
     pub lambda_bodies: HashMap<Span, Vec<CheckedStmt>>,
+    /// 12.3: interface → `(class, method callee)` dispatch tables — the
+    /// single source both backends register for body-side method calls on
+    /// constrained parameters (the 10.6 vtable). Entries are per class that
+    /// claims the interface, in sorted class order.
+    pub iface_dispatch: Vec<(String, Vec<(String, String)>)>,
 }
 
 #[derive(Debug)]
 pub enum CheckedItem {
-    Use { module: String, span: Span },
+    Use {
+        module: String,
+        span: Span,
+    },
     Function(CheckedFunction),
     Structure(CheckedStructure),
+    /// A class (10.2): the field table rides to HIR as a Structure (the
+    /// backends' field indexing is positional) and each method rides as the
+    /// receiver-first function it was parsed into (R-2). The 10.3 named
+    /// constructions ride as their own functions (`construction <class>`).
+    Class {
+        name: String,
+        fields: Vec<(String, Type, Span)>,
+        methods: Vec<(String, CheckedFunction)>,
+        constructions: Vec<CheckedFunction>,
+        /// 10.4: the `deinit <class>` receiver-first function, present when
+        /// the class declares `before last reference disappears`.
+        deinit: Option<CheckedFunction>,
+    },
     /// `kind` (7.12) — carried to HIR as the variant table.
     Kind(CheckedKind),
     Test(CheckedFunction),
     Stmt(CheckedStmt),
+}
+
+/// Overrides applied when checking a borrowed function: a re-targeted name
+/// (10.6's default-body copy is emitted under the *conforming class's*
+/// method name) and/or a re-typed receiver (`myself` becomes that class).
+pub struct FnOverride {
+    pub name: Option<String>,
+    pub recv_ty: Option<Type>,
 }
 
 #[derive(Debug)]
@@ -161,6 +190,17 @@ pub enum CheckedStmtKind {
     ExprStmt {
         expr: TypedExpr,
     },
+    /// `start a task` block (14.2): the body is checked as a zero-param
+    /// block-lambda; `keep_going` rides along for the supervision rule.
+    StartTask {
+        /// The synthetic closure's name (`%task <n>`), the body statements,
+        /// and the body's span for LOM. The lambda_bodies side table keyed
+        /// by the ORIGINAL body block span carries the checked statements.
+        lambda_span: Span,
+        keep_going: bool,
+    },
+    /// `wait for all tasks` — the explicit region join (14.2).
+    WaitForAllTasks,
 }
 
 /// The checked form of one `when` pattern: types resolved against the
@@ -168,15 +208,32 @@ pub enum CheckedStmtKind {
 #[derive(Debug, Clone)]
 pub enum CheckedPattern {
     /// A literal comparison (`when 0`, `when "quit"`).
-    Literal { value: ast::PatternLiteral, span: Span },
+    Literal {
+        value: ast::PatternLiteral,
+        span: Span,
+    },
     /// A tag test with destructured fields (`when a circle with radius r`).
-    Variant { kind: String, variant: String, fields: Vec<(String, CheckedPattern)> },
+    Variant {
+        kind: String,
+        variant: String,
+        fields: Vec<(String, CheckedPattern)>,
+    },
     /// `something with value <pattern>` (8.5).
-    Something { inner: Box<CheckedPattern>, span: Span },
+    Something {
+        inner: Box<CheckedPattern>,
+        span: Span,
+    },
     /// `a pair of <pattern> and <pattern>`.
-    Pair { first: Box<CheckedPattern>, second: Box<CheckedPattern>, span: Span },
+    Pair {
+        first: Box<CheckedPattern>,
+        second: Box<CheckedPattern>,
+        span: Span,
+    },
     /// A catch-all binding name.
-    Binding { name: String, span: Span },
+    Binding {
+        name: String,
+        span: Span,
+    },
     Wildcard,
 }
 
@@ -237,6 +294,9 @@ pub enum Type {
     Text,
     Boolean,
     List(Box<Type>),
+    /// `a channel of T` (14.3): a typed FIFO channel. Values cross the task
+    /// boundary through it; the type parameter is the message type.
+    Channel(Box<Type>),
     Map(Box<Type>, Box<Type>),
     Pair(Box<Type>, Box<Type>),
     /// `T?` — §8.5. `first of list` returns `T?` (S-13).
@@ -261,6 +321,14 @@ pub enum Type {
     /// every occurrence in one function body is the same type (12.1's
     /// per-call-site unification).
     Anything,
+    /// A value whose type satisfies an interface — the constrained type
+    /// parameter (12.3: `some type that does comparable`) or the existential
+    /// reading (`anything that does drawable`). The name is the interface.
+    /// Call sites check arguments against it (does-claims, built-in operator
+    /// table, or a wider Iface); method calls on the value dispatch through
+    /// the interface (10.6's vtable case), both backends via one shared
+    /// class→method table.
+    Iface(String),
     /// Recovered/unknown after a diagnostic.
     Error,
 }
@@ -274,6 +342,7 @@ impl Type {
             Type::Text => "text".into(),
             Type::Boolean => "boolean".into(),
             Type::List(t) => format!("a list of {}", t.display()),
+            Type::Channel(t) => format!("a channel of {}", t.display()),
             Type::Map(k, v) => format!("a map from {} to {}", k.display(), v.display()),
             Type::Pair(a, b) => format!("a pair of {} and {}", a.display(), b.display()),
             Type::Option(t) => format!("a {} or nothing", t.display()),
@@ -287,6 +356,7 @@ impl Type {
             Type::NumericLit => "number".into(),
             Type::NothingLit => "nothing".into(),
             Type::Anything => "anything".into(),
+            Type::Iface(i) => format!("anything that does {i}"),
             Type::Error => "an unknown type (because of an earlier error)".into(),
         }
     }
@@ -304,8 +374,13 @@ impl From<&TypeExpr> for Type {
             TypeExpr::Text => Type::Text,
             TypeExpr::Boolean => Type::Boolean,
             TypeExpr::List(e) => Type::List(Box::new(e.as_ref().into())),
-            TypeExpr::Map(k, v) => Type::Map(Box::new(k.as_ref().into()), Box::new(v.as_ref().into())),
-            TypeExpr::Pair(a, b) => Type::Pair(Box::new(a.as_ref().into()), Box::new(b.as_ref().into())),
+            TypeExpr::Channel(e) => Type::Channel(Box::new(e.as_ref().into())),
+            TypeExpr::Map(k, v) => {
+                Type::Map(Box::new(k.as_ref().into()), Box::new(v.as_ref().into()))
+            }
+            TypeExpr::Pair(a, b) => {
+                Type::Pair(Box::new(a.as_ref().into()), Box::new(b.as_ref().into()))
+            }
             TypeExpr::User(n) => {
                 let name = n.display();
                 if false {
@@ -319,7 +394,14 @@ impl From<&TypeExpr> for Type {
                 }
             }
             TypeExpr::OptionT(t) => Type::Option(Box::new(t.as_ref().into())),
-            TypeExpr::TypeParam => Type::Anything,
+            // The constrained parameter (12.3): the body's static type stays
+            // the type parameter, carrying the interface it names — call
+            // sites check arguments against it, body calls dispatch
+            // through it (the documented §12.3 resolutions).
+            TypeExpr::TypeParam {
+                iface: Some((iname, _)),
+            } => Type::Iface(iname.clone()),
+            TypeExpr::TypeParam { iface: None } => Type::Anything,
             TypeExpr::Inferred => Type::Error,
         }
     }
@@ -368,6 +450,11 @@ pub struct Checker<'a> {
     src: &'a str,
     functions: HashMap<String, Callable>,
     structs: HashMap<String, CheckedStructure>,
+    /// Classes (10.2): class name → its field table. The type of a class
+    /// value is `Struct(name)` — the runtime field mechanics are shared —
+    /// but identity, reference semantics, and method dispatch key off this
+    /// table, so a class is never interchangeable with a structure.
+    classes: HashMap<String, CheckedStructure>,
     /// Type aliases (8.4): alias name → the fully-resolved real type.
     /// Transparent by design — `score` used anywhere a type is expected
     /// behaves exactly as the type it names.
@@ -384,8 +471,51 @@ pub struct Checker<'a> {
     current_returns: Option<Type>,
     /// Current function declared `can fail`? (propagation rule, 13.1)
     current_can_fail: bool,
+    /// Inside a `start a task` body (14.2): the body is its own capability
+    /// boundary — a `fail with` there is the supervision signal, legal
+    /// without a function-level `can fail`.
+    in_task_body: bool,
+    /// 10.3 construction clauses: `(class, function name, param names)` —
+    /// the dispatch table for D-14's name-keyed clause lookup.
+    ctor_clauses: Vec<(String, String, Vec<String>)>,
+    /// 10.3's Swift rule, per clause: `(function name, field, set count)` —
+    /// how many times each clause body sets each field.
+    ctor_sets: Vec<(String, String, usize)>,
     /// Depth of enclosing `attempt` handlers (E0302 context).
     attempt_depth: usize,
+    /// 10.4: inside a `before last reference disappears` body? R-20.3 —
+    /// finalizers cannot fail, so can-fail sites are rejected outright.
+    in_deinit: bool,
+    /// Inside a construction-dispatch rebuild (depth > 0): marks the
+    /// synthesized all-`nothing` receiver sites so they are not mistaken
+    /// for real bare `a new C` construction sites.
+    construction_depth: usize,
+    /// 10.2: the class whose method is being checked, if any. A bare field
+    /// name in a method body reads the receiver's field (`side times side`)
+    /// — the architecture's own examples spell field reads without `of
+    /// myself` inside `can` bodies — so the checker resolves them against
+    /// this class's field table.
+    current_method_class: Option<String>,
+    /// 10.5 calling-up: while checking `method <class> <name>`, a call whose
+    /// receiver is `myself` and whose resolution lands on THIS method must
+    /// skip to the base chain's declaration — `speak of myself` inside an
+    /// override means the inherited method, not the override itself.
+    current_checked_name: Option<String>,
+    /// 10.6 interface tables: name → its requirement names. Registered in
+    /// pass 1 (order-free conformance); default bodies stay in the AST and
+    /// are copied at class check time (pass 2) so no AST cloning is needed.
+    interfaces: HashMap<String, Vec<String>>,
+    /// 10.6: each interface's default-bodied methods (name → decl) plus the
+    /// decl spans. Borrowed from the AST — the copies a claiming class gets
+    /// are checked straight from here (no AST cloning).
+    interface_defaults: HashMap<String, Vec<ast::FunctionDecl>>,
+    /// 10.5 inheritance chains: class → (its base class, the base name's
+    /// span). Method dispatch copy-REDIRECTS through the chain — inherited
+    /// bodies still resolve to the class that declared them (no cloning).
+    class_base: HashMap<String, (String, Span)>,
+    /// 10.6 conformance claims per class: `does`-names with their spans, so
+    /// the order-free validation walk can point at the claiming line.
+    class_ifaces: HashMap<String, Vec<(String, Span)>>,
     /// Loop nesting depth (stop/next legality).
     loop_depth: usize,
     /// §8.5 flow-sensitive narrowing: `(name, inner type)` pairs currently
@@ -407,6 +537,13 @@ pub struct Checker<'a> {
     /// side table HIR reads to lower the block form into its synthetic
     /// function (§11.1: Lagom's lambda is a full function).
     lambda_bodies: HashMap<Span, Vec<CheckedStmt>>,
+    /// 14.2: whether a `start a task` ran before the current join point in
+    /// this body — reset per function/test/script body; `wait for all
+    /// tasks` with no prior spawn is a misplaced join (E0390).
+    saw_spawn_in_body: bool,
+    /// The enclosing function's display name (for E0390's prose; empty = the
+    /// top-level script body).
+    current_fn_display: String,
     pub diags: Diagnostics,
 }
 
@@ -419,24 +556,42 @@ pub fn check(program: &Program, src: &str) -> CheckedProgram {
         src,
         functions: HashMap::new(),
         structs: HashMap::new(),
+        classes: HashMap::new(),
         aliases: HashMap::new(),
         pending_alias_spans: HashMap::new(),
         kinds: HashMap::new(),
         used_modules: Vec::new(),
-        scopes: vec![Scope { bindings: HashMap::new(), order: Vec::new() }],
+        scopes: vec![Scope {
+            bindings: HashMap::new(),
+            order: Vec::new(),
+        }],
         narrowed: Vec::new(),
         current_returns: None,
         current_can_fail: false,
+        in_task_body: false,
+        ctor_clauses: Vec::new(),
+        ctor_sets: Vec::new(),
         attempt_depth: 0,
+        in_deinit: false,
+        current_method_class: None,
+        current_checked_name: None,
+        construction_depth: 0,
+        interfaces: HashMap::new(),
+        interface_defaults: HashMap::new(),
+        class_base: HashMap::new(),
+        class_ifaces: HashMap::new(),
         loop_depth: 0,
         current_body: Body::Top,
+        saw_spawn_in_body: false,
+        current_fn_display: String::new(),
         node_types: HashMap::new(),
         callee_spans: HashMap::new(),
         read_spans: HashSet::new(),
         lambda_bodies: HashMap::new(),
         diags: Diagnostics::new(),
-    };        cx.install_builtins();
-        cx.current_body = Body::Top;
+    };
+    cx.install_builtins();
+    cx.current_body = Body::Top;
     cx.check_program(program)
 }
 
@@ -449,19 +604,39 @@ impl<'a> Checker<'a> {
         let add = |name: &str, cx: &mut Self| {
             cx.functions.insert(
                 name.to_string(),
-                Callable { params: vec![], ret: Type::Error, can_fail: false, origin: Origin::Standard },
+                Callable {
+                    params: vec![],
+                    ret: Type::Error,
+                    can_fail: false,
+                    origin: Origin::Standard,
+                },
             );
         };
         for name in [
-            "say", "ask", "number", "decimal", "text", "random",
-            "first", "size", "join", "uppercase", "lowercase", "trim",
+            "say",
+            "ask",
+            "number",
+            "decimal",
+            "text",
+            "random",
+            "first",
+            "size",
+            "join",
+            "uppercase",
+            "lowercase",
+            "trim",
         ] {
             add(name, self);
         }
         for name in ["square root", "floor", "bigger", "smaller"] {
             self.functions.insert(
                 name.to_string(),
-                Callable { params: vec![], ret: Type::Error, can_fail: false, origin: Origin::Math },
+                Callable {
+                    params: vec![],
+                    ret: Type::Error,
+                    can_fail: false,
+                    origin: Origin::Math,
+                },
             );
         }
         // M1 stdlib surface (§11.2 combinators, docs/07's student text set,
@@ -470,6 +645,20 @@ impl<'a> Checker<'a> {
         // dispatch table. Every name is derivable from the frozen call
         // grammar: multi-word callees (`open file`, `json map`), the closed
         // preposition set (`at`, `from`), and labeled `with` arguments.
+        // 14.2/14.3 task surface: `send` takes two arguments (the message
+        // and, via `to`, the channel); `receive` takes one (`from <ch>`).
+        for name in ["send", "receive"] {
+            add(name, self);
+        }
+        self.functions.insert(
+            "send".to_string(),
+            Callable {
+                params: vec![Type::Error, Type::Error],
+                ret: Type::Error,
+                can_fail: false,
+                origin: Origin::Standard,
+            },
+        );
         for name in ["map", "keep", "combine", "split", "contains", "sort"] {
             add(name, self);
         }
@@ -481,14 +670,24 @@ impl<'a> Checker<'a> {
         for name in ["split", "contains", "combine", "bigger", "smaller"] {
             self.functions.insert(
                 name.to_string(),
-                Callable { params: vec![Type::Error, Type::Error], ret: Type::Error, can_fail: false, origin: Origin::Standard },
+                Callable {
+                    params: vec![Type::Error, Type::Error],
+                    ret: Type::Error,
+                    can_fail: false,
+                    origin: Origin::Standard,
+                },
             );
         }
         // File ops carry real arities (G-25 uses them to decide whether a
         // one-run callee split's preps are positional arguments or reads).
         self.functions.insert(
             "open file".to_string(),
-            Callable { params: vec![Type::Text], ret: Type::Error, can_fail: true, origin: Origin::Standard },
+            Callable {
+                params: vec![Type::Text],
+                ret: Type::Error,
+                can_fail: true,
+                origin: Origin::Standard,
+            },
         );
         for (name, nparams) in [
             ("write file", 2usize),
@@ -498,26 +697,51 @@ impl<'a> Checker<'a> {
         ] {
             self.functions.insert(
                 name.to_string(),
-                Callable { params: vec![Type::Error; nparams], ret: Type::Error, can_fail: true, origin: Origin::Standard },
+                Callable {
+                    params: vec![Type::Error; nparams],
+                    ret: Type::Error,
+                    can_fail: true,
+                    origin: Origin::Standard,
+                },
             );
         }
         self.functions.insert(
             "file exists".to_string(),
-            Callable { params: vec![], ret: Type::Error, can_fail: false, origin: Origin::Standard },
+            Callable {
+                params: vec![],
+                ret: Type::Error,
+                can_fail: false,
+                origin: Origin::Standard,
+            },
         );
         self.functions.insert(
             "json".to_string(),
-            Callable { params: vec![], ret: Type::Error, can_fail: true, origin: Origin::Standard },
+            Callable {
+                params: vec![],
+                ret: Type::Error,
+                can_fail: true,
+                origin: Origin::Standard,
+            },
         );
         self.functions.insert(
             "json text".to_string(),
-            Callable { params: vec![], ret: Type::Error, can_fail: false, origin: Origin::Standard },
+            Callable {
+                params: vec![],
+                ret: Type::Error,
+                can_fail: false,
+                origin: Origin::Standard,
+            },
         );
         // `call f with x` — apply a closure value (11.1). Type rules live in
         // the dispatch table.
         self.functions.insert(
             "call".to_string(),
-            Callable { params: vec![], ret: Type::Error, can_fail: false, origin: Origin::Standard },
+            Callable {
+                params: vec![],
+                ret: Type::Error,
+                can_fail: false,
+                origin: Origin::Standard,
+            },
         );
         // `number from text` and `decimal from text` can fail (D-39); nothing
         // else in the standard surface does at M0.
@@ -539,6 +763,8 @@ impl<'a> Checker<'a> {
             match item {
                 ast::Item::Use(u) => self.register_use(u),
                 ast::Item::Structure(s) => self.register_structure(s),
+                ast::Item::Class(c) => self.register_class(c),
+                ast::Item::Interface(i) => self.register_interface(i),
                 ast::Item::Kind(k) => self.register_kind(k),
                 ast::Item::TypeAlias(a) => self.register_type_alias(a),
                 // Signatures register after the alias table resolves (see
@@ -554,10 +780,53 @@ impl<'a> Checker<'a> {
         // the callables fully resolved.
         self.resolve_alias_table();
         for item in &program.items {
-            if let ast::Item::Function(f) = item {
-                self.register_function_sig(f);
+            match item {
+                ast::Item::Function(f) => self.register_function_sig(f),
+                ast::Item::Class(c) => {
+                    // Methods are registered as the receiver-first functions
+                    // they were parsed into (R-2) — `method <class> <name>`.
+                    for (_, m) in &c.methods {
+                        self.register_function_sig(m);
+                    }
+                    // The finalizer likewise (10.4) — `deinit <class>` — so
+                    // its body checks with full call tables in place.
+                    if let Some(d) = &c.deinit {
+                        self.register_function_sig(d);
+                    }
+                    // Constructions likewise (10.3) — `construction <class>`.
+                    for c2 in &c.constructions {
+                        self.register_function_sig(c2);
+                        // The dispatch table: (class, function name, param
+                        // names) — D-14's name-keyed clause lookup. The
+                        // Swift-rule counter seeds one zero per field; the
+                        // body check counts `set`s against these.
+                        let pnames = c2.params.iter().skip(1).map(|p| p.name.display()).collect();
+                        self.ctor_clauses
+                            .push((c.name.display(), c2.name.display(), pnames));
+                        if let Some(fields) = self.classes.get(&c.name.display()) {
+                            for (n, _, _) in &fields.fields {
+                                self.ctor_sets.push((c2.name.display(), n.clone(), 0));
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
+        // 10.5/10.6 header validation (after all signatures exist):
+        // `extends` targets exist, no inheritance cycles, and every `does`
+        // claim is satisfied by the class's methods, inherited methods, or
+        // the interface's own defaults. Inherited fields are prefixed into
+        // the subclass's field table here (backends index positionally).
+        self.validate_class_headers();
+        // 12.3: the `iface <I> <m>` dispatch callables — the callee shape the
+        // checker rewrites body-side method calls on constrained parameters
+        // to. Signature: the interface's own declaration, but the receiver
+        // parameter takes the CONSTRAINT type (any conforming value) and the
+        // result can fail exactly when the underlying method can. Registered
+        // for every interface requirement, so a body may only dispatch what
+        // the interface actually promises (E0384 guards the rest).
+        self.register_iface_callables();
         // Pass 2: check bodies.
         let mut items = Vec::new();
         for item in &program.items {
@@ -567,16 +836,156 @@ impl<'a> Checker<'a> {
                     span: u.span,
                 }),
                 ast::Item::Function(f) => items.push(CheckedItem::Function(self.check_function(f))),
-                ast::Item::Structure(s) => {
-                    items.push(CheckedItem::Structure(CheckedStructure {
-                        name: s.name.display(),
-                        fields: s
-                            .fields
-                            .iter()
-                            .map(|f| (f.name.display(), self.user_type((&f.ty).into()), f.name.span))
-                            .collect(),
-                    }))
+                // 10.6: the interface itself produces no runtime item — its
+                // defaults ride on conforming classes (copied above).
+                ast::Item::Interface(_) => {}
+                ast::Item::Class(c) => {
+                    let cname = c.name.display();
+                    let fields = self
+                        .classes
+                        .get(&cname)
+                        .map(|s| s.fields.clone())
+                        .unwrap_or_default();
+                    let mut methods: Vec<(String, CheckedFunction)> = Vec::new();
+                    for (mname, m) in &c.methods {
+                        methods.push((mname.display(), self.check_function(m)));
+                    }
+                    // 10.6: copy in the defaults of every conformed interface
+                    // that the class does not already implement (10.6: default
+                    // methods included via `can` bodies). The default body was
+                    // checked-in-waiting as `method <interface> <name>`; it is
+                    // emitted here under the *class's* method name with the
+                    // receiver re-typed to the class — no body cloning.
+                    {
+                        let owned: Vec<String> =
+                            c.methods.iter().map(|(n, _)| n.display()).collect();
+                        // Gather every default being copied, across all
+                        // conformed interfaces, so name collisions between
+                        // two interfaces' defaults are visible before any
+                        // copy is emitted.
+                        let mut candidates: Vec<(String, String, &ast::FunctionDecl)> = Vec::new();
+                        for iname in c.does.iter().map(|n| n.display()) {
+                            let defaults: Vec<(&ast::Name, &ast::FunctionDecl)> = program
+                                .items
+                                .iter()
+                                .filter_map(|it| match it {
+                                    ast::Item::Interface(i) if i.name.display() == iname => Some(i),
+                                    _ => None,
+                                })
+                                .flat_map(|i| i.methods.iter())
+                                .filter_map(|(n, b)| b.as_ref().map(|fd| (n, fd)))
+                                .filter(|(n, _)| !owned.contains(&n.display()))
+                                .collect();
+                            for (n, fd) in defaults {
+                                let mname = n
+                                    .words
+                                    .join(" ")
+                                    .strip_prefix(&format!("method {iname} "))
+                                    .map(|s| s.to_string())
+                                    .unwrap_or_else(|| n.words.join(" "));
+                                candidates.push((iname.clone(), mname, fd));
+                            }
+                        }
+                        // 10.6 resolution: defaults collide when two
+                        // conformed interfaces (or one, twice) implement the
+                        // same requirement — no default is more specific, so
+                        // the checker refuses to pick and asks for the
+                        // class's own method instead.
+                        let mut seen: Vec<(String, String)> = Vec::new();
+                        let mut conflicting: Vec<String> = Vec::new();
+                        for (iname, mname, _) in &candidates {
+                            if let Some(prev_if) =
+                                seen.iter().find(|(m, _)| m == mname).map(|(_, i)| i.clone())
+                            {
+                                if !conflicting.contains(mname) {
+                                    self.diags.push(
+                                        Diagnostic::error(
+                                            "E0382",
+                                            format!(
+                                                "`{cname}` cannot take `{mname}` from both `{prev_if}` and `{iname}` — the interface defaults conflict."
+                                            ),
+                                            c.name.span,
+                                        )
+                                        .with_note(format!(
+                                            "both `{prev_if}` and `{iname}` provide a default `can {mname}`"
+                                        ))
+                                        .with_fix(format!(
+                                            "give `{cname}` its own `can {mname}`"
+                                        ))
+                                        .with_fix_why(
+                                            "the class's own method replaces every default — it is the only spelling that says which code runs",
+                                        )
+                                        .with_explanation(
+                                            "When two interfaces' defaults collide, neither is more specific, so the compiler refuses to pick for you.",
+                                        ),
+                                    );
+                                    conflicting.push(mname.clone());
+                                }
+                                continue;
+                            }
+                            seen.push((mname.clone(), iname.clone()));
+                        }
+                        for (mname, fd) in candidates.into_iter().map(|(_, m, fd)| (m, fd)) {
+                            if conflicting.contains(&mname) {
+                                continue;
+                            }
+                            let checked = self.check_function_with(
+                                fd,
+                                Some(&FnOverride {
+                                    name: Some(format!("method {cname} {mname}")),
+                                    recv_ty: Some(Type::Struct(cname.clone())),
+                                }),
+                            );
+                            // The copy joins the dispatch table (it was
+                            // never registered under the interface's name).
+                            self.functions.insert(
+                                format!("method {cname} {mname}"),
+                                Callable {
+                                    params: checked.params.iter().map(|p| p.ty.clone()).collect(),
+                                    ret: checked.returns.clone().unwrap_or(Type::Error),
+                                    can_fail: checked.can_fail,
+                                    origin: Origin::User,
+                                },
+                            );
+                            methods.push((mname, checked));
+                        }
+                    }
+                    let mut constructions: Vec<CheckedFunction> = Vec::new();
+                    for c2 in &c.constructions {
+                        self.check_ctor_body_initialization(c2, &cname);
+                        constructions.push(self.check_function(c2));
+                    }
+                    // 10.4: the finalizer body checks with R-20.3 armed —
+                    // can-fail sites inside it are rejected (E0377).
+                    let deinit = c.deinit.as_ref().map(|d| {
+                        let saved = self.in_deinit;
+                        self.in_deinit = true;
+                        let checked = self.check_function(d);
+                        self.in_deinit = saved;
+                        checked
+                    });
+                    items.push(CheckedItem::Class {
+                        name: cname,
+                        fields,
+                        methods,
+                        constructions,
+                        deinit,
+                    });
                 }
+                ast::Item::Structure(s) => items.push(CheckedItem::Structure(CheckedStructure {
+                    name: s.name.display(),
+                    fields: s
+                        .fields
+                        .iter()
+                        .map(|f| {
+                            (
+                                f.name.display(),
+                                self.user_type((&f.ty).into()),
+                                f.name.span,
+                            )
+                        })
+                        .collect(),
+                })),
                 ast::Item::Kind(k) => {
                     let name = k.name.display();
                     let variants: Vec<(String, Vec<(String, Type, Span)>, Span)> = k
@@ -593,7 +1002,10 @@ impl<'a> Checker<'a> {
                             )
                         })
                         .collect();
-                    items.push(CheckedItem::Kind(CheckedKind { name: name.clone(), variants }))
+                    items.push(CheckedItem::Kind(CheckedKind {
+                        name: name.clone(),
+                        variants,
+                    }))
                 }
                 // Aliases carry no runtime or HIR presence (transparent,
                 // 8.4): they were fully consumed by the type tables.
@@ -612,12 +1024,51 @@ impl<'a> Checker<'a> {
             callee_spans: std::mem::take(&mut self.callee_spans),
             read_spans: std::mem::take(&mut self.read_spans),
             lambda_bodies: std::mem::take(&mut self.lambda_bodies),
+            iface_dispatch: self.iface_dispatch_tables(),
         }
+    }
+
+    /// 12.3's shared vtable source: for every interface with at least one
+    /// requirement, every class whose `does` claims satisfy it maps to the
+    /// callee that implements the requirement for that class (own method,
+    /// inherited through the base chain, or a copied default — the same
+    /// resolution 10.6 uses for dispatch on concrete receivers). One table
+    /// per interface, sorted by class name, consumed identically by both
+    /// backends — the parity guarantee for body-side method dispatch.
+    fn iface_dispatch_tables(&self) -> Vec<(String, Vec<(String, String)>)> {
+        let mut out: Vec<(String, Vec<(String, String)>)> = Vec::new();
+        let mut names: Vec<&String> = self.interfaces.keys().collect();
+        names.sort();
+        for iname in names {
+            let reqs = &self.interfaces[iname];
+            if reqs.is_empty() {
+                continue;
+            }
+            let mut entries: Vec<(String, String)> = Vec::new();
+            let mut classes: Vec<&String> = self.class_ifaces.keys().collect();
+            classes.sort();
+            for cname in classes {
+                let claims = &self.class_ifaces[cname];
+                if !claims.iter().any(|(n, _)| n == iname) {
+                    continue;
+                }
+                for r in reqs {
+                    if let Some(callee) = self.resolve_inherited_method(cname, r) {
+                        entries.push((cname.clone(), callee));
+                    }
+                }
+            }
+            out.push((iname.clone(), entries));
+        }
+        out
     }
 
     fn register_use(&mut self, u: &ast::UseDecl) {
         let module = u.module.display();
-        if !matches!(module.as_str(), "math" | "random" | "standard" | "files" | "json") {
+        if !matches!(
+            module.as_str(),
+            "math" | "random" | "standard" | "files" | "json"
+        ) {
             self.diags.push(
                 Diagnostic::error(
                     "E0340",
@@ -638,7 +1089,9 @@ impl<'a> Checker<'a> {
     /// real type (structure/kind) is E0372.
     fn register_type_alias(&mut self, a: &ast::TypeAliasDecl) {
         let name = a.name.display();
-        if self.aliases.contains_key(&name) || self.structs.contains_key(&name) || self.kinds.contains_key(&name)
+        if self.aliases.contains_key(&name)
+            || self.structs.contains_key(&name)
+            || self.kinds.contains_key(&name)
         {
             self.diags.push(
                 Diagnostic::error(
@@ -646,7 +1099,9 @@ impl<'a> Checker<'a> {
                     format!("There is already a type called `{name}`."),
                     a.name.span,
                 )
-                .with_explanation("Each type name can mean only one type — a new name needs new words."),
+                .with_explanation(
+                    "Each type name can mean only one type — a new name needs new words.",
+                ),
             );
             return;
         }
@@ -663,7 +1118,11 @@ impl<'a> Checker<'a> {
     fn resolve_alias_table(&mut self) {
         // Spans for cycle diagnostics (borrowed from the AST during pass 1).
         let alias_spans: HashMap<String, Span> = self.pending_alias_spans.drain().collect();
-        let raw: Vec<(String, Type)> = self.aliases.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let raw: Vec<(String, Type)> = self
+            .aliases
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         // Unknown targets (E0373): the words after `is a` must name a type
         // that exists — a builtin, a structure, a kind, or another alias.
         // Diagnosed on the alias line, where the mistake is; the alias is
@@ -687,7 +1146,10 @@ impl<'a> Checker<'a> {
         for name in &unknown {
             self.aliases.remove(name);
         }
-        let raw: Vec<(String, Type)> = raw.into_iter().filter(|(n, _)| !unknown.contains(n)).collect();
+        let raw: Vec<(String, Type)> = raw
+            .into_iter()
+            .filter(|(n, _)| !unknown.contains(n))
+            .collect();
         let mut resolved: HashMap<String, Type> = HashMap::new();
         let mut cyclic: Vec<String> = Vec::new();
         for (name, _) in &raw {
@@ -773,7 +1235,9 @@ impl<'a> Checker<'a> {
                 inner
             }
             Type::Struct(name) if self.kinds.contains_key(&name) => Type::Kind(name),
-            Type::List(e) => Type::List(Box::new(self.resolve_type_alias_refs(*e, raw, resolved, stack)?)),
+            Type::List(e) => Type::List(Box::new(
+                self.resolve_type_alias_refs(*e, raw, resolved, stack)?,
+            )),
             Type::Map(k, v) => Type::Map(
                 Box::new(self.resolve_type_alias_refs(*k, raw, resolved, stack)?),
                 Box::new(self.resolve_type_alias_refs(*v, raw, resolved, stack)?),
@@ -782,9 +1246,13 @@ impl<'a> Checker<'a> {
                 Box::new(self.resolve_type_alias_refs(*a, raw, resolved, stack)?),
                 Box::new(self.resolve_type_alias_refs(*b, raw, resolved, stack)?),
             ),
-            Type::Option(e) => Type::Option(Box::new(self.resolve_type_alias_refs(*e, raw, resolved, stack)?)),
+            Type::Option(e) => Type::Option(Box::new(
+                self.resolve_type_alias_refs(*e, raw, resolved, stack)?,
+            )),
             Type::Function(ps, r) => Type::Function(
-                ps.into_iter().map(|p| self.resolve_type_alias_refs(p, raw, resolved, stack)).collect::<Result<Vec<_>, ()>>()?,
+                ps.into_iter()
+                    .map(|p| self.resolve_type_alias_refs(p, raw, resolved, stack))
+                    .collect::<Result<Vec<_>, ()>>()?,
                 Box::new(self.resolve_type_alias_refs(*r, raw, resolved, stack)?),
             ),
             other => other,
@@ -796,45 +1264,378 @@ impl<'a> Checker<'a> {
         // Kinds are registered in this same pass; rewrite kind-typed params
         // when the kind declaration precedes the function (7.13: order-free
         // file resolution is repaired by the same rewrite in check_function).
-        let params: Vec<Type> = f.params.iter().map(|p| self.user_type((&p.ty).into())).collect();
-        let ret = f.returns.as_ref().map(|t| self.user_type(t.into())).unwrap_or(Type::Error);
+        let params: Vec<Type> = f
+            .params
+            .iter()
+            .map(|p| self.user_type((&p.ty).into()))
+            .collect();
+        let ret = f
+            .returns
+            .as_ref()
+            .map(|t| self.user_type(t.into()))
+            .unwrap_or(Type::Error);
         if self.functions.contains_key(&name) {
-            self.diags.push(
-                Diagnostic::error(
-                    "E0341",
-                    format!("There is already a function called `{name}`."),
-                    f.name.span,
-                ),
-            );
+            self.diags.push(Diagnostic::error(
+                "E0341",
+                format!("There is already a function called `{name}`."),
+                f.name.span,
+            ));
             return;
         }
         self.functions.insert(
             name,
-            Callable { params, ret, can_fail: f.can_fail, origin: Origin::User },
+            Callable {
+                params,
+                ret,
+                can_fail: f.can_fail,
+                origin: Origin::User,
+            },
         );
     }
 
     fn register_structure(&mut self, s: &ast::StructureDecl) {
         let name = s.name.display();
         if self.structs.contains_key(&name) {
-            self.diags.push(
-                Diagnostic::error(
-                    "E0341",
-                    format!("There is already a structure called `{name}`."),
-                    s.name.span,
-                ),
-            );
+            self.diags.push(Diagnostic::error(
+                "E0341",
+                format!("There is already a structure called `{name}`."),
+                s.name.span,
+            ));
             return;
         }
         let fields: Vec<(String, Type, Span)> = s
             .fields
             .iter()
-            .map(|f| (f.name.display(), self.user_type((&f.ty).into()), f.name.span))
+            .map(|f| {
+                (
+                    f.name.display(),
+                    self.user_type((&f.ty).into()),
+                    f.name.span,
+                )
+            })
             .collect();
         self.structs.insert(
             name,
-            CheckedStructure { name: s.name.display(), fields: fields.clone() },
+            CheckedStructure {
+                name: s.name.display(),
+                fields: fields.clone(),
+            },
         );
+    }
+
+    /// `class` registration (10.2): the field table (checked like a
+    /// structure's) plus the class-name collision rule — one namespace with
+    /// structures, functions, and kinds.
+    fn register_class(&mut self, c: &ast::ClassDecl) {
+        let name = c.name.display();
+        if self.structs.contains_key(&name) || self.classes.contains_key(&name) {
+            self.diags.push(Diagnostic::error(
+                "E0341",
+                format!("There is already a type called `{name}`."),
+                c.name.span,
+            ));
+            return;
+        }
+        // 10.5/10.6: record the base link and the conformance claims now;
+        // validation (base exists, no cycles, requirements met) runs once
+        // every interface and class is registered — order-free, like alias
+        // resolution.
+        if let Some(base) = &c.extends {
+            // Recorded unconditionally — self-`extends` is the trivial
+            // cycle, and validate_class_headers's chain walk reports it.
+            self.class_base
+                .insert(name.clone(), (base.display(), base.span));
+        }
+        let claims: Vec<(String, Span)> = c.does.iter().map(|n| (n.display(), n.span)).collect();
+        self.class_ifaces.insert(name.clone(), claims);
+        let fields: Vec<(String, Type, Span)> = c
+            .fields
+            .iter()
+            .map(|f| {
+                (
+                    f.name.display(),
+                    self.user_type((&f.ty).into()),
+                    f.name.span,
+                )
+            })
+            .collect();
+        self.classes.insert(
+            name,
+            CheckedStructure {
+                name: c.name.display(),
+                fields,
+            },
+        );
+    }
+
+    /// 10.6 interface registration: the requirement names (every `can`
+    /// line, body or not).
+    /// 12.3's `iface <I> <m>` callables: the vtable call's static signature.
+    /// Every interface requirement gets one, so body-side dispatch on a
+    /// constrained parameter resolves through the ordinary sig path (arity,
+    /// argument types, failure) exactly like any other call.
+    fn register_iface_callables(&mut self) {
+        let entries: Vec<(String, Vec<String>)> = self
+            .interfaces
+            .iter()
+            .map(|(i, reqs)| (i.clone(), reqs.clone()))
+            .collect();
+        for (iname, reqs) in entries {
+            for r in reqs {
+                // The interface's own default declaration carries the real
+                // signature (a requirement with no body has the receiver plus
+                // whatever `takes` clauses the frozen grammar allowed — only
+                // the receiver is knowable without a body).
+                let decl_name = format!("method {iname} {r}");
+                let sig = self.functions.get(&decl_name).cloned();
+                let callable = match sig {
+                    Some(mut c) => {
+                        // Re-type the receiver to the constraint.
+                        if !c.params.is_empty() {
+                            c.params[0] = Type::Iface(iname.clone());
+                        }
+                        c.origin = Origin::User;
+                        c
+                    }
+                    None => Callable {
+                        params: vec![Type::Iface(iname.clone())],
+                        ret: Type::Error,
+                        can_fail: false,
+                        origin: Origin::User,
+                    },
+                };
+                let callee = format!("iface {iname} {r}");
+                if !self.functions.contains_key(&callee) {
+                    self.functions.insert(callee, callable);
+                }
+            }
+        }
+    }
+
+    fn register_interface(&mut self, i: &ast::InterfaceDecl) {
+        let name = i.name.display();
+        if self.interfaces.contains_key(&name) || self.classes.contains_key(&name) {
+            self.diags.push(Diagnostic::error(
+                "E0341",
+                format!("There is already a type or interface called `{name}`."),
+                i.name.span,
+            ));
+            return;
+        }
+        let reqs: Vec<String> = i.methods.iter().map(|(n, _)| n.display()).collect();
+        self.interfaces.insert(name.clone(), reqs);
+        // 10.6: default bodies (`can <name>` WITH a body on the interface)
+        // satisfy the requirement for any claiming class.
+        let defaults: Vec<ast::FunctionDecl> = i
+            .methods
+            .iter()
+            .filter_map(|(_, d)| d.as_ref().cloned())
+            .collect();
+        if !defaults.is_empty() {
+            // The default's signature registers under the interface's own
+            // method name (`method <iface> <name>`) so the 12.3 `iface <I>
+            // <m>` dispatch callable can borrow its real shape (the copy to
+            // a conforming class re-types the receiver later).
+            for d in &defaults {
+                self.register_function_sig(d);
+            }
+            self.interface_defaults.insert(name, defaults);
+        }
+    }
+
+    /// 10.5/10.6 header validation, run once everything is registered:
+    /// each `does` claim names an interface the class's own methods (plus
+    /// the interface's defaults, plus inherited methods) satisfy, and each
+    /// `extends` names a class without a cycle.
+    fn validate_class_headers(&mut self) {
+        let claims = self.class_ifaces.clone();
+        for (cname, ifaces) in &claims {
+            let mut seen: Vec<String> = Vec::new();
+            for (iname, ispan) in ifaces {
+                if seen.contains(iname) {
+                    self.diags.push(Diagnostic::error(
+                        "E0381",
+                        format!("`{cname}` claims `{iname}` twice."),
+                        *ispan,
+                    )
+                    .with_explanation(
+                        "Each interface is claimed once in a class's `does` list — one promise per interface is enough.",
+                    ));
+                    continue;
+                }
+                seen.push(iname.clone());
+                let Some(reqs) = self.interfaces.get(iname).cloned() else {
+                    self.diags.push(
+                        Diagnostic::error(
+                            "E0379",
+                            format!(
+                                "`{cname}` does `{iname}`, but there is no interface called `{iname}`."
+                            ),
+                            *ispan,
+                        )
+                        .with_explanation(
+                            "`does` names an interface declared with `interface` in this program — check the spelling (or add the declaration).",
+                        ),
+                    );
+                    continue;
+                };
+                let mut missing: Option<String> = None;
+                for r in &reqs {
+                    let own = self.functions.contains_key(&format!("method {cname} {r}"));
+                    // 10.6: a requirement with a default body on the
+                    // interface itself counts as already written.
+                    let default = self.interface_defaults.get(iname).map_or(false, |ds| {
+                        ds.iter().any(|d| {
+                            d.name
+                                .display()
+                                .strip_prefix("method ")
+                                .map_or(false, |rest| {
+                                    rest.split_once(' ').map_or(false, |(_, m)| m == r)
+                                })
+                        })
+                    });
+                    let inherited = self.class_base.get(cname).map_or(false, |(b, _)| {
+                        self.functions.contains_key(&format!("method {b} {r}"))
+                    });
+                    if !own && !default && !inherited {
+                        missing = Some(r.clone());
+                        break;
+                    }
+                }
+                if let Some(m) = missing {
+                    self.diags.push(
+                        Diagnostic::error(
+                            "E0378",
+                            format!(
+                                "`{cname}` says it `does {iname}`, but it has no `can {m}` method."
+                            ),
+                            *ispan,
+                        )
+                        .with_note(format!("the interface needs: {}", reqs.join(", ")))
+                        .with_explanation(
+                            "An interface is a promise: every method it lists must exist on the class — write the missing `can` method (or drop the `does` claim). A `can` line with a body on the interface itself counts as already written.",
+                        ),
+                    );
+                }
+            }
+        }
+        // `extends` targets exist (E0380).
+        let bases = self.class_base.clone();
+        for (cname, (bname, bspan)) in &bases {
+            if !self.classes.contains_key(bname) {
+                self.diags.push(
+                    Diagnostic::error(
+                        "E0380",
+                        format!(
+                            "`{cname}` extends `{bname}`, but there is no class called `{bname}`."
+                        ),
+                        *bspan,
+                    )
+                    .with_explanation(
+                        "`extends` names a class declared with `class` in this program — check the spelling.",
+                    ),
+                );
+            }
+        }
+        // No inheritance cycles (10.5 is single inheritance, so a cycle is a
+        // chain back to the class itself).
+        let names: Vec<String> = self.classes.keys().cloned().collect();
+        for cname in &names {
+            let mut cur = cname.clone();
+            let mut hops = 0usize;
+            while let Some((next, span)) = self.class_base.get(&cur).cloned() {
+                hops += 1;
+                if &next == cname {
+                    self.diags.push(Diagnostic::error(
+                        "E0380",
+                        format!(
+                            "`{cname}` extends itself through the chain of `extends` — inheritance must not loop."
+                        ),
+                        span,
+                    ));
+                    break;
+                }
+                if hops > bases.len() {
+                    break;
+                }
+                cur = next;
+            }
+        }
+        // 10.5: prefix-copy inherited construction clauses too — building a
+        // subclass with the base's clause dispatches through it (D-14 name
+        // matching then reads the subclass's merged field table). The
+        // subclass's own clause with the same function name wins.
+        let names: Vec<String> = self.classes.keys().cloned().collect();
+        for cname in &names {
+            let own: Vec<String> = self
+                .ctor_clauses
+                .iter()
+                .filter(|(c, _, _)| c == cname)
+                .map(|(_, f, _)| f.clone())
+                .collect();
+            let mut inherited: Vec<(String, Vec<String>)> = Vec::new();
+            let mut cur = cname.clone();
+            let mut hops = 0usize;
+            while hops <= self.class_base.len() {
+                match self.class_base.get(&cur) {
+                    Some((base, _)) => {
+                        for (_, f, pn) in self.ctor_clauses.iter().filter(|(c, _, _)| c == base) {
+                            if !own.contains(f) && !inherited.iter().any(|(af, _)| af == f) {
+                                inherited.push((f.clone(), pn.clone()));
+                            }
+                        }
+                        cur = base.clone();
+                    }
+                    None => break,
+                }
+                hops += 1;
+            }
+            for (f, pn) in inherited {
+                self.ctor_clauses.push((cname.clone(), f, pn));
+            }
+        }
+        // 10.5: prefix-copy inherited fields into each subclass's field
+        // table (base fields first, then the class's own). Backends index
+        // positionally, so the object layout must be complete at check
+        // time; field writes in base-class bodies keep indexing the shared
+        // prefix (same names, same relative positions).
+        let names: Vec<String> = self.classes.keys().cloned().collect();
+        for cname in &names {
+            let inherited: Vec<(String, Type, Span)> = {
+                let mut acc: Vec<(String, Type, Span)> = Vec::new();
+                let mut chain: Vec<String> = Vec::new();
+                let mut cur = cname.clone();
+                // Bounded like the cycle walk above: a (already-reported)
+                // inheritance loop must not hang the field copy.
+                let mut hops = 0usize;
+                while hops <= self.class_base.len() {
+                    match self.class_base.get(&cur) {
+                        Some((base, _)) => {
+                            chain.push(base.clone());
+                            cur = base.clone();
+                        }
+                        None => break,
+                    }
+                    hops += 1;
+                }
+                for base in chain.iter().rev() {
+                    if let Some(fields) = self.classes.get(base) {
+                        acc.extend(fields.fields.iter().cloned());
+                    }
+                }
+                acc
+            };
+            if !inherited.is_empty() {
+                if let Some(fields) = self.classes.get_mut(cname) {
+                    let own: Vec<String> =
+                        fields.fields.iter().map(|(n, _, _)| n.clone()).collect();
+                    let mut merged = inherited;
+                    merged.retain(|(n, _, _)| !own.contains(n));
+                    merged.extend(fields.fields.drain(..));
+                    fields.fields = merged;
+                }
+            }
+        }
     }
 
     /// `kind` registration (7.12). A kind name is distinct from structure
@@ -845,13 +1646,11 @@ impl<'a> Checker<'a> {
     fn register_kind(&mut self, k: &ast::KindDecl) {
         let name = k.name.display();
         if self.kinds.contains_key(&name) || self.structs.contains_key(&name) {
-            self.diags.push(
-                Diagnostic::error(
-                    "E0341",
-                    format!("There is already a type called `{name}`."),
-                    k.name.span,
-                ),
-            );
+            self.diags.push(Diagnostic::error(
+                "E0341",
+                format!("There is already a type called `{name}`."),
+                k.name.span,
+            ));
             return;
         }
         let mut variants: Vec<(String, Vec<(String, Type, Span)>, Span)> = Vec::new();
@@ -879,7 +1678,10 @@ impl<'a> Checker<'a> {
         }
         self.kinds.insert(
             name,
-            CheckedKind { name: k.name.display(), variants: variants.clone() },
+            CheckedKind {
+                name: k.name.display(),
+                variants: variants.clone(),
+            },
         );
     }
 
@@ -901,18 +1703,20 @@ impl<'a> Checker<'a> {
             // terminates). Shadowing a *structure/kind* name is diagnosed at
             // registration, so a raw `Type::Struct(name)` here is a real
             // struct/kind reference, never an alias.
-            Type::Struct(name) if self.aliases.contains_key(&name) => self
-                .aliases
-                .get(&name)
-                .cloned()
-                .unwrap_or(Type::Error),
+            Type::Struct(name) if self.aliases.contains_key(&name) => {
+                self.aliases.get(&name).cloned().unwrap_or(Type::Error)
+            }
             Type::Struct(name) if self.kinds.contains_key(&name) => Type::Kind(name),
             // Alias/kind references resolve at any depth — `a list of score`
             // and `a list of shape` are types the same way their elements
             // are.
             Type::List(e) => Type::List(Box::new(self.user_type(*e))),
-            Type::Map(k, v) => Type::Map(Box::new(self.user_type(*k)), Box::new(self.user_type(*v))),
-            Type::Pair(a, b) => Type::Pair(Box::new(self.user_type(*a)), Box::new(self.user_type(*b))),
+            Type::Map(k, v) => {
+                Type::Map(Box::new(self.user_type(*k)), Box::new(self.user_type(*v)))
+            }
+            Type::Pair(a, b) => {
+                Type::Pair(Box::new(self.user_type(*a)), Box::new(self.user_type(*b)))
+            }
             Type::Option(e) => Type::Option(Box::new(self.user_type(*e))),
             Type::Function(ps, r) => Type::Function(
                 ps.into_iter().map(|p| self.user_type(p)).collect(),
@@ -922,15 +1726,121 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn check_function(&mut self, f: &ast::FunctionDecl) -> CheckedFunction {
+    /// 10.3's Swift rule, enforced on the clause body (the direct
+    /// field-initialization spelling checks its own at the construction
+    /// site): every field must be set exactly once before the implicit
+    /// `gives back myself` runs. "Set twice" is the same bug in both
+    /// spellings; "missing" reports which fields the body never set.
+    fn check_ctor_body_initialization(&mut self, f: &ast::FunctionDecl, cname: &str) {
+        let Some(def) = self.classes.get(cname).cloned() else {
+            return;
+        };
+        let receiver = f
+            .params
+            .first()
+            .map(|p| p.name.display())
+            .unwrap_or_default();
+        for stmt in &f.body.stmts {
+            let Stmt::Set { target, .. } = stmt else {
+                continue;
+            };
+            // Two accepted shapes (both spellings set a field):
+            //   `set <field> of myself to …` — the explicit form;
+            //   `set <field> to …`          — the implicit-receiver form
+            // (10.2: bare field names in method/construction bodies read and
+            // write the receiver's fields).
+            let fname: Option<String> = if target.accessors.len() == 1 {
+                match target.accessors.first() {
+                    Some(Accessor::Of { field, .. }) if field.display() == receiver => {
+                        Some(target.base.display())
+                    }
+                    _ => None,
+                }
+            } else if target.accessors.is_empty()
+                && target.base.words.len() == 1
+                && def
+                    .fields
+                    .iter()
+                    .any(|(n, _, _)| n == &target.base.display())
+            {
+                Some(target.base.display())
+            } else {
+                None
+            };
+            let Some(fname) = fname else { continue };
+            if def.fields.iter().any(|(n, _, _)| n == &fname) {
+                if let Some((_, _, count)) = self
+                    .ctor_sets
+                    .iter_mut()
+                    .find(|(sf, sn, _)| sf == &f.name.display() && sn == &fname)
+                {
+                    *count += 1;
+                }
+            }
+        }
+        let fname = f.name.display();
+        for (n, _, fspan) in &def.fields {
+            let sets = self
+                .ctor_sets
+                .iter()
+                .filter(|(f, name, _)| f == &fname && name == n)
+                .map(|(_, _, c)| *c)
+                .sum::<usize>();
+            if sets == 0 {
+                self.diags.push(
+                    Diagnostic::error(
+                        "E0349",
+                        format!("This construction never sets `{n}` — a new {cname} would start without it."),
+                        *fspan,
+                    )
+                    .with_fix(format!("set {n} of myself to …"))
+                    // The fix-why states the invariant, distinct from the
+                    // what-happens explanation above it.
+                    .with_fix_why(
+                        "every field needs a value before any method can run — the object would otherwise be read before it was whole",
+                    )
+                    .with_explanation(
+                        "A `construction` clause must give every field a value in its body — the Swift rule (10.3).",
+                    ),
+                );
+            } else if sets > 1 {
+                self.diags.push(
+                    Diagnostic::error(
+                        "E0350",
+                        format!("This construction sets `{n}` {} times.", sets),
+                        f.name.span,
+                    )
+                    .with_explanation(
+                        "A construction sets each field once — a field needs one value.",
+                    ),
+                );
+            }
+        }
+    }
+
+    /// Overrides applied when checking a function: a re-targeted name (10.6's
+    /// default-body copy lands under the *class's* method name) and/or a
+    /// re-typed receiver (`myself` becomes the conforming class).
+    fn check_function_with(
+        &mut self,
+        f: &ast::FunctionDecl,
+        ov: Option<&FnOverride>,
+    ) -> CheckedFunction {
         let params: Vec<CheckedParam> = f
             .params
             .iter()
-            .map(|p| {
+            .enumerate()
+            .map(|(i, p)| {
                 let raw: Type = (&p.ty).into();
+                let mut ty = self.user_type(raw);
+                if i == 0 {
+                    if let Some(t) = ov.and_then(|o| o.recv_ty.as_ref()) {
+                        ty = t.clone();
+                    }
+                }
                 CheckedParam {
                     name: p.name.display(),
-                    ty: self.user_type(raw),
+                    ty,
                     span: p.name.span,
                 }
             })
@@ -942,6 +1852,32 @@ impl<'a> Checker<'a> {
         self.current_returns = ret.clone();
         self.current_can_fail = f.can_fail;
         self.current_body = Body::Function;
+        // 14.2: each function is its own task region — the join-needs-spawn
+        // flag resets here and after every nested body check.
+        self.current_fn_display = f.name.display();
+        self.saw_spawn_in_body = false;
+        // 10.2: a receiver-first function is a method — bare field names in
+        // the body read the receiver's fields, typed by the (possibly
+        // overridden) receiver type.
+        let saved_method_class = self.current_method_class.take();
+        if let Some(p) = params.first() {
+            if let Type::Struct(s) = &p.ty {
+                if self.classes.contains_key(s) {
+                    self.current_method_class = Some(s.clone());
+                }
+            }
+        }
+        // 10.5's calling-up note: inside an override, `speak of myself`
+        // means the BASE's method. The checked method's full name tells the
+        // call resolver which `method <class> <name>` callee to skip.
+        let saved_checked = self.current_checked_name.take();
+        let eff_name = ov
+            .and_then(|o| o.name.as_ref())
+            .cloned()
+            .unwrap_or_else(|| f.name.display());
+        if self.current_method_class.is_some() || eff_name.starts_with("iface ") {
+            self.current_checked_name = Some(eff_name);
+        }
         self.push_scope();
         // §7.0.3: rejecting a parameter that prefix-shadows an existing name
         // happens at *declaration* time. Parameters live in the function scope.
@@ -965,8 +1901,12 @@ impl<'a> Checker<'a> {
         self.pop_scope();
         self.current_returns = None;
         self.current_can_fail = false;
+        self.current_method_class = saved_method_class;
+        self.current_checked_name = saved_checked;
         CheckedFunction {
-            name: f.name.display(),
+            name: ov
+                .and_then(|o| o.name.clone())
+                .unwrap_or_else(|| f.name.display()),
             name_span: f.name.span,
             params,
             returns: ret,
@@ -976,10 +1916,16 @@ impl<'a> Checker<'a> {
         }
     }
 
+    fn check_function(&mut self, f: &ast::FunctionDecl) -> CheckedFunction {
+        self.check_function_with(f, None)
+    }
+
     fn check_test(&mut self, t: &ast::TestDecl) -> CheckedFunction {
         self.current_returns = None;
         self.current_can_fail = false;
         self.current_body = Body::Test;
+        self.current_fn_display = t.name.clone();
+        self.saw_spawn_in_body = false;
         self.push_scope();
         let body = self.check_block_stmts(&t.body);
         self.pop_scope();
@@ -999,7 +1945,10 @@ impl<'a> Checker<'a> {
     // -----------------------------------------------------------------------
 
     fn push_scope(&mut self) {
-        self.scopes.push(Scope { bindings: HashMap::new(), order: Vec::new() });
+        self.scopes.push(Scope {
+            bindings: HashMap::new(),
+            order: Vec::new(),
+        });
     }
 
     fn pop_scope(&mut self) {
@@ -1026,7 +1975,9 @@ impl<'a> Checker<'a> {
                     .with_note(String::from("a different name would read more clearly")),
                 );
                 // The shadowing binding wins inside this scope.
-                scope.bindings.insert(name.to_string(), Binding { ty, mutable, span });
+                scope
+                    .bindings
+                    .insert(name.to_string(), Binding { ty, mutable, span });
                 return;
             }
             self.diags.push(
@@ -1040,10 +1991,9 @@ impl<'a> Checker<'a> {
             return;
         }
         // Prefix ambiguity (7.0.3): `top` vs `top score`.
-        let prefix_clash = scope
-            .bindings
-            .keys()
-            .any(|k| k.starts_with(&(name.to_string() + " ")) || name.starts_with(&(k.clone() + " ")));
+        let prefix_clash = scope.bindings.keys().any(|k| {
+            k.starts_with(&(name.to_string() + " ")) || name.starts_with(&(k.clone() + " "))
+        });
         if prefix_clash {
             let other = scope
                 .bindings
@@ -1064,7 +2014,9 @@ impl<'a> Checker<'a> {
                 .with_fix("rename one of them"),
             );
         }
-        scope.bindings.insert(name.to_string(), Binding { ty, mutable, span });
+        scope
+            .bindings
+            .insert(name.to_string(), Binding { ty, mutable, span });
         scope.order.push(name.to_string());
     }
 
@@ -1073,7 +2025,11 @@ impl<'a> Checker<'a> {
         // `is nothing` test, the name reads as the option's inner type.
         for (n, ty) in self.narrowed.iter().rev() {
             if n == name {
-                return Some(Binding { ty: ty.clone(), mutable: false, span: Span::default() });
+                return Some(Binding {
+                    ty: ty.clone(),
+                    mutable: false,
+                    span: Span::default(),
+                });
             }
         }
         for scope in self.scopes.iter().rev() {
@@ -1124,7 +2080,13 @@ impl<'a> Checker<'a> {
 
     fn check_stmt(&mut self, s: &ast::Stmt) -> CheckedStmt {
         match s {
-            Stmt::Make { mutable, name, value, annotation, span } => {
+            Stmt::Make {
+                mutable,
+                name,
+                value,
+                annotation,
+                span,
+            } => {
                 // The annotation resolves aliases (8.4) like every type
                 // position — `of type score` and `of type number` are one.
                 let expected = annotation.as_ref().map(|t| self.user_type(t.into()));
@@ -1151,21 +2113,41 @@ impl<'a> Checker<'a> {
                 }
                 self.declare(&name.display(), vt.ty.clone(), *mutable, name.span);
                 CheckedStmt {
-                    kind: CheckedStmtKind::Make { mutable: *mutable, name: name.display(), value: vt },
+                    kind: CheckedStmtKind::Make {
+                        mutable: *mutable,
+                        name: name.display(),
+                        value: vt,
+                    },
                     span: *span,
                 }
             }
-            Stmt::Set { target, value, span } => {
+            Stmt::Set {
+                target,
+                value,
+                span,
+            } => {
                 let tt = self.check_target(target, "`set`");
                 let vt = self.check_expr(value, Some(&tt.ty));
                 self.require_assignable(&tt.ty, &vt, "`set`");
                 CheckedStmt {
-                    kind: CheckedStmtKind::Set { target: tt, value: vt },
+                    kind: CheckedStmtKind::Set {
+                        target: tt,
+                        value: vt,
+                    },
                     span: *span,
                 }
             }
-            Stmt::Change { decrease, target, value, span } => {
-                let what = if *decrease { "`decrease`" } else { "`increase`" };
+            Stmt::Change {
+                decrease,
+                target,
+                value,
+                span,
+            } => {
+                let what = if *decrease {
+                    "`decrease`"
+                } else {
+                    "`increase`"
+                };
                 let tt = self.check_target(target, what);
                 let vt = self.check_expr(value, Some(&Type::Number));
                 // increase/decrease: target and amount must be numeric (7.2).
@@ -1173,27 +2155,44 @@ impl<'a> Checker<'a> {
                     self.diags.push(
                         Diagnostic::error(
                             "E0334",
-                            format!("{} needs a number to change, but `{}` is {}.", what.trim_matches('`'), tt.base, tt.ty.display()),
+                            format!(
+                                "{} needs a number to change, but `{}` is {}.",
+                                what.trim_matches('`'),
+                                tt.base,
+                                tt.ty.display()
+                            ),
                             tt.span,
                         )
-                        .with_explanation("`increase` and `decrease` change a number by another number."),
-                    );
-                }
-                if !vt.ty.is_numeric() && !matches!(vt.ty, Type::Error) {
-                    self.diags.push(
-                        Diagnostic::error(
-                            "E0334",
-                            format!("{} needs a number, but the amount is {}.", what.trim_matches('`'), vt.ty.display()),
-                            vt.span(),
+                        .with_explanation(
+                            "`increase` and `decrease` change a number by another number.",
                         ),
                     );
                 }
+                if !vt.ty.is_numeric() && !matches!(vt.ty, Type::Error) {
+                    self.diags.push(Diagnostic::error(
+                        "E0334",
+                        format!(
+                            "{} needs a number, but the amount is {}.",
+                            what.trim_matches('`'),
+                            vt.ty.display()
+                        ),
+                        vt.span(),
+                    ));
+                }
                 CheckedStmt {
-                    kind: CheckedStmtKind::Change { decrease: *decrease, target: tt, value: vt },
+                    kind: CheckedStmtKind::Change {
+                        decrease: *decrease,
+                        target: tt,
+                        value: vt,
+                    },
                     span: *span,
                 }
             }
-            Stmt::If { branches, otherwise, span } => {
+            Stmt::If {
+                branches,
+                otherwise,
+                span,
+            } => {
                 let mut out_branches = Vec::new();
                 for (cond, block) in branches {
                     let ct = self.check_expr(cond, Some(&Type::Boolean));
@@ -1209,7 +2208,13 @@ impl<'a> Checker<'a> {
                 let narrowed = otherwise.as_ref().and_then(|_| {
                     branches.first().and_then(|(cond, _)| {
                         // The parser desugars `x is nothing` to `x == nothing`.
-                        if let ast::Expr::Binary { op: ast::BinOp::Equal, left, right, .. } = cond {
+                        if let ast::Expr::Binary {
+                            op: ast::BinOp::Equal,
+                            left,
+                            right,
+                            ..
+                        } = cond
+                        {
                             if let (ast::Expr::Name { name, .. }, ast::Expr::Nothing { .. }) =
                                 (left.as_ref(), right.as_ref())
                             {
@@ -1231,7 +2236,10 @@ impl<'a> Checker<'a> {
                     out
                 });
                 CheckedStmt {
-                    kind: CheckedStmtKind::If { branches: out_branches, otherwise: out_otherwise },
+                    kind: CheckedStmtKind::If {
+                        branches: out_branches,
+                        otherwise: out_otherwise,
+                    },
                     span: *span,
                 }
             }
@@ -1239,52 +2247,85 @@ impl<'a> Checker<'a> {
             Stmt::Stop { span } => {
                 if self.loop_depth == 0 {
                     self.diags.push(
-                        Diagnostic::error("E0335", "`stop` only works inside a `repeat` loop.", *span)
-                            .with_explanation("`stop` ends the turn of the loop it is inside."),
+                        Diagnostic::error(
+                            "E0335",
+                            "`stop` only works inside a `repeat` loop.",
+                            *span,
+                        )
+                        .with_explanation("`stop` ends the turn of the loop it is inside."),
                     );
                 }
-                CheckedStmt { kind: CheckedStmtKind::Stop, span: *span }
+                CheckedStmt {
+                    kind: CheckedStmtKind::Stop,
+                    span: *span,
+                }
             }
             Stmt::Next { span } => {
                 if self.loop_depth == 0 {
                     self.diags.push(
-                        Diagnostic::error("E0335", "`next` only works inside a `repeat` loop.", *span)
-                            .with_explanation("`next` jumps to the loop's next turn."),
+                        Diagnostic::error(
+                            "E0335",
+                            "`next` only works inside a `repeat` loop.",
+                            *span,
+                        )
+                        .with_explanation("`next` jumps to the loop's next turn."),
                     );
                 }
-                CheckedStmt { kind: CheckedStmtKind::Next, span: *span }
+                CheckedStmt {
+                    kind: CheckedStmtKind::Next,
+                    span: *span,
+                }
             }
             Stmt::GiveBack { value, span } => {
                 let ret = self.current_returns.clone();
                 match (&ret, self.current_body) {
-                (Some(rt), Body::Function) => {
-                    let vt = if matches!(rt, Type::Error) {
-                        self.check_expr(value, None)
-                    } else {
-                        self.check_expr(value, Some(rt))
-                    };
-                    self.require_assignable(rt, &vt, "`gives back`");
-                    CheckedStmt { kind: CheckedStmtKind::GiveBack { value: vt }, span: *span }
-                }
-                // §7.8: `returns` is optional — inferred when absent (D-11's
-                // inference-first rule applied to signatures).
-                (None, Body::Function) => {
-                    let vt = self.check_expr(value, None);
-                    CheckedStmt { kind: CheckedStmtKind::GiveBack { value: vt }, span: *span }
-                }
-                _ => {
-                    self.diags.push(
-                        Diagnostic::error("E0336", "`gives back` only works inside a function.", *span)
-                            .with_explanation("Tests and top-level statements do not return values."),
-                    );
-                    let vt = self.check_expr(value, None);
-                    CheckedStmt { kind: CheckedStmtKind::GiveBack { value: vt }, span: *span }
-                }
+                    (Some(rt), Body::Function) => {
+                        let vt = if matches!(rt, Type::Error) {
+                            self.check_expr(value, None)
+                        } else {
+                            self.check_expr(value, Some(rt))
+                        };
+                        self.require_assignable(rt, &vt, "`gives back`");
+                        CheckedStmt {
+                            kind: CheckedStmtKind::GiveBack { value: vt },
+                            span: *span,
+                        }
+                    }
+                    // §7.8: `returns` is optional — inferred when absent (D-11's
+                    // inference-first rule applied to signatures).
+                    (None, Body::Function) => {
+                        let vt = self.check_expr(value, None);
+                        CheckedStmt {
+                            kind: CheckedStmtKind::GiveBack { value: vt },
+                            span: *span,
+                        }
+                    }
+                    _ => {
+                        self.diags.push(
+                            Diagnostic::error(
+                                "E0336",
+                                "`gives back` only works inside a function.",
+                                *span,
+                            )
+                            .with_explanation(
+                                "Tests and top-level statements do not return values.",
+                            ),
+                        );
+                        let vt = self.check_expr(value, None);
+                        CheckedStmt {
+                            kind: CheckedStmtKind::GiveBack { value: vt },
+                            span: *span,
+                        }
+                    }
                 }
             }
             Stmt::FailWith { value, span } => {
-                // §13.1: failure is a capability — the function must declare it.
-                if !self.current_can_fail {
+                // §13.1: failure is a capability — the function must declare
+                // it. A task body is its own capability boundary (14.2's
+                // documented resolution: a task has no caller to propagate
+                // to; the body's `fail with` IS the supervision signal), so
+                // the body checks as if it declared `can fail`.
+                if !self.current_can_fail && !self.in_task_body {
                     self.diags.push(
                         Diagnostic::error(
                             "E0337",
@@ -1292,22 +2333,82 @@ impl<'a> Checker<'a> {
                             *span,
                         )
                         .with_explanation("A function must declare `can fail` before it can fail.")
-                        .with_fix("add a `can fail` clause to the function"),
+                        .with_fix("add a `can fail` clause to the function")
+                        .with_fix_why("the declaration is what grants the failure somewhere honest to go — with `can fail` declared, the caller's `attempt` receives the failure instead of the compiler rejecting the `fail with` line"),
                     );
                 }
                 // S-10: the failure value is a text at student level.
                 let vt = self.check_expr(value, Some(&Type::Text));
                 self.require_type(&vt, &Type::Text, "`fail with`", "the failure message");
-                CheckedStmt { kind: CheckedStmtKind::FailWith { value: vt }, span: *span }
+                CheckedStmt {
+                    kind: CheckedStmtKind::FailWith { value: vt },
+                    span: *span,
+                }
             }
             Stmt::Attempt { expr, tail, span } => self.check_attempt(expr, tail.as_ref(), *span),
             Stmt::CheckThat { expr, span } => {
                 let vt = self.check_expr(expr, Some(&Type::Boolean));
                 self.require_boolean(&vt, "`check that`");
-                CheckedStmt { kind: CheckedStmtKind::CheckThat { expr: vt }, span: *span }
+                CheckedStmt {
+                    kind: CheckedStmtKind::CheckThat { expr: vt },
+                    span: *span,
+                }
             }
-            Stmt::Match { scrutinee, arms, otherwise, span } => {
-                self.check_match(scrutinee, arms, otherwise, *span)
+            Stmt::Match {
+                scrutinee,
+                arms,
+                otherwise,
+                span,
+            } => self.check_match(scrutinee, arms, otherwise, *span),
+            Stmt::StartTask {
+                body,
+                keep_going,
+                span,
+            } => {
+                // 14.2: the body is a zero-param block-lambda — the full
+                // function machinery (nested `gives back` checked as the
+                // body's answer, LOM bodies table) applies unchanged. The
+                // value is discarded (v0.1: a task returns nothing).
+                let saved_task = self.in_task_body;
+                let saved_spawn = self.saw_spawn_in_body;
+                self.in_task_body = true;
+                self.check_lambda_expected(&[], &ast::LambdaBody::Block(body.clone()), None, body.span);
+                self.in_task_body = saved_task;
+                // The nested-body check reset the region flag; the spawn
+                // itself is what the enclosing region's join waits on.
+                self.saw_spawn_in_body = true;
+                let _ = saved_spawn;
+                CheckedStmt {
+                    kind: CheckedStmtKind::StartTask {
+                        lambda_span: body.span,
+                        keep_going: *keep_going,
+                    },
+                    span: *span,
+                }
+            }
+            Stmt::WaitForAllTasks { span } => {
+                // 14.2: the join is meaningful only when something may be
+                // running. `wait for all tasks` with no `start a task` before
+                // it in this body waits for nothing — almost always a
+                // misplaced join (the student meant it after a spawn).
+                if !self.saw_spawn_in_body {
+                    self.diags.push(
+                        Diagnostic::error(
+                            "E0390",
+                            "`wait for all tasks` found no `start a task` to wait for.",
+                            *span,
+                        )
+                        .with_explanation(format!(
+                            "`wait for all tasks` joins the tasks this {} started. No `start a task` runs before it here, so it waits for nothing — the `wait for all tasks` line wants to come after the task it should join.",
+                            if self.current_fn_display.is_empty() { "program" } else { "function" }
+                        ))
+                        .with_note("If no task was meant to run here, remove the `wait for all tasks` line."),
+                    );
+                }
+                CheckedStmt {
+                    kind: CheckedStmtKind::WaitForAllTasks,
+                    span: *span,
+                }
             }
             Stmt::ExprStmt { expr, span } => {
                 let vt = self.check_expr(expr, None);
@@ -1321,14 +2422,23 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
-                CheckedStmt { kind: CheckedStmtKind::ExprStmt { expr: vt }, span: *span }
+                CheckedStmt {
+                    kind: CheckedStmtKind::ExprStmt { expr: vt },
+                    span: *span,
+                }
             }
         }
     }
 
     /// `match <expr>` (7.12/7.15): one scope, arms check patterns against
     /// the scrutinee's type, exhaustiveness over kinds and options.
-    fn check_match(&mut self, scrutinee: &Expr, arms: &[(ast::Pattern, ast::Block)], otherwise: &Option<ast::Block>, span: Span) -> CheckedStmt {
+    fn check_match(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &[(ast::Pattern, ast::Block)],
+        otherwise: &Option<ast::Block>,
+        span: Span,
+    ) -> CheckedStmt {
         let st = self.check_expr(scrutinee, None);
         // A `match` must have at least one arm or an `otherwise`.
         let mut out_arms: Vec<(CheckedPattern, Vec<CheckedStmt>)> = Vec::new();
@@ -1352,9 +2462,19 @@ impl<'a> Checker<'a> {
             self.pop_scope();
             body
         });
-        self.check_exhaustive(&st, &out_arms, otherwise.is_some(), matched_variant.as_ref(), span);
+        self.check_exhaustive(
+            &st,
+            &out_arms,
+            otherwise.is_some(),
+            matched_variant.as_ref(),
+            span,
+        );
         CheckedStmt {
-            kind: CheckedStmtKind::Match { scrutinee: st, arms: out_arms, otherwise: out_otherwise },
+            kind: CheckedStmtKind::Match {
+                scrutinee: st,
+                arms: out_arms,
+                otherwise: out_otherwise,
+            },
             span,
         }
     }
@@ -1381,13 +2501,22 @@ impl<'a> Checker<'a> {
                     self.diags.push(
                         Diagnostic::error(
                             "E0362",
-                            format!("This pattern matches {} but the matched value is {}.", lit_ty.display(), scrutinee.display()),
+                            format!(
+                                "This pattern matches {} but the matched value is {}.",
+                                lit_ty.display(),
+                                scrutinee.display()
+                            ),
                             *span,
                         )
-                        .with_explanation("A `when` pattern must match the type of the value in `match`."),
+                        .with_explanation(
+                            "A `when` pattern must match the type of the value in `match`.",
+                        ),
                     );
                 }
-                CheckedPattern::Literal { value: value.clone(), span: *span }
+                CheckedPattern::Literal {
+                    value: value.clone(),
+                    span: *span,
+                }
             }
             ast::Pattern::Name { name } => {
                 let full = name.display();
@@ -1409,10 +2538,17 @@ impl<'a> Checker<'a> {
                                 ),
                             );
                         }
-                        return CheckedPattern::Variant { kind: kname.clone(), variant: vname, fields: Vec::new() };
+                        return CheckedPattern::Variant {
+                            kind: kname.clone(),
+                            variant: vname,
+                            fields: Vec::new(),
+                        };
                     }
                 }
-                CheckedPattern::Binding { name: full, span: name.span }
+                CheckedPattern::Binding {
+                    name: full,
+                    span: name.span,
+                }
             }
             ast::Pattern::Variant { name, fields, span } => {
                 let vname = name.display();
@@ -1426,7 +2562,11 @@ impl<'a> Checker<'a> {
                                 .kinds
                                 .get(k)
                                 .map(|kk| {
-                                    kk.variants.iter().map(|(n, _, _)| n.clone()).collect::<Vec<_>>().join(", ")
+                                    kk.variants
+                                        .iter()
+                                        .map(|(n, _, _)| n.clone())
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
                                 })
                                 .unwrap_or_default();
                             self.diags.push(
@@ -1443,13 +2583,14 @@ impl<'a> Checker<'a> {
                     },
                     Type::Error => (String::new(), Vec::new()),
                     other => {
-                        self.diags.push(
-                            Diagnostic::error(
-                                "E0363",
-                                format!("`{vname}` is a variant pattern, but the matched value is {}.", other.display()),
-                                *span,
+                        self.diags.push(Diagnostic::error(
+                            "E0363",
+                            format!(
+                                "`{vname}` is a variant pattern, but the matched value is {}.",
+                                other.display()
                             ),
-                        );
+                            *span,
+                        ));
                         (String::new(), Vec::new())
                     }
                 };
@@ -1462,7 +2603,11 @@ impl<'a> Checker<'a> {
                             out_fields.push((fs, sub_checked));
                         }
                         None => {
-                            let field_list = def_fields.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>().join(", ");
+                            let field_list = def_fields
+                                .iter()
+                                .map(|(n, _)| n.clone())
+                                .collect::<Vec<_>>()
+                                .join(", ");
                             self.diags.push(
                                 Diagnostic::error(
                                     "E0364",
@@ -1474,7 +2619,11 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
-                CheckedPattern::Variant { kind: kname, variant: vname, fields: out_fields }
+                CheckedPattern::Variant {
+                    kind: kname,
+                    variant: vname,
+                    fields: out_fields,
+                }
             }
             ast::Pattern::Something { inner, span } => {
                 let inner_ty = match scrutinee {
@@ -1493,26 +2642,38 @@ impl<'a> Checker<'a> {
                     }
                 };
                 let inner_checked = self.check_pattern(inner, &inner_ty);
-                CheckedPattern::Something { inner: Box::new(inner_checked), span: *span }
+                CheckedPattern::Something {
+                    inner: Box::new(inner_checked),
+                    span: *span,
+                }
             }
-            ast::Pattern::Pair { first, second, span } => {
+            ast::Pattern::Pair {
+                first,
+                second,
+                span,
+            } => {
                 let (ft, st2) = match scrutinee {
                     Type::Pair(a, b) => ((**a).clone(), (**b).clone()),
                     Type::Error => (Type::Error, Type::Error),
                     other => {
-                        self.diags.push(
-                            Diagnostic::error(
-                                "E0365",
-                                format!("`a pair of … and …` matches a pair, but the matched value is {}.", other.display()),
-                                *span,
+                        self.diags.push(Diagnostic::error(
+                            "E0365",
+                            format!(
+                                "`a pair of … and …` matches a pair, but the matched value is {}.",
+                                other.display()
                             ),
-                        );
+                            *span,
+                        ));
                         (Type::Error, Type::Error)
                     }
                 };
                 let f = self.check_pattern(first, &ft);
                 let s = self.check_pattern(second, &st2);
-                CheckedPattern::Pair { first: Box::new(f), second: Box::new(s), span: *span }
+                CheckedPattern::Pair {
+                    first: Box::new(f),
+                    second: Box::new(s),
+                    span: *span,
+                }
             }
             ast::Pattern::Wildcard => CheckedPattern::Wildcard,
         }
@@ -1558,7 +2719,9 @@ impl<'a> Checker<'a> {
         }
         let missing = match &scrutinee.ty {
             Type::Kind(kname) => {
-                let Some(kind) = self.kinds.get(kname) else { return };
+                let Some(kind) = self.kinds.get(kname) else {
+                    return;
+                };
                 let mut missing: Vec<String> = Vec::new();
                 for (vname, _, _) in &kind.variants {
                     let covered = arms.iter().any(|(p, _)| match p {
@@ -1581,8 +2744,18 @@ impl<'a> Checker<'a> {
                 }
             }
             Type::Option(_) => {
-                let has_nothing = arms.iter().any(|(p, _)| matches!(p, CheckedPattern::Literal { value: ast::PatternLiteral::Nothing, .. }));
-                let has_something = arms.iter().any(|(p, _)| matches!(p, CheckedPattern::Something { .. }));
+                let has_nothing = arms.iter().any(|(p, _)| {
+                    matches!(
+                        p,
+                        CheckedPattern::Literal {
+                            value: ast::PatternLiteral::Nothing,
+                            ..
+                        }
+                    )
+                });
+                let has_something = arms
+                    .iter()
+                    .any(|(p, _)| matches!(p, CheckedPattern::Something { .. }));
                 let mut missing: Vec<String> = Vec::new();
                 if !has_nothing {
                     missing.push("nothing".into());
@@ -1590,7 +2763,11 @@ impl<'a> Checker<'a> {
                 if !has_something {
                     missing.push("something with value …".into());
                 }
-                if missing.is_empty() { None } else { Some(format!("this `match` misses: {}", missing.join(", "))) }
+                if missing.is_empty() {
+                    None
+                } else {
+                    Some(format!("this `match` misses: {}", missing.join(", ")))
+                }
             }
             // A catch-all name or `otherwise` is required for every other
             // type: literal-only matches can never cover all values. A full
@@ -1599,10 +2776,16 @@ impl<'a> Checker<'a> {
                 let has_catch_all = arms.iter().any(|(p, _)| {
                     matches!(
                         p,
-                        CheckedPattern::Binding { .. } | CheckedPattern::Wildcard | CheckedPattern::Pair { .. }
+                        CheckedPattern::Binding { .. }
+                            | CheckedPattern::Wildcard
+                            | CheckedPattern::Pair { .. }
                     )
                 });
-                if has_catch_all { None } else { Some("this `match` can miss values — add an `otherwise` arm".into()) }
+                if has_catch_all {
+                    None
+                } else {
+                    Some("this `match` can miss values — add an `otherwise` arm".into())
+                }
             }
         };
         if let Some(what) = missing {
@@ -1616,7 +2799,12 @@ impl<'a> Checker<'a> {
 
     fn check_repeat(&mut self, r: &ast::Repeat, span: Span) -> CheckedStmt {
         match r {
-            Repeat::Count { times: (v, _), binding, body, .. } => {
+            Repeat::Count {
+                times: (v, _),
+                binding,
+                body,
+                ..
+            } => {
                 self.loop_depth += 1;
                 self.push_scope();
                 if let Some(b) = binding {
@@ -1643,11 +2831,20 @@ impl<'a> Checker<'a> {
                 self.pop_scope();
                 self.loop_depth -= 1;
                 CheckedStmt {
-                    kind: CheckedStmtKind::RepeatWhile { cond: ct, body: out_body },
+                    kind: CheckedStmtKind::RepeatWhile {
+                        cond: ct,
+                        body: out_body,
+                    },
                     span,
                 }
             }
-            Repeat::ForEach { item, index, iter, body, .. } => {
+            Repeat::ForEach {
+                item,
+                index,
+                iter,
+                body,
+                ..
+            } => {
                 let it = self.check_expr(iter, None);
                 let elem = match &it.ty {
                     Type::List(e) => (**e).clone(),
@@ -1657,10 +2854,15 @@ impl<'a> Checker<'a> {
                         self.diags.push(
                             Diagnostic::error(
                                 "E0338",
-                                format!("`for each` needs a list or a map, but this is {}.", other.display()),
+                                format!(
+                                    "`for each` needs a list or a map, but this is {}.",
+                                    other.display()
+                                ),
                                 it.span(),
                             )
-                            .with_explanation("`repeat for each item in <list>` walks through the list's items."),
+                            .with_explanation(
+                                "`repeat for each item in <list>` walks through the list's items.",
+                            ),
                         );
                         Type::Error
                     }
@@ -1728,7 +2930,11 @@ impl<'a> Checker<'a> {
             match tail {
                 ast::AttemptTail::Propagate => {
                     // The readable `?`: requires the enclosing function to fail.
-                    if !self.current_can_fail {
+                    // In a finalizer there is no caller at all (10.4/R-20.3):
+                    // propagation would drop the problem on the floor.
+                    if self.in_deinit {
+                        self.diags.push(self.finalizer_failure("the attempt", span));
+                    } else if !self.current_can_fail {
                         self.diags.push(
                             Diagnostic::error(
                                 "E0332",
@@ -1746,7 +2952,10 @@ impl<'a> Checker<'a> {
                     self.declare("result", inner.ty.clone(), false, inner.span());
                     out_tail = Some(CheckedAttemptTail::Propagate);
                 }
-                ast::AttemptTail::IfItFails { then_block, otherwise } => {
+                ast::AttemptTail::IfItFails {
+                    then_block,
+                    otherwise,
+                } => {
                     self.push_scope();
                     self.declare("problem", Type::Text, false, span);
                     let then_body = self.check_stmt_list_scoped(then_block);
@@ -1765,7 +2974,11 @@ impl<'a> Checker<'a> {
                         otherwise: otherwise_body,
                     });
                 }
-                ast::AttemptTail::As { name, block, otherwise } => {
+                ast::AttemptTail::As {
+                    name,
+                    block,
+                    otherwise,
+                } => {
                     self.push_scope();
                     self.declare(&name.display(), Type::Text, false, name.span);
                     let as_body = self.check_stmt_list_scoped(block);
@@ -1787,7 +3000,10 @@ impl<'a> Checker<'a> {
             }
         }
         CheckedStmt {
-            kind: CheckedStmtKind::Attempt { inner, tail: out_tail },
+            kind: CheckedStmtKind::Attempt {
+                inner,
+                tail: out_tail,
+            },
             span,
         }
     }
@@ -1819,7 +3035,10 @@ impl<'a> Checker<'a> {
                 _ => unreachable!(),
             };
             let mut rewritten = ast::Target {
-                base: Name { words: vec!["ps".into()], span: base_of },
+                base: Name {
+                    words: vec!["ps".into()],
+                    span: base_of,
+                },
                 accessors: Vec::new(),
                 span: target.span,
             };
@@ -1837,7 +3056,10 @@ impl<'a> Checker<'a> {
                 rewritten.base = field.clone();
             }
             rewritten.accessors.push(Accessor::At {
-                index: Expr::Int { value: 0, span: base_of },
+                index: Expr::Int {
+                    value: 0,
+                    span: base_of,
+                },
                 span: base_of,
             });
             for acc in target.accessors.iter().skip(1) {
@@ -1853,9 +3075,7 @@ impl<'a> Checker<'a> {
         //
         // The parser stores `Accessor::Of { field }` with `field: Name`; for
         // `score of p` that name is `p` and the base name is `score`.
-        if !self.lookup(&base_name).is_some()
-            && target.accessors.len() == 1
-        {
+        if !self.lookup(&base_name).is_some() && target.accessors.len() == 1 {
             if let Accessor::Of { field, span } = &target.accessors[0] {
                 let arg_name = field.display();
                 if self.lookup(&arg_name).is_some() {
@@ -1874,15 +3094,78 @@ impl<'a> Checker<'a> {
                 }
             }
         }
+        // Field-first even when a `takes` parameter shadows the field name
+        // (10.3's own shape: `set width of myself to width` inside a
+        // construction). The plain reading — field `myself` of the parameter
+        // — is statically meaningless, and the `of` argument's class declares
+        // exactly this field, so the field-first reading is the confident one.
+        if target.accessors.len() == 1 {
+            if let Accessor::Of { field, span } = &target.accessors[0] {
+                let arg_name = field.display();
+                let arg_ty = self.lookup(&arg_name).map(|b| b.ty.clone());
+                if let Some(Type::Struct(cname)) = &arg_ty {
+                    let shadows_field = self
+                        .classes
+                        .get(cname)
+                        .map_or(false, |d| d.fields.iter().any(|(n, _, _)| n == &base_name));
+                    if self.classes.contains_key(cname) && shadows_field {
+                        let rewritten = ast::Target {
+                            base: field.clone(),
+                            accessors: vec![Accessor::Of {
+                                field: target.base.clone(),
+                                span: *span,
+                            }],
+                            span: target.span,
+                        };
+                        return self.check_target(&rewritten, what);
+                    }
+                }
+            }
+        }
+        // 10.2: `set <field> to …` inside a method/construction body writes
+        // the receiver's field (the implicit-receiver form the architecture's
+        // own examples use for reads). Rewritten to the explicit target.
+        if target.accessors.is_empty()
+            && target.base.words.len() == 1
+            && self.lookup(&base_name).is_none()
+        {
+            if let Some(cname) = &self.current_method_class {
+                if self
+                    .classes
+                    .get(cname)
+                    .map_or(false, |c| c.fields.iter().any(|(n, _, _)| n == &base_name))
+                {
+                    let rewritten = ast::Target {
+                        base: Name {
+                            words: vec!["myself".to_string()],
+                            span: target.base.span,
+                        },
+                        accessors: vec![Accessor::Of {
+                            field: target.base.clone(),
+                            span: target.base.span,
+                        }],
+                        span: target.span,
+                    };
+                    return self.check_target(&rewritten, what);
+                }
+            }
+        }
         let base_binding = match self.lookup(&base_name) {
             Some(b) => Some(b),
             None => {
-                self.diags.push(self.unknown_name(&base_name, target.base.span));
+                self.diags
+                    .push(self.unknown_name(&base_name, target.base.span));
                 None
             }
         };
         if let Some(b) = &base_binding {
-            if !b.mutable {
+            // A class instance is an ARC'd reference (9.3): the OBJECT's fields
+            // are mutable through any alias — 10.2's own exemplar sets `count
+            // of myself` through an immutable `make c equal to a new counter`.
+            // Only re-pointing the binding itself (`set c to …`) is still the
+            // `changing` rule's job, so the carve-out needs an accessor.
+            let class_ref = matches!(&b.ty, Type::Struct(s) if self.classes.contains_key(s));
+            if !b.mutable && !(class_ref && !target.accessors.is_empty()) {
                 self.diags.push(
                     Diagnostic::error(
                         "E0339",
@@ -1921,13 +3204,14 @@ impl<'a> Checker<'a> {
                         Type::Map(_, v) => (*v).clone(),
                         Type::Error => Type::Error,
                         other => {
-                            self.diags.push(
-                                Diagnostic::error(
-                                    "E0342",
-                                    format!("`at` needs a list or a map, but this is {}.", other.display()),
-                                    *span,
+                            self.diags.push(Diagnostic::error(
+                                "E0342",
+                                format!(
+                                    "`at` needs a list or a map, but this is {}.",
+                                    other.display()
                                 ),
-                            );
+                                *span,
+                            ));
                             Type::Error
                         }
                     };
@@ -1937,16 +3221,16 @@ impl<'a> Checker<'a> {
                     out.ty = match out.ty.clone() {
                         Type::Struct(sname) => {
                             let field_name = field.display();
-                            match self.struct_field(&sname, &field_name) {
+                            match self.struct_or_class_field(&sname, &field_name) {
                                 Some(t) => t,
                                 None => {
-                                    let fields = self.structs.get(&sname)
-                                        .map(|s| s.fields.iter().map(|(n, _, _)| n.clone()).collect::<Vec<_>>().join(", "))
-                                        .unwrap_or_default();
+                                    let fields = self.user_type_fields(&sname);
                                     self.diags.push(
                                         Diagnostic::error(
                                             "E0343",
-                                            format!("`{sname}` has no field called `{field_name}`."),
+                                            format!(
+                                                "`{sname}` has no field called `{field_name}`."
+                                            ),
                                             *span,
                                         )
                                         .with_note(format!("its fields are: {fields}")),
@@ -1957,17 +3241,21 @@ impl<'a> Checker<'a> {
                         }
                         Type::Error => Type::Error,
                         other => {
-                            self.diags.push(
-                                Diagnostic::error(
-                                    "E0343",
-                                    format!("`of` reads a structure's field, but `{}` is {}.", field.display(), other.display()),
-                                    *span,
+                            self.diags.push(Diagnostic::error(
+                                "E0343",
+                                format!(
+                                    "`of` reads a structure's field, but `{}` is {}.",
+                                    field.display(),
+                                    other.display()
                                 ),
-                            );
+                                *span,
+                            ));
                             Type::Error
                         }
                     };
-                    out.accessors.push(TypedAccessor::Of { field: field.display() });
+                    out.accessors.push(TypedAccessor::Of {
+                        field: field.display(),
+                    });
                 }
             }
         }
@@ -1976,9 +3264,46 @@ impl<'a> Checker<'a> {
     }
 
     fn struct_field(&self, sname: &str, field: &str) -> Option<Type> {
+        self.structs.get(sname).and_then(|s| {
+            s.fields
+                .iter()
+                .find(|(n, _, _)| n == field)
+                .map(|(_, t, _)| t.clone())
+        })
+    }
+
+    /// A class's field table (10.2). Class values share `Type::Struct(name)`
+    /// with structures — the runtime field mechanics are positional for
+    /// both — but the class table decides method dispatch and the ARC
+    /// mutation rules, so field lookup tries it too.
+    fn class_field(&self, cname: &str, field: &str) -> Option<Type> {
+        self.classes.get(cname).and_then(|s| {
+            s.fields
+                .iter()
+                .find(|(n, _, _)| n == field)
+                .map(|(_, t, _)| t.clone())
+        })
+    }
+
+    /// Field lookup across both user-type tables (structures and classes).
+    fn struct_or_class_field(&self, tname: &str, field: &str) -> Option<Type> {
+        self.struct_field(tname, field)
+            .or_else(|| self.class_field(tname, field))
+    }
+
+    /// The field-list note text for a named user type (whichever table owns it).
+    fn user_type_fields(&self, tname: &str) -> String {
         self.structs
-            .get(sname)
-            .and_then(|s| s.fields.iter().find(|(n, _, _)| n == field).map(|(_, t, _)| t.clone()))
+            .get(tname)
+            .or_else(|| self.classes.get(tname))
+            .map(|s| {
+                s.fields
+                    .iter()
+                    .map(|(n, _, _)| n.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default()
     }
 
     fn unknown_name(&self, name: &str, span: Span) -> Diagnostic {
@@ -1990,7 +3315,10 @@ impl<'a> Checker<'a> {
         .with_explanation("Names must be made with `make` (or come from `takes`, `using`, or a loop) before they are used.");
         let suggestions = did_you_mean(name, &self.scope_names());
         if let Some(best) = suggestions.first() {
-            d = d.with_fix(format!("did you mean `{best}`?"));
+            d = d.with_fix(format!("did you mean `{best}`?"))
+                .with_fix_why(format!(
+                    "`{best}` is a name this scope already has — the line then reads the value you made instead of inventing a new one"
+                ));
         }
         d
     }
@@ -2012,6 +3340,28 @@ impl<'a> Checker<'a> {
     /// Check an expression; `check_expr` wraps this to record the type table.
     fn check_expr_inner(&mut self, e: &Expr, expected: Option<&Type>) -> TypedExpr {
         match e {
+            // Class construction (10.2): `a new counter with count 5` — full
+            // field initialization is checked in the helper; the result is
+            // an ARC'd reference of the class's type (9.3).
+            Expr::NewObject { name, fields, span } => {
+                // 10.3 dispatch: with construction clauses present, the
+                // site becomes a call of the name-matched clause (D-14);
+                // without them, the direct field-initialization spelling.
+                let cname = name.display();
+                if self.ctor_clauses.iter().any(|(c, _, _)| c == &cname) {
+                    self.dispatch_construction(name, fields, *span)
+                } else {
+                    self.check_class_construction(name, fields, *span)
+                }
+            }
+            // 14.3: `a channel of T` in value position (the type phrase IS
+            // the construction). The channel carries its message type; the
+            // element type name is checked at the type position it came from
+            // (parse_type already validated the shape).
+            Expr::ChannelLit { .. } => TypedExpr {
+                expr: e.clone(),
+                ty: Type::Channel(Box::new(Type::Error)),
+            },
             Expr::Int { .. } => {
                 // R-15: literal unifies with the expected numeric type; the
                 // un-constrained default is `number` (D-10).
@@ -2020,12 +3370,27 @@ impl<'a> Checker<'a> {
                     Some(Type::NumericLit) => Type::NumericLit,
                     _ => Type::Number,
                 };
-                TypedExpr { expr: e.clone(), ty }
+                TypedExpr {
+                    expr: e.clone(),
+                    ty,
+                }
             }
-            Expr::Float { .. } => TypedExpr { expr: e.clone(), ty: Type::Decimal },
-            Expr::Text { .. } => TypedExpr { expr: e.clone(), ty: Type::Text },
-            Expr::Bool { .. } => TypedExpr { expr: e.clone(), ty: Type::Boolean },
-            Expr::Nothing { .. } => TypedExpr { expr: e.clone(), ty: Type::NothingLit },
+            Expr::Float { .. } => TypedExpr {
+                expr: e.clone(),
+                ty: Type::Decimal,
+            },
+            Expr::Text { .. } => TypedExpr {
+                expr: e.clone(),
+                ty: Type::Text,
+            },
+            Expr::Bool { .. } => TypedExpr {
+                expr: e.clone(),
+                ty: Type::Boolean,
+            },
+            Expr::Nothing { .. } => TypedExpr {
+                expr: e.clone(),
+                ty: Type::NothingLit,
+            },
             Expr::Name { name, span } => self.check_name_expr(name, *span, expected),
             Expr::Interp { parts, span } => {
                 // S-9: every M0 value prints; check each embedded expression and
@@ -2041,7 +3406,13 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
-                TypedExpr { expr: Expr::Interp { parts: out, span: *span }, ty: Type::Text }
+                TypedExpr {
+                    expr: Expr::Interp {
+                        parts: out,
+                        span: *span,
+                    },
+                    ty: Type::Text,
+                }
             }
             Expr::Group { inner, .. } => self.check_expr(inner, expected),
             Expr::Neg { inner, span } => {
@@ -2056,16 +3427,25 @@ impl<'a> Checker<'a> {
                         .with_explanation("A leading `-` turns a number negative — the value after it must be a number."),
                     );
                 }
-                TypedExpr { expr: e.clone(), ty: it.ty }
+                TypedExpr {
+                    expr: e.clone(),
+                    ty: it.ty,
+                }
             }
             Expr::Not { inner, span: _ } => {
                 let it = self.check_expr(inner, Some(&Type::Boolean));
                 self.require_boolean(&it, "`not`");
-                TypedExpr { expr: e.clone(), ty: Type::Boolean }
+                TypedExpr {
+                    expr: e.clone(),
+                    ty: Type::Boolean,
+                }
             }
-            Expr::Binary { op, left, right, span } => {
-                self.check_binary(*op, left, right, *span, expected)
-            }
+            Expr::Binary {
+                op,
+                left,
+                right,
+                span,
+            } => self.check_binary(*op, left, right, *span, expected),
             Expr::ListLit { elements, span: _ } => {
                 let elem_expected = match expected {
                     Some(Type::List(e)) => Some((**e).clone()),
@@ -2084,10 +3464,16 @@ impl<'a> Checker<'a> {
                                     self.diags.push(
                                         Diagnostic::error(
                                             "E0346",
-                                            format!("This list mixes {} and {}.", prev.display(), t.display()),
+                                            format!(
+                                                "This list mixes {} and {}.",
+                                                prev.display(),
+                                                t.display()
+                                            ),
                                             expr_span(el),
                                         )
-                                        .with_explanation("Every item in a list must have the same type."),
+                                        .with_explanation(
+                                            "Every item in a list must have the same type.",
+                                        ),
                                     );
                                 }
                             },
@@ -2095,7 +3481,10 @@ impl<'a> Checker<'a> {
                     }
                 }
                 let elem = elem_ty.or(elem_expected).unwrap_or(Type::Error);
-                TypedExpr { expr: e.clone(), ty: Type::List(Box::new(elem)) }
+                TypedExpr {
+                    expr: e.clone(),
+                    ty: Type::List(Box::new(elem)),
+                }
             }
             Expr::MapLit { entries, .. } => {
                 let mut k_ty: Option<Type> = None;
@@ -2126,8 +3515,13 @@ impl<'a> Checker<'a> {
                 // structure literal and a variant construction share the `a
                 // <name> with …` shape. Sema reclassifies against the tables.
                 let sname = name.display();
-                if !self.structs.contains_key(&sname)
-                    && self.kinds.values().any(|k| k.variants.iter().any(|(n, _, _)| n == &sname))
+                if self.classes.contains_key(&sname) {
+                    self.check_class_construction(name, fields, *span)
+                } else if !self.structs.contains_key(&sname)
+                    && self
+                        .kinds
+                        .values()
+                        .any(|k| k.variants.iter().any(|(n, _, _)| n == &sname))
                 {
                     let owned: Vec<(Name, Expr)> = fields.clone();
                     self.check_variant_lit(name, &owned, *span)
@@ -2142,7 +3536,12 @@ impl<'a> Checker<'a> {
             Expr::AttemptExpr { expr, span } => {
                 // The bare attempt as an expression (13.1): evaluates to the
                 // success value; the enclosing function must be able to fail.
-                if !self.current_can_fail {
+                // In a finalizer there is no caller — R-20.3 rejects the
+                // propagation outright (E0377).
+                if self.in_deinit {
+                    self.diags
+                        .push(self.finalizer_failure("this attempt", *span));
+                } else if !self.current_can_fail {
                     self.diags.push(
                         Diagnostic::error(
                             "E0332",
@@ -2156,7 +3555,10 @@ impl<'a> Checker<'a> {
                 self.attempt_depth += 1;
                 let inner = self.check_expr(expr, expected);
                 self.attempt_depth -= 1;
-                TypedExpr { expr: e.clone(), ty: inner.ty }
+                TypedExpr {
+                    expr: e.clone(),
+                    ty: inner.ty,
+                }
             }
             Expr::SomeValue { value, span } => {
                 // The option construction (8.5/G-21): `something with value v`.
@@ -2185,7 +3587,10 @@ impl<'a> Checker<'a> {
                         .with_explanation("The value inside `something with value` must match the option's inner type — 8.5."),
                     );
                 }
-                TypedExpr { expr: e.clone(), ty: Type::Option(Box::new(inner_ty)) }
+                TypedExpr {
+                    expr: e.clone(),
+                    ty: Type::Option(Box::new(inner_ty)),
+                }
             }
             Expr::Call(call) => self.check_call(call, expected),
         }
@@ -2196,14 +3601,17 @@ impl<'a> Checker<'a> {
     fn check_variant_lit(&mut self, name: &Name, fields: &[(Name, Expr)], span: Span) -> TypedExpr {
         let vname = name.display();
         // Find the kind that owns this variant name.
-        let owner: Option<(String, Vec<(String, Type)>)> = self
-            .kinds
-            .iter()
-            .find_map(|(kname, k)| {
+        let owner: Option<(String, Vec<(String, Type)>)> =
+            self.kinds.iter().find_map(|(kname, k)| {
                 k.variants
                     .iter()
                     .find(|(n, _, _)| n == &vname)
-                    .map(|(_, fs, _)| (kname.clone(), fs.iter().map(|(n, t, _)| (n.clone(), t.clone())).collect()))
+                    .map(|(_, fs, _)| {
+                        (
+                            kname.clone(),
+                            fs.iter().map(|(n, t, _)| (n.clone(), t.clone())).collect(),
+                        )
+                    })
             });
         let Some((kname, def_fields)) = owner else {
             self.diags.push(
@@ -2214,20 +3622,36 @@ impl<'a> Checker<'a> {
                 )
                 .with_explanation("A variant is built with its kind's variants: `kind shape ⏎ is a circle with radius of type number` makes `a circle with radius 5` legal."),
             );
-            return TypedExpr { expr: Expr::Name { name: name.clone(), span }, ty: Type::Error };
+            return TypedExpr {
+                expr: Expr::Name {
+                    name: name.clone(),
+                    span,
+                },
+                ty: Type::Error,
+            };
         };
         let mut out_fields: Vec<(Name, Expr)> = Vec::new();
         for (fname, fexpr) in fields {
             let fs = fname.display();
-            let ft = self.check_expr(fexpr, def_fields.iter().find(|(n, _)| n == &fs).map(|(_, t)| t));
+            let ft = self.check_expr(
+                fexpr,
+                def_fields.iter().find(|(n, _)| n == &fs).map(|(_, t)| t),
+            );
             match def_fields.iter().find(|(n, _)| n == &fs) {
                 Some((_, fty)) => {
-                    let holder = TypedExpr { expr: fexpr.clone(), ty: ft.ty.clone() };
+                    let holder = TypedExpr {
+                        expr: fexpr.clone(),
+                        ty: ft.ty.clone(),
+                    };
                     self.require_assignable(fty, &holder, &format!("the {vname}'s `{fs}` field"));
                     out_fields.push((fname.clone(), ft.expr));
                 }
                 None => {
-                    let field_list = def_fields.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>().join(", ");
+                    let field_list = def_fields
+                        .iter()
+                        .map(|(n, _)| n.clone())
+                        .collect::<Vec<_>>()
+                        .join(", ");
                     self.diags.push(
                         Diagnostic::error(
                             "E0364",
@@ -2246,15 +3670,24 @@ impl<'a> Checker<'a> {
                 self.diags.push(
                     Diagnostic::error(
                         "E0368",
-                        format!("A `{vname}` needs its `{fname}` field: `a {vname} with {fname} …`."),
+                        format!(
+                            "A `{vname}` needs its `{fname}` field: `a {vname} with {fname} …`."
+                        ),
                         span,
                     )
                     .with_note(format!("the field is {}", fty.display())),
                 );
             }
         }
-        let rebuilt = Expr::VariantLit { name: name.clone(), fields: out_fields, span };
-        TypedExpr { expr: rebuilt, ty: Type::Kind(kname) }
+        let rebuilt = Expr::VariantLit {
+            name: name.clone(),
+            fields: out_fields,
+            span,
+        };
+        TypedExpr {
+            expr: rebuilt,
+            ty: Type::Kind(kname),
+        }
     }
 
     /// A lambda (11.1): parameter names bound in a fresh scope, the body
@@ -2264,7 +3697,9 @@ impl<'a> Checker<'a> {
     /// function type.
     fn check_lambda_expected_lambda(&mut self, lam: &Expr, expected: Option<&Type>) -> TypedExpr {
         match lam {
-            Expr::Lambda { params, body, span } => self.check_lambda_expected(params, body, expected, *span),
+            Expr::Lambda { params, body, span } => {
+                self.check_lambda_expected(params, body, expected, *span)
+            }
             // A bare function name (`using double`) is a plain value read.
             other => self.check_expr(other, expected),
         }
@@ -2321,7 +3756,13 @@ impl<'a> Checker<'a> {
                 // Keep the checked statements for HIR (the side table keyed by
                 // the lambda's span — §11.1: the block form is a full function).
                 self.lambda_bodies.insert(span, stmts.clone());
-                (ret, ast::LambdaBody::Block(ast::Block { stmts: vec![], span: block.span }))
+                (
+                    ret,
+                    ast::LambdaBody::Block(ast::Block {
+                        stmts: vec![],
+                        span: block.span,
+                    }),
+                )
             }
             ast::LambdaBody::Inline(expr) => {
                 let inner_expected = expected
@@ -2335,8 +3776,15 @@ impl<'a> Checker<'a> {
             }
         };
         self.pop_scope();
-        let rebuilt = Expr::Lambda { params: params.to_vec(), body: checked_body, span };
-        TypedExpr { expr: rebuilt, ty: Type::Function(param_tys, Box::new(ret)) }
+        let rebuilt = Expr::Lambda {
+            params: params.to_vec(),
+            body: checked_body,
+            span,
+        };
+        TypedExpr {
+            expr: rebuilt,
+            ty: Type::Function(param_tys, Box::new(ret)),
+        }
     }
 
     fn check_struct_lit(
@@ -2363,7 +3811,13 @@ impl<'a> Checker<'a> {
                         "if `{sname}` is a variant, its `kind` must be declared first",
                     )),
                 );
-                TypedExpr { expr: Expr::Name { name: name.clone(), span }, ty: Type::Error }
+                TypedExpr {
+                    expr: Expr::Name {
+                        name: name.clone(),
+                        span,
+                    },
+                    ty: Type::Error,
+                }
             }
             Some(def) => {
                 let mut given: Vec<(String, Type)> = Vec::new();
@@ -2373,12 +3827,24 @@ impl<'a> Checker<'a> {
                     let fname_s = fname.display();
                     match def.fields.iter().find(|(n, _, _)| n == &fname_s) {
                         Some((_, fty, _)) => {
-                            let ft2 = TypedExpr { expr: fexpr.clone(), ty: ft.ty.clone() };
-                            self.require_assignable(fty, &ft2, &format!("the {sname}'s `{fname_s}` field"));
+                            let ft2 = TypedExpr {
+                                expr: fexpr.clone(),
+                                ty: ft.ty.clone(),
+                            };
+                            self.require_assignable(
+                                fty,
+                                &ft2,
+                                &format!("the {sname}'s `{fname_s}` field"),
+                            );
                             out_fields.push((fname.clone(), ft2.expr));
                         }
                         None => {
-                            let fields_list = def.fields.iter().map(|(n, _, _)| n.clone()).collect::<Vec<_>>().join(", ");
+                            let fields_list = def
+                                .fields
+                                .iter()
+                                .map(|(n, _, _)| n.clone())
+                                .collect::<Vec<_>>()
+                                .join(", ");
                             self.diags.push(
                                 Diagnostic::error(
                                     "E0348",
@@ -2409,12 +3875,259 @@ impl<'a> Checker<'a> {
                                 format!("This {sname} gives `{n}` twice."),
                                 span,
                             )
-                            .with_explanation("A construction sets each field once — a field needs one value."),
+                            .with_explanation(
+                                "A construction sets each field once — a field needs one value.",
+                            ),
                         );
                     }
                 }
-                TypedExpr { expr: outer.clone(), ty: Type::Struct(sname) }
+                TypedExpr {
+                    expr: outer.clone(),
+                    ty: Type::Struct(sname),
+                }
             }
+        }
+    }
+
+    /// Class construction (10.2/10.3): `a new counter with count 5`. The
+    /// Swift rule is enforced here — every field is initialized before any
+    /// method can run, so the un-initialized-field bug class dies at compile
+    /// time. Same shape and diagnostics as struct construction; the result
+    /// types as the class (`Struct(name)` — the shared runtime shape).
+    fn check_class_construction(
+        &mut self,
+        name: &Name,
+        fields: &[(Name, Expr)],
+        span: Span,
+    ) -> TypedExpr {
+        let cname = name.display();
+        let def = self.classes.get(&cname).cloned();
+        let Some(def) = def else {
+            // Unreachable in practice (dispatch checked the table) — kept as
+            // honest recovery.
+            self.diags.push(self.unknown_name(&cname, name.span));
+            return TypedExpr {
+                expr: Expr::Name {
+                    name: name.clone(),
+                    span,
+                },
+                ty: Type::Error,
+            };
+        };
+        // 10.3: when the class has `construction` clauses, field values are
+        // the clause's business (its body sets them; the Swift rule is
+        // enforced there) — this reader only handles the direct
+        // field-initialization spelling. The empty-fields form is the
+        // construction dispatch's own synthesized receiver.
+        let has_ctors = self.ctor_clauses.iter().any(|(c, _, _)| c == &cname);
+        let mut given: Vec<(String, Type)> = Vec::new();
+        // Every declared field gets a slot, in declaration order (the
+        // backends index fields positionally against the class's table).
+        // Site values fill their slot; the rest hold `nothing` — unreachable
+        // for accepted programs (the Swift rule, E0349, demands each field),
+        // but a recovered program must still allocate a well-shaped object
+        // rather than index past its cells at runtime.
+        let mut out_fields: Vec<(Name, Expr)> = def
+            .fields
+            .iter()
+            .map(|(n, _, sp)| {
+                (
+                    Name {
+                        words: vec![n.clone()],
+                        span: *sp,
+                    },
+                    Expr::Nothing { span: *sp },
+                )
+            })
+            .collect();
+        for (fname, fexpr) in fields {
+            let ft = self.check_expr(fexpr, None);
+            let fname_s = fname.display();
+            match def.fields.iter().position(|(n, _, _)| n == &fname_s) {
+                Some(ix) => {
+                    let fty = def.fields[ix].1.clone();
+                    let ft2 = TypedExpr {
+                        expr: fexpr.clone(),
+                        ty: ft.ty.clone(),
+                    };
+                    self.require_assignable(
+                        &fty,
+                        &ft2,
+                        &format!("the {cname}'s `{fname_s}` field"),
+                    );
+                    out_fields[ix] = (fname.clone(), ft2.expr);
+                }
+                None => {
+                    let fields_list = self.user_type_fields(&cname);
+                    self.diags.push(
+                        Diagnostic::error(
+                            "E0348",
+                            format!("`{cname}` has no field called `{fname_s}`."),
+                            fname.span,
+                        )
+                        .with_note(format!("its fields are: {fields_list}")),
+                    );
+                }
+            }
+            given.push((fname_s, ft.ty));
+        }
+        if !has_ctors {
+            for (n, _, _) in &def.fields {
+                let count = given.iter().filter(|(g, _)| g == n).count();
+                if count == 0 {
+                    self.diags.push(
+                        Diagnostic::error(
+                            "E0349",
+                            format!("This {cname} is missing its `{n}` field."),
+                            span,
+                        )
+                        .with_fix(format!("a new {cname} with {n} …")),
+                    );
+                } else if count > 1 {
+                    self.diags.push(
+                        Diagnostic::error(
+                            "E0350",
+                            format!("This {cname} gives `{n}` twice."),
+                            span,
+                        )
+                        .with_explanation(
+                            "A construction sets each field once — a field needs one value.",
+                        ),
+                    );
+                }
+            }
+        }
+        TypedExpr {
+            expr: Expr::NewObject {
+                name: name.clone(),
+                fields: out_fields,
+                span,
+            },
+            ty: Type::Struct(cname),
+        }
+    }
+
+    /// 10.3 dispatch: `a new C with <clause-args>` when `C` has construction
+    /// clauses. The clause is found by argument NAMES (D-14 — no
+    /// overloading-by-arity ambiguity), then the site becomes an ordinary
+    /// call of the clause's receiver-first function (R-2) whose first
+    /// argument is the fresh all-`nothing` object — the clause body fills
+    /// the fields and hands the object back. Zero new runtime machinery:
+    /// the call lowers exactly like any other call.
+    fn dispatch_construction(
+        &mut self,
+        name: &Name,
+        fields: &[(Name, Expr)],
+        span: Span,
+    ) -> TypedExpr {
+        // The depth guard spans the whole dispatch: the rebuilt clause
+        // call's receiver argument re-enters this arm, whatever the site's
+        // own shape. The guard's `check_class_construction` return keeps
+        // that synthesized receiver from dispatching again.
+        if fields.is_empty() && self.construction_depth > 0 {
+            return self.check_class_construction(name, fields, span);
+        }
+        self.construction_depth += 1;
+        let out = self.dispatch_construction_inner(name, fields, span);
+        self.construction_depth -= 1;
+        out
+    }
+
+    fn dispatch_construction_inner(
+        &mut self,
+        name: &Name,
+        fields: &[(Name, Expr)],
+        span: Span,
+    ) -> TypedExpr {
+        let cname = name.display();
+        let clauses: Vec<(String, Vec<String>)> = self
+            .ctor_clauses
+            .iter()
+            .filter(|(c, _, _)| c == &cname)
+            .map(|(_, fname, pnames)| (fname.clone(), pnames.clone()))
+            .collect();
+        let labels: Vec<String> = fields.iter().map(|(n, _)| n.display()).collect();
+        let want: Vec<&String> = labels.iter().collect();
+        let matched = clauses.iter().find(|(_, pnames)| {
+            pnames.len() == want.len() && pnames.iter().all(|p| want.contains(&p))
+        });
+        let Some((fname, pnames)) = matched else {
+            let listing = clauses
+                .iter()
+                .map(|(_, pn)| format!("`construction {} with {}`", cname, pn.join(" and ")))
+                .collect::<Vec<_>>()
+                .join("  or  ");
+            self.diags.push(
+                Diagnostic::error(
+                    "E0375",
+                    if clauses.is_empty() {
+                        format!("`{cname}` has no construction clause.")
+                    } else {
+                        format!("No construction of `{cname}` takes these names.")
+                    },
+                    span,
+                )
+                .with_note(if listing.is_empty() {
+                    format!("its fields are: {}", self.user_type_fields(&cname))
+                } else {
+                    format!("its constructions are: {listing}")
+                })
+                .with_explanation(
+                    "A `construction` clause is found by the names after `with` — they must match the clause's `takes` names exactly.",
+                ),
+            );
+            for (_, fexpr) in fields {
+                self.check_expr(fexpr, None);
+            }
+            return TypedExpr {
+                expr: Expr::NewObject {
+                    name: name.clone(),
+                    fields: Vec::new(),
+                    span,
+                },
+                ty: Type::Error,
+            };
+        };
+        // Rebuild as the clause call: receiver first (the fresh object),
+        // then each labeled value in the clause's parameter order. A bare
+        // site matched a zero-parameter clause, so no labels follow.
+        let mut and_args: Vec<ast::Arg> = Vec::new();
+        for p in pnames {
+            if let Some((_, fexpr)) = fields.iter().find(|(n, _)| &n.display() == p) {
+                and_args.push(ast::Arg {
+                    expr: Box::new(fexpr.clone()),
+                    span,
+                });
+            }
+        }
+        let rebuilt = ast::CallExpr {
+            callee: Name {
+                words: vec![fname.clone()],
+                span: name.span,
+            },
+            first: Some(Box::new(ast::Arg {
+                expr: Box::new(Expr::NewObject {
+                    name: name.clone(),
+                    fields: Vec::new(),
+                    span,
+                }),
+                span,
+            })),
+            preps: Vec::new(),
+            and_args,
+            with_args: Vec::new(),
+            using_arg: None,
+            where_expr: None,
+            span,
+        };
+        let out = self.check_call(&rebuilt, None);
+        // R-2 checks the clause against the declaring class's receiver, but
+        // the value this site constructs is an instance of the *named* class
+        // (the fresh receiver allocates with its field table, prefix-copied
+        // per 10.5) — so the site's static type is the named class.
+        TypedExpr {
+            expr: out.expr,
+            ty: Type::Struct(cname),
         }
     }
 
@@ -2424,7 +4137,61 @@ impl<'a> Checker<'a> {
         // 1. Whole-run binding (the common case: single word).
         if let Some(b) = self.lookup(&full) {
             self.node_types.insert(span, b.ty.clone());
-            return TypedExpr { expr: Expr::Name { name: name.clone(), span }, ty: b.ty };
+            return TypedExpr {
+                expr: Expr::Name {
+                    name: name.clone(),
+                    span,
+                },
+                ty: b.ty,
+            };
+        }
+        // 1.2. Method call, receiver-last name run (10.2): `bump c` arrives
+        //     as a bare name run — no argument trigger follows the words, so
+        //     the parser kept one run. The receiver is a tail of the run when
+        //     that tail names a binding of a class owning the head as a
+        //     method (R-2: the receiver is the first argument; §7.9's
+        //     subject-last reading is what the reader sees). Longest head
+        //     wins (7.0.3).
+        if name.words.len() >= 2 && !self.functions.contains_key(&full) {
+            for split in (1..name.words.len()).rev() {
+                let head = name.words[..split].join(" ");
+                let recv_ty = self.lookup(&name.words[split..].join(" ")).map(|b| b.ty);
+                let recv_class = match &recv_ty {
+                    Some(Type::Struct(s)) if self.classes.contains_key(s) => Some(s.clone()),
+                    _ => None,
+                };
+                let Some(cname) = recv_class else { continue };
+                // 10.5 copy-redirect: resolve through the base chain (the
+                // method may be declared on any ancestor).
+                let Some(method) = self.resolve_inherited_method(&cname, &head) else {
+                    continue;
+                };
+                let tail_span = self.tail_words_span(span, &name.words, split);
+                let arg = Expr::Name {
+                    name: Name {
+                        words: name.words[split..].to_vec(),
+                        span: tail_span,
+                    },
+                    span: tail_span,
+                };
+                let call = CallExpr {
+                    callee: Name {
+                        words: vec![method],
+                        span,
+                    },
+                    first: Some(Box::new(ast::Arg {
+                        expr: Box::new(arg),
+                        span: tail_span,
+                    })),
+                    preps: Vec::new(),
+                    and_args: Vec::new(),
+                    with_args: Vec::new(),
+                    using_arg: None,
+                    where_expr: None,
+                    span,
+                };
+                return self.check_call(&call, None);
+            }
         }
         // 1.5. Whole-run function with zero arguments (G-15, docs/14): the
         //      parser emits a bare multi-word name run when a call has no
@@ -2447,12 +4214,18 @@ impl<'a> Checker<'a> {
                 let fty = Type::Function(params, Box::new(ret));
                 self.node_types.insert(span, fty.clone());
                 return TypedExpr {
-                    expr: Expr::Name { name: name.clone(), span },
+                    expr: Expr::Name {
+                        name: name.clone(),
+                        span,
+                    },
                     ty: fty,
                 };
             }
             let call = CallExpr {
-                callee: Name { words: vec![full.clone()], span },
+                callee: Name {
+                    words: vec![full.clone()],
+                    span,
+                },
                 first: None,
                 preps: Vec::new(),
                 and_args: Vec::new(),
@@ -2480,12 +4253,21 @@ impl<'a> Checker<'a> {
                 // must never share a span — HIR keys types on spans).
                 let tail_span = self.tail_words_span(span, &name.words, split);
                 let arg = Expr::Name {
-                    name: Name { words: name.words[split..].to_vec(), span: tail_span },
+                    name: Name {
+                        words: name.words[split..].to_vec(),
+                        span: tail_span,
+                    },
                     span: tail_span,
                 };
                 let call = CallExpr {
-                    callee: Name { words: vec![head], span },
-                    first: Some(Box::new(ast::Arg { expr: Box::new(arg), span: tail_span })),
+                    callee: Name {
+                        words: vec![head],
+                        span,
+                    },
+                    first: Some(Box::new(ast::Arg {
+                        expr: Box::new(arg),
+                        span: tail_span,
+                    })),
                     preps: Vec::new(),
                     and_args: Vec::new(),
                     with_args: Vec::new(),
@@ -2501,10 +4283,105 @@ impl<'a> Checker<'a> {
                 return self.check_call(&call, None);
             }
         }
-        // 3. Unknown.
+        // 3. Unknown. One honest refinement (10.2's method reading): when the
+        //    run's HEAD names a registered method, the receiver words are the
+        //    actual problem — say what was found and what was wanted.
+        if name.words.len() >= 2 {
+            let owner = self.method_owner_of_head(&name.words[0]);
+            if let Some(cname) = owner {
+                self.diags.push(
+                    Diagnostic::error(
+                        "E0374",
+                        format!(
+                            "`{}` is a method of class `{cname}` — it needs a {cname} as its receiver, but `{}` is not one.",
+                            name.words[0],
+                            name.words[1..].join(" ")
+                        ),
+                        span,
+                    )
+                    .with_explanation("A method call passes its object first: the words after the method's name must name a made object of the method's class."),
+                );
+                return TypedExpr {
+                    expr: Expr::Name {
+                        name: name.clone(),
+                        span,
+                    },
+                    ty: Type::Error,
+                };
+            }
+        }
+        // 4. Unknown single word inside a method body (10.2): a bare field
+        //    name reads the receiver's field — the architecture's own method
+        //    examples spell `side times side`, not `side of myself times side
+        //    of myself`. Rewritten to the explicit field read.
+        if name.words.len() == 1 {
+            if let Some(cname) = &self.current_method_class {
+                let is_field = self
+                    .classes
+                    .get(cname)
+                    .map_or(false, |c| c.fields.iter().any(|(n, _, _)| n == &full));
+                if is_field {
+                    // Rewrite to the explicit `side of myself` read — the
+                    // prepositional form the flowing-read arm already owns.
+                    let recv = Expr::Name {
+                        name: Name {
+                            words: vec!["myself".to_string()],
+                            span,
+                        },
+                        span,
+                    };
+                    let call = CallExpr {
+                        callee: Name {
+                            words: vec![full.clone()],
+                            span,
+                        },
+                        first: None,
+                        preps: vec![(
+                            Prep::Of,
+                            ast::Arg {
+                                expr: Box::new(recv),
+                                span,
+                            },
+                        )],
+                        and_args: Vec::new(),
+                        with_args: Vec::new(),
+                        using_arg: None,
+                        where_expr: None,
+                        span,
+                    };
+                    self.read_spans.insert(call.span);
+                    return self.check_call(&call, None);
+                }
+            }
+        }
         let d = self.unknown_name(&full, span);
         self.diags.push(d);
-        TypedExpr { expr: Expr::Name { name: name.clone(), span }, ty: Type::Error }
+        TypedExpr {
+            expr: Expr::Name {
+                name: name.clone(),
+                span,
+            },
+            ty: Type::Error,
+        }
+    }
+
+    /// The class owning a single-word method head, if any (10.2's dispatch
+    /// key — used by the unknown-name diagnostic to name the real cause).
+    fn method_owner_of_head(&self, word: &str) -> Option<String> {
+        if !word
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_lowercase())
+            .unwrap_or(false)
+        {
+            return None;
+        }
+        for cname in self.classes.keys() {
+            if self.resolve_inherited_method(cname, word).is_some() {
+                return Some(cname.clone());
+            }
+        }
+        None
     }
 
     fn check_call(&mut self, call: &ast::CallExpr, expected: Option<&Type>) -> TypedExpr {
@@ -2514,7 +4391,83 @@ impl<'a> Checker<'a> {
         // root` → say(square root(16))).
         let call = self.rejoin_split_builtin(call);
         let resolved = self.resolve_callee(&call);
-        self.check_resolved_call(&resolved, expected)
+        // Threading, not double-checking: if the callee IS a method (its
+        // name is `method <class> <name>` and the class exists), check it
+        // here with the receiver type available as the first parameter's
+        // expected type — then hand the fully-checked call straight down.
+        // The callee-side guard also keeps the method arm from re-triggering
+        // on the rebuilt call.
+        let callee = resolved.callee.display();
+        if method_callee_class(self, &callee).is_some() {
+            // 10.5 copy-redirect: an inherited method's callee becomes the
+            // defining class's method — the body checked under the class
+            // that declared it, with that class as the receiver type. A
+            // `myself` receiver resolves through the EFFECTIVE class (the
+            // object's dynamic class), and when the resolution lands on the
+            // method being checked that IS calling up (10.5's `speak of
+            // myself` inside an override): hop to the base declaration.
+            let resolved = if let Some(cname) = method_callee_class(self, &callee) {
+                let mname = callee[format!("method {cname} ").len()..].to_string();
+                let eff_class = if resolved
+                    .first
+                    .as_ref()
+                    .map_or(false, |a| matches!(a.expr.as_ref(), ast::Expr::Name { name, .. } if name.display() == "myself"))
+                {
+                    self.current_method_class.clone().unwrap_or_else(|| cname.clone())
+                } else {
+                    cname.clone()
+                };
+                let mut owner = self
+                    .resolve_inherited_method(&eff_class, &mname)
+                    .unwrap_or_else(|| callee.clone());
+                if owner == callee {
+                    if let Some(checking) = &self.current_checked_name {
+                        if *checking == callee {
+                            if let Some((base, _)) = self.class_base.get(&eff_class).cloned() {
+                                owner = self
+                                    .resolve_inherited_method(&base, &mname)
+                                    .unwrap_or(format!("method {base} {mname}"));
+                            }
+                        }
+                    }
+                }
+                if owner != callee {
+                    let mut out = resolved.clone();
+                    out.callee = ast::Name {
+                        words: vec![owner],
+                        span: resolved.callee.span,
+                    };
+                    out
+                } else {
+                    resolved
+                }
+            } else {
+                resolved
+            };
+            // The receiver is checked against the method's own leading
+            // parameter type (R-2's receiver-first rule) so a wrong receiver
+            // reports the class it needed, not a bare arity error.
+            let receiver_ty = self
+                .functions
+                .get(&callee)
+                .and_then(|s| s.params.first())
+                .cloned();
+            let mut checked_args: Vec<TypedExpr> = Vec::new();
+            if let Some(f) = &resolved.first {
+                checked_args.push(self.check_expr(&f.expr, receiver_ty.as_ref()));
+            }
+            for (_, a) in &resolved.preps {
+                checked_args.push(self.check_expr(&a.expr, None));
+            }
+            for a in &resolved.and_args {
+                checked_args.push(self.check_expr(&a.expr, None));
+            }
+            for (_, a) in &resolved.with_args {
+                checked_args.push(self.check_expr(&a.expr, None));
+            }
+            return self.check_resolved_call(&resolved, expected, checked_args);
+        }
+        self.check_resolved_call(&resolved, expected, Vec::new())
     }
 
     /// Multi-word builtins containing a type word (`json text`) lex as a name
@@ -2523,11 +4476,20 @@ impl<'a> Checker<'a> {
     /// form a known function name and the inner call is purely prepositional,
     /// rejoin them — the longest-known reading (7.0.3).
     fn rejoin_split_builtin(&self, call: &ast::CallExpr) -> ast::CallExpr {
-        let Some(first) = &call.first else { return call.clone() };
-        let Expr::Call(inner) = first.expr.as_ref() else { return call.clone() };
-        if !inner.first.is_none() || !inner.and_args.is_empty() || !inner.with_args.is_empty()
-            || inner.using_arg.is_some() || inner.where_expr.is_some() || inner.preps.len() != 1
-            || inner.callee.words.len() != 1 || call.callee.words.len() != 1
+        let Some(first) = &call.first else {
+            return call.clone();
+        };
+        let Expr::Call(inner) = first.expr.as_ref() else {
+            return call.clone();
+        };
+        if !inner.first.is_none()
+            || !inner.and_args.is_empty()
+            || !inner.with_args.is_empty()
+            || inner.using_arg.is_some()
+            || inner.where_expr.is_some()
+            || inner.preps.len() != 1
+            || inner.callee.words.len() != 1
+            || call.callee.words.len() != 1
         {
             return call.clone();
         }
@@ -2536,7 +4498,10 @@ impl<'a> Checker<'a> {
             return call.clone();
         }
         let mut out = call.clone();
-        out.callee = Name { words: vec![joined], span: call.callee.span.to(inner.callee.span) };
+        out.callee = Name {
+            words: vec![joined],
+            span: call.callee.span.to(inner.callee.span),
+        };
         out.first = inner.first.clone();
         out.preps = inner.preps.clone();
         out.span = call.span;
@@ -2566,7 +4531,10 @@ impl<'a> Checker<'a> {
         while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
             i += 1;
         }
-        Span { start: span.start + i, end: span.end }
+        Span {
+            start: span.start + i,
+            end: span.end,
+        }
     }
 
     /// Rewrite a call whose multi-word callee contains a known-function
@@ -2591,17 +4559,21 @@ impl<'a> Checker<'a> {
                     // (they are R-3's call suffixes of the whole sentence:
                     // `map xs using area` = map(xs, λarea), never xs(λarea)).
                     let tail_span = self.tail_words_span(call.callee.span, words, split);
-                    let tail_name = Name { words: words[split..].to_vec(), span: tail_span };
-                    let tail_arg = if call.first.is_none()
-                        && call.preps.is_empty()
-                    {
+                    let tail_name = Name {
+                        words: words[split..].to_vec(),
+                        span: tail_span,
+                    };
+                    let tail_arg = if call.first.is_none() && call.preps.is_empty() {
                         // A tail with no arguments of its own (`map xs`, `say
                         // result`) is a plain NAME — the tail words ARE the
                         // argument value (S-14: a non-function callee with no
                         // prepositional args is a read/name, never a zero-arg
                         // call). Only a tail that carries arguments stays a
                         // call (`say square root of 16`).
-                        Expr::Name { name: tail_name.clone(), span: tail_span }
+                        Expr::Name {
+                            name: tail_name.clone(),
+                            span: tail_span,
+                        }
                     } else {
                         // The tail continues its own flowcall: its [additive]
                         // (outer `first`) and { prep } args. The `and`/`with`
@@ -2651,7 +4623,10 @@ impl<'a> Checker<'a> {
                                     args.push((**f).clone());
                                 }
                                 args.push(ast::Arg {
-                                    expr: Box::new(Expr::Name { name: tail_name.clone(), span: tail_span }),
+                                    expr: Box::new(Expr::Name {
+                                        name: tail_name.clone(),
+                                        span: tail_span,
+                                    }),
                                     span: tail_span,
                                 });
                                 for (_, a) in &call.preps {
@@ -2664,7 +4639,10 @@ impl<'a> Checker<'a> {
                                     and_args = args.drain(..).collect();
                                 }
                                 return ast::CallExpr {
-                                    callee: Name { words: vec![head], span: call.callee.span },
+                                    callee: Name {
+                                        words: vec![head],
+                                        span: call.callee.span,
+                                    },
                                     first,
                                     preps: Vec::new(),
                                     and_args,
@@ -2677,14 +4655,17 @@ impl<'a> Checker<'a> {
                         }
                     }
                     if let Some(tsig) = self.functions.get(&tail_str) {
-                        let tail_fed = call.first.as_ref().map_or(0, |_| 1)
-                            + call.preps.len();
+                        let tail_fed = call.first.as_ref().map_or(0, |_| 1) + call.preps.len();
                         if tsig.params.len() > tail_fed
-                            && tsig.params.len() == tail_fed + call.and_args.len() + call.with_args.len()
+                            && tsig.params.len()
+                                == tail_fed + call.and_args.len() + call.with_args.len()
                             && !(call.and_args.is_empty() && call.with_args.is_empty())
                         {
                             return ast::CallExpr {
-                                callee: Name { words: vec![head], span: call.callee.span },
+                                callee: Name {
+                                    words: vec![head],
+                                    span: call.callee.span,
+                                },
                                 first: Some(Box::new(ast::Arg {
                                     expr: Box::new(Expr::Call(Box::new(ast::CallExpr {
                                         callee: tail_name.clone(),
@@ -2708,7 +4689,10 @@ impl<'a> Checker<'a> {
                         }
                     }
                     return ast::CallExpr {
-                        callee: Name { words: vec![head], span: call.callee.span },
+                        callee: Name {
+                            words: vec![head],
+                            span: call.callee.span,
+                        },
                         first: Some(Box::new(ast::Arg {
                             expr: Box::new(tail_arg),
                             span: tail_span,
@@ -2735,7 +4719,10 @@ impl<'a> Checker<'a> {
         };
         let mut out = call.clone();
         // `it` as the single parameter (11.1's implicit single parameter).
-        let it = Name { words: vec!["it".to_string()], span: expr_span(where_expr) };
+        let it = Name {
+            words: vec!["it".to_string()],
+            span: expr_span(where_expr),
+        };
         out.using_arg = Some(Box::new(Expr::Lambda {
             params: vec![it],
             body: ast::LambdaBody::Inline(Box::new((**where_expr).clone())),
@@ -2771,7 +4758,10 @@ impl<'a> Checker<'a> {
         }
         let mut out = call.clone();
         let span = expr_span(lam);
-        let mut params = vec![Name { words: vec!["it".to_string()], span }];
+        let mut params = vec![Name {
+            words: vec!["it".to_string()],
+            span,
+        }];
         if is_combine {
             // The accumulator's name is the first `with` label (`with start
             // 0`); it leads the formals so the fold can rebind it each step.
@@ -2787,17 +4777,22 @@ impl<'a> Checker<'a> {
         out
     }
 
-    fn check_resolved_call(&mut self, call: &ast::CallExpr, _expected: Option<&Type>) -> TypedExpr {
+    fn check_resolved_call(
+        &mut self,
+        call: &ast::CallExpr,
+        _expected: Option<&Type>,
+        checked_pre: Vec<TypedExpr>,
+    ) -> TypedExpr {
         // M1 call suffixes (R-3): `where <orexpr>` desugars to the inline
         // lambda `taking it giving back <expr>` — one desugaring rule, checked
         // as the lambda it means. It must exist before arity checking adds
         // its argument.
         let call = self.desugar_where(call);
-        let call = self.desugar_using(&call);        // The `using` lambda is checked AFTER the leading list argument (the
-        // combinator callees below), so the element type can seed the lambda's
-        // parameter type (11.2: the combinator gives the lambda its input).
-        // `with`-suffix names (`combine … with start 0 using start plus it`)
-        // are in scope for the lambda body per §7.15's lambda note.
+        let call = self.desugar_using(&call); // The `using` lambda is checked AFTER the leading list argument (the
+                                              // combinator callees below), so the element type can seed the lambda's
+                                              // parameter type (11.2: the combinator gives the lambda its input).
+                                              // `with`-suffix names (`combine … with start 0 using start plus it`)
+                                              // are in scope for the lambda body per §7.15's lambda note.
         let mut extra_args: Vec<Expr> = Vec::new();
         let mut checked_extra: Vec<TypedExpr> = Vec::new();
         let mut with_scope: Vec<(String, Type)> = Vec::new();
@@ -2843,12 +4838,21 @@ impl<'a> Checker<'a> {
                 // structure/indexed binding, not a function binding.
                 if matches!(
                     self.lookup(&callee),
-                    Some(Binding { ty: Type::Function(_, _), .. })
+                    Some(Binding {
+                        ty: Type::Function(_, _),
+                        ..
+                    })
                 ) {
                     let mut synthetic = CallExpr {
-                        callee: Name { words: vec!["call".into()], span: call.callee.span },
+                        callee: Name {
+                            words: vec!["call".into()],
+                            span: call.callee.span,
+                        },
                         first: Some(Box::new(ast::Arg {
-                            expr: Box::new(ast::Expr::Name { name: call.callee.clone(), span: call.callee.span }),
+                            expr: Box::new(ast::Expr::Name {
+                                name: call.callee.clone(),
+                                span: call.callee.span,
+                            }),
                             span: call.callee.span,
                         })),
                         preps: Vec::new(),
@@ -2870,6 +4874,171 @@ impl<'a> Checker<'a> {
                         self.pop_scope();
                     }
                     return out;
+                }
+                // Method call with the receiver in the call's suffix (10.2):
+                // `add 5 to c`, `add points of p`, `rename of d` — the callee
+                // head words are the method's name and one suffix argument
+                // names a binding whose class owns that method. The receiver
+                // moves to the leading argument (R-2) and the remaining
+                // suffix arguments follow in order. Field-first (7.11's
+                // read convention): a head that names a field of the
+                // receiver's class stays a read.
+                {
+                    let mut suffixes: Vec<&ast::Arg> = Vec::new();
+                    if let Some(f) = &call.first {
+                        suffixes.push(f);
+                    }
+                    for (_, a) in &call.preps {
+                        suffixes.push(a);
+                    }
+                    for a in &call.and_args {
+                        suffixes.push(a);
+                    }
+                    let head = callee.clone();
+                    for (i, sarg) in suffixes.iter().enumerate() {
+                        // The receiver may arrive wrapped: `compare to of v with
+                        // other "y"` (§70's frozen form) binds `with` to the
+                        // nearest open call — the bare receiver name — so the
+                        // suffix argument is `v with other …`. Unwrap the
+                        // receiver and carry its labeled arguments to the
+                        // rebuilt method call.
+                        let (rname, inner_with): (&ast::Name, Vec<(ast::Name, ast::Arg)>) =
+                            match sarg.expr.as_ref() {
+                                ast::Expr::Name { name, .. } => (name, Vec::new()),
+                                ast::Expr::Call(c)
+                                    if c.callee.words.len() == 1
+                                        && c.first.is_none()
+                                        && c.preps.is_empty()
+                                        && c.and_args.is_empty()
+                                        && c.using_arg.is_none()
+                                        && c.where_expr.is_none()
+                                        && !c.with_args.is_empty() =>
+                                {
+                                    (&c.callee, c.with_args.clone())
+                                }
+                                _ => continue,
+                            };
+                        let Some(b) = self.lookup(&rname.display()) else {
+                            continue;
+                        };
+                        // 12.3 body-side dispatch: a suffix whose receiver is a
+                        // constrained parameter dispatches through the interface
+                        // (`iface <I> <m>`, the 10.6 vtable). The method must be
+                        // one of the interface's requirements — the constraint is
+                        // exactly what makes the call legal; on an unconstrained
+                        // `anything` this same path falls through to the unknown-
+                        // method diagnostic below (nothing is known about the
+                        // value, so no method call can be proven real).
+                        if let Type::Iface(iname) = &b.ty {
+                            let iname = iname.clone();
+                            let reqs = self.interfaces.get(&iname).cloned().unwrap_or_default();
+                            if !reqs.iter().any(|r| r == &head) {
+                                let method_span = call.callee.span;
+                                self.diags.push(
+                                    Diagnostic::error(
+                                        "E0384",
+                                        format!(
+                                            "`{head}` is not a method of `{iname}`, so it cannot be called on `{}`.",
+                                            rname.display()
+                                        ),
+                                        method_span,
+                                    )
+                                    .with_explanation(format!(
+                                        "`{}` is a `{}` value — the constraint promises only `{}`'s methods ({}). Any other call cannot be proven real on every value the function might receive.",
+                                        rname.display(),
+                                        Type::Iface(iname.clone()).display(),
+                                        iname,
+                                        if reqs.is_empty() {
+                                            "it has no `can` lines".to_string()
+                                        } else {
+                                            reqs.join(", ")
+                                        }
+                                    ))
+                                    .with_fix(format!(
+                                        "call a method `{iname}` requires — or add `{head}` to `{iname}`'s `can` lines if every conforming class should have it"
+                                    ))
+                                    .with_fix_why(
+                                        "the constraint guarantees exactly the interface's requirement methods — calling only those keeps the body true for every argument it will ever receive"
+                                    ),
+                                );
+                                return TypedExpr {
+                                    expr: self.rebuild_call(&call, Vec::new()),
+                                    ty: Type::Error,
+                                };
+                            }
+                            let mut rebuilt = ast::CallExpr {
+                                callee: Name {
+                                    words: vec![format!("iface {iname} {}", head)],
+                                    span: call.callee.span,
+                                },
+                                first: Some(Box::new(ast::Arg {
+                                    expr: Box::new(ast::Expr::Name {
+                                        name: rname.clone(),
+                                        span: rname.span,
+                                    }),
+                                    span: rname.span,
+                                })),
+                                preps: Vec::new(),
+                                and_args: Vec::new(),
+                                with_args: {
+                                    let mut w = call.with_args.clone();
+                                    w.extend(inner_with);
+                                    w
+                                },
+                                using_arg: call.using_arg.clone(),
+                                where_expr: call.where_expr.clone(),
+                                span: call.span,
+                            };
+                            for (j, other) in suffixes.iter().enumerate() {
+                                if j != i {
+                                    rebuilt.and_args.push((*other).clone());
+                                }
+                            }
+                            return self.check_call(&rebuilt, _expected);
+                        }
+                        let Type::Struct(s) = b.ty.clone() else {
+                            continue;
+                        };
+                        if !self.classes.contains_key(&s) {
+                            continue;
+                        }
+                        if suffixes.len() == 1 && self.struct_or_class_field(&s, &head).is_some() {
+                            break;
+                        }
+                        // 10.5 copy-redirect: resolve through the base chain.
+                        let Some(method) = self.resolve_inherited_method(&s, &head) else {
+                            continue;
+                        };
+                        let mut rebuilt = ast::CallExpr {
+                            callee: Name {
+                                words: vec![method],
+                                span: call.callee.span,
+                            },
+                            first: Some(Box::new(ast::Arg {
+                                expr: Box::new(ast::Expr::Name {
+                                    name: rname.clone(),
+                                    span: rname.span,
+                                }),
+                                span: rname.span,
+                            })),
+                            preps: Vec::new(),
+                            and_args: Vec::new(),
+                            with_args: {
+                                let mut w = call.with_args.clone();
+                                w.extend(inner_with);
+                                w
+                            },
+                            using_arg: call.using_arg.clone(),
+                            where_expr: call.where_expr.clone(),
+                            span: call.span,
+                        };
+                        for (j, other) in suffixes.iter().enumerate() {
+                            if j != i {
+                                rebuilt.and_args.push((*other).clone());
+                            }
+                        }
+                        return self.check_call(&rebuilt, _expected);
+                    }
                 }
                 // Flowing field/index reads (7.6/7.11): `name of p`,
                 // `things at 2` — a non-function callee with exactly one
@@ -2931,7 +5100,10 @@ impl<'a> Checker<'a> {
                 for a in &args {
                     self.check_expr(a, None);
                 }
-                let out = TypedExpr { expr: self.rebuild_call(&call, Vec::new()), ty: Type::Error };
+                let out = TypedExpr {
+                    expr: self.rebuild_call(&call, Vec::new()),
+                    ty: Type::Error,
+                };
                 if !with_scope.is_empty() {
                     self.pop_scope();
                 }
@@ -2939,8 +5111,18 @@ impl<'a> Checker<'a> {
             }
             Some(sig) => {
                 let n_pre = args.len() - extra_args.len();
+                // Arguments already checked by the method-call thread come
+                // through `checked_pre` (the receiver against its parameter
+                // type); every other call checks its own arguments here.
                 let mut checked: Vec<TypedExpr> =
-                    args.iter().take(n_pre).map(|a| self.check_expr(a, None)).collect();
+                    if checked_pre.len() == n_pre && !checked_pre.is_empty() {
+                        checked_pre
+                    } else {
+                        args.iter()
+                            .take(n_pre)
+                            .map(|a| self.check_expr(a, None))
+                            .collect()
+                    };
                 // The `using` lambda: now that the leading arguments are
                 // checked, derive its expected parameter type from the
                 // combinator's list element (`map a list of 1, 2 using it plus
@@ -2972,7 +5154,10 @@ impl<'a> Checker<'a> {
                                 ps.push(a.clone());
                             }
                             ps.push(e.clone());
-                            Type::Function(ps, Box::new(ret_expected.clone().unwrap_or(Type::Error)))
+                            Type::Function(
+                                ps,
+                                Box::new(ret_expected.clone().unwrap_or(Type::Error)),
+                            )
                         });
                         let lt = self.check_lambda_expected_lambda(lam, expected_fn.as_ref());
                         if !matches!(lt.ty, Type::Function(_, _) | Type::Error) {
@@ -2995,46 +5180,126 @@ impl<'a> Checker<'a> {
                     "say" => {
                         // One argument of any type (everything prints, S-9).
                         if n != 1 {
-                            self.diags.push(self.bad_arity(&callee, 1, n, call.callee.span));
+                            self.diags
+                                .push(self.bad_arity(&callee, 1, n, call.callee.span));
                         }
                         (Type::Text, false)
                     }
                     "ask" => {
                         if n != 1 {
-                            self.diags.push(self.bad_arity(&callee, 1, n, call.callee.span));
+                            self.diags
+                                .push(self.bad_arity(&callee, 1, n, call.callee.span));
                         } else {
                             self.require_type(&checked[0], &Type::Text, "`ask`", "the question");
                         }
                         (Type::Text, false)
                     }
+                    // ----- tasks and channels (14.2/14.3 v0.1) -----
+                    "send" => {
+                        // `send <v> to <ch>`: two arguments, the channel
+                        // second. Produces nothing. The channel must ride
+                        // the `to` prep — a comma call has no marker saying
+                        // which argument is the channel, and the HIR rewrite
+                        // (which keys on the prep) would leave an unknown
+                        // function that panics at runtime. Reject at check
+                        // time (E0391).
+                        if n == 2 && !call.preps.iter().any(|(p, _)| *p == ast::Prep::To) {
+                            self.diags.push(self.channel_call_needs_prep(&callee, call.callee.span));
+                        } else if n != 2 {
+                            self.diags
+                                .push(self.bad_arity(&callee, 2, n, call.callee.span));
+                        } else {
+                            let ch = &checked[1];
+                            match &ch.ty {
+                                Type::Channel(elem) => {
+                                    let want = (**elem).clone();
+                                    self.require_assignable(&want, &checked[0], "the message to send");
+                                }
+                                Type::Error => {}
+                                other => {
+                                    let other = other.clone();
+                                    let sp = ch.span();
+                                    self.diags.push(self.send_needs_channel(other, sp));
+                                }
+                            }
+                        }
+                        (Type::NothingLit, false)
+                    }
+                    "receive" => {
+                        // `receive from <ch>`: one argument, the channel.
+                        // Same E0391 rule as `send`: without the `from` prep
+                        // the call is not the channel form and cannot lower.
+                        if n == 1 && !call.preps.iter().any(|(p, _)| *p == ast::Prep::From) {
+                            self.diags.push(self.channel_call_needs_prep(&callee, call.callee.span));
+                        } else if n != 1 {
+                            self.diags
+                                .push(self.bad_arity(&callee, 1, n, call.callee.span));
+                        } else {
+                            let ch = &checked[0];
+                            if !matches!(ch.ty, Type::Channel(_) | Type::Error) {
+                                let other = ch.ty.clone();
+                                let sp = ch.span();
+                                self.diags.push(self.receive_needs_channel(&other, sp));
+                            }
+                        }
+                        // The message type. Statically can-fail=false — the
+                        // frozen demo form is a bare `say receive from m`, and
+                        // `first of <empty list>` set the precedent: domain
+                        // failures (an empty channel) are runtime failures,
+                        // catchable by `attempt`, not static capability
+                        // requirements (R-20 covers statically-fallible
+                        // calls). The join barrier runs before the failure.
+                        let elem = checked
+                            .first()
+                            .and_then(|c| match &c.ty {
+                                Type::Channel(e) => Some((**e).clone()),
+                                _ => None,
+                            })
+                            .unwrap_or(Type::Error);
+                        (elem, false)
+                    }
                     // ----- conversions (D-39, S-7) — `number from text` can fail -----
                     "number" => {
                         if n != 1 {
-                            self.diags.push(self.bad_arity(&callee, 1, n, call.callee.span));
+                            self.diags
+                                .push(self.bad_arity(&callee, 1, n, call.callee.span));
                         } else {
-                            self.require_type(&checked[0], &Type::Text, "`number from`", "the text to convert");
+                            self.require_type(
+                                &checked[0],
+                                &Type::Text,
+                                "`number from`",
+                                "the text to convert",
+                            );
                         }
                         (Type::Number, true)
                     }
                     "decimal" => {
                         if n != 1 {
-                            self.diags.push(self.bad_arity(&callee, 1, n, call.callee.span));
+                            self.diags
+                                .push(self.bad_arity(&callee, 1, n, call.callee.span));
                         } else {
-                            self.require_type(&checked[0], &Type::Text, "`decimal from`", "the text to convert");
+                            self.require_type(
+                                &checked[0],
+                                &Type::Text,
+                                "`decimal from`",
+                                "the text to convert",
+                            );
                         }
                         (Type::Decimal, true)
                     }
                     "text" => {
                         // `text from <value>`: any M0 value formats (S-9).
                         if n != 1 {
-                            self.diags.push(self.bad_arity(&callee, 1, n, call.callee.span));
+                            self.diags
+                                .push(self.bad_arity(&callee, 1, n, call.callee.span));
                         }
                         (Type::Text, false)
                     }
                     "random" => {
                         // `random from 1 to 6`: two numbers (S-7).
                         if n != 2 {
-                            self.diags.push(self.bad_arity(&callee, 2, n, call.callee.span));
+                            self.diags
+                                .push(self.bad_arity(&callee, 2, n, call.callee.span));
                         }
                         for c in &checked {
                             self.require_type(c, &Type::Number, "`random from … to …`", "a number");
@@ -3045,7 +5310,8 @@ impl<'a> Checker<'a> {
                     "first" => {
                         // `first of <list>` → the element as an option (S-13).
                         if n != 1 {
-                            self.diags.push(self.bad_arity(&callee, 1, n, call.callee.span));
+                            self.diags
+                                .push(self.bad_arity(&callee, 1, n, call.callee.span));
                             (Type::Error, false)
                         } else {
                             match &checked[0].ty {
@@ -3067,7 +5333,8 @@ impl<'a> Checker<'a> {
                     }
                     "size" => {
                         if n != 1 {
-                            self.diags.push(self.bad_arity(&callee, 1, n, call.callee.span));
+                            self.diags
+                                .push(self.bad_arity(&callee, 1, n, call.callee.span));
                         } else {
                             match &checked[0].ty {
                                 Type::List(_) | Type::Map(_, _) | Type::Text | Type::Error => {}
@@ -3087,18 +5354,30 @@ impl<'a> Checker<'a> {
                     }
                     "join" => {
                         if n != 1 {
-                            self.diags.push(self.bad_arity(&callee, 1, n, call.callee.span));
+                            self.diags
+                                .push(self.bad_arity(&callee, 1, n, call.callee.span));
                         } else {
-                            self.require_type(&checked[0], &Type::List(Box::new(Type::Text)), "`join`", "a list of text");
+                            self.require_type(
+                                &checked[0],
+                                &Type::List(Box::new(Type::Text)),
+                                "`join`",
+                                "a list of text",
+                            );
                         }
                         (Type::Text, false)
                     }
                     // ----- text operations -----
                     "uppercase" | "lowercase" | "trim" => {
                         if n != 1 {
-                            self.diags.push(self.bad_arity(&callee, 1, n, call.callee.span));
+                            self.diags
+                                .push(self.bad_arity(&callee, 1, n, call.callee.span));
                         } else {
-                            self.require_type(&checked[0], &Type::Text, &format!("`{callee}`"), "the text");
+                            self.require_type(
+                                &checked[0],
+                                &Type::Text,
+                                &format!("`{callee}`"),
+                                "the text",
+                            );
                         }
                         (Type::Text, false)
                     }
@@ -3116,11 +5395,21 @@ impl<'a> Checker<'a> {
                             );
                         }
                         if n != 1 {
-                            self.diags.push(self.bad_arity(&callee, 1, n, call.callee.span));
+                            self.diags
+                                .push(self.bad_arity(&callee, 1, n, call.callee.span));
                         } else {
-                            self.require_type(&checked[0], &Type::Number, &format!("`{callee}`"), "a number");
+                            self.require_type(
+                                &checked[0],
+                                &Type::Number,
+                                &format!("`{callee}`"),
+                                "a number",
+                            );
                         }
-                        let ty = if callee == "square root" { Type::Decimal } else { Type::Number };
+                        let ty = if callee == "square root" {
+                            Type::Decimal
+                        } else {
+                            Type::Number
+                        };
                         (ty, false)
                     }
                     // G-27: `bigger of a and b` / `smaller of a and b` — the
@@ -3139,10 +5428,21 @@ impl<'a> Checker<'a> {
                             );
                         }
                         if n != 2 {
-                            self.diags.push(self.bad_arity(&callee, 2, n, call.callee.span));
+                            self.diags
+                                .push(self.bad_arity(&callee, 2, n, call.callee.span));
                         } else {
-                            self.require_type(&checked[0], &Type::Number, &format!("`{callee}`"), "a number");
-                            self.require_type(&checked[1], &Type::Number, &format!("`{callee}`"), "a number");
+                            self.require_type(
+                                &checked[0],
+                                &Type::Number,
+                                &format!("`{callee}`"),
+                                "a number",
+                            );
+                            self.require_type(
+                                &checked[1],
+                                &Type::Number,
+                                &format!("`{callee}`"),
+                                "a number",
+                            );
                         }
                         (Type::Number, false)
                     }
@@ -3151,16 +5451,24 @@ impl<'a> Checker<'a> {
                     // start value; the lambda is the last argument. -----
                     "map" => {
                         if n != 2 {
-                            self.diags.push(self.bad_arity(&callee, 2, n, call.callee.span));
+                            self.diags
+                                .push(self.bad_arity(&callee, 2, n, call.callee.span));
                         }
                         if let Some(f) = checked.get(1) {
                             self.require_function_of_1(f, &callee);
                         }
                         match checked.first().map(|c| c.ty.clone()) {
-                            Some(Type::List(e)) => (Type::List(Box::new(self.apply_result(&e, checked.get(1)))), false),
+                            Some(Type::List(e)) => (
+                                Type::List(Box::new(self.apply_result(&e, checked.get(1)))),
+                                false,
+                            ),
                             Some(Type::Error) => (Type::Error, false),
                             Some(other) => {
-                                self.diags.push(self.combinator_needs_list(&callee, &other, call.callee.span));
+                                self.diags.push(self.combinator_needs_list(
+                                    &callee,
+                                    &other,
+                                    call.callee.span,
+                                ));
                                 (Type::Error, false)
                             }
                             None => (Type::Error, false),
@@ -3168,7 +5476,8 @@ impl<'a> Checker<'a> {
                     }
                     "keep" => {
                         if n != 2 {
-                            self.diags.push(self.bad_arity(&callee, 2, n, call.callee.span));
+                            self.diags
+                                .push(self.bad_arity(&callee, 2, n, call.callee.span));
                         }
                         if let Some(f) = checked.get(1) {
                             self.require_predicate(f, &callee);
@@ -3176,7 +5485,11 @@ impl<'a> Checker<'a> {
                         match checked.first().map(|c| c.ty.clone()) {
                             Some(t) if matches!(t, Type::List(_) | Type::Error) => (t, false),
                             Some(other) => {
-                                self.diags.push(self.combinator_needs_list(&callee, &other, call.callee.span));
+                                self.diags.push(self.combinator_needs_list(
+                                    &callee,
+                                    &other,
+                                    call.callee.span,
+                                ));
                                 (Type::Error, false)
                             }
                             None => (Type::Error, false),
@@ -3188,7 +5501,8 @@ impl<'a> Checker<'a> {
                         // takes (accumulator, element) and the result type is
                         // the start value's type (11.2's fold).
                         if n != 3 {
-                            self.diags.push(self.bad_arity(&callee, 3, n, call.callee.span));
+                            self.diags
+                                .push(self.bad_arity(&callee, 3, n, call.callee.span));
                         }
                         let start_ty = checked.get(1).map(|c| c.ty.clone()).unwrap_or(Type::Error);
                         if let Some(f) = checked.get(2) {
@@ -3197,7 +5511,11 @@ impl<'a> Checker<'a> {
                         match checked.first().map(|c| c.ty.clone()) {
                             Some(Type::List(_)) | Some(Type::Error) | None => (start_ty, false),
                             Some(other) => {
-                                self.diags.push(self.combinator_needs_list(&callee, &other, call.callee.span));
+                                self.diags.push(self.combinator_needs_list(
+                                    &callee,
+                                    &other,
+                                    call.callee.span,
+                                ));
                                 (Type::Error, false)
                             }
                         }
@@ -3208,30 +5526,52 @@ impl<'a> Checker<'a> {
                     // and separator` (R-1's `and`-separated args). -----
                     "split" => {
                         if n != 2 {
-                            self.diags.push(self.bad_arity(&callee, 2, n, call.callee.span));
+                            self.diags
+                                .push(self.bad_arity(&callee, 2, n, call.callee.span));
                         } else {
-                            self.require_type(&checked[0], &Type::Text, "`split … and …`", "the text");
-                            self.require_type(&checked[1], &Type::Text, "`split … and …`", "the separator");
+                            self.require_type(
+                                &checked[0],
+                                &Type::Text,
+                                "`split … and …`",
+                                "the text",
+                            );
+                            self.require_type(
+                                &checked[1],
+                                &Type::Text,
+                                "`split … and …`",
+                                "the separator",
+                            );
                         }
                         (Type::List(Box::new(Type::Text)), false)
                     }
                     "contains" => {
                         if n != 2 {
-                            self.diags.push(self.bad_arity(&callee, 2, n, call.callee.span));
+                            self.diags
+                                .push(self.bad_arity(&callee, 2, n, call.callee.span));
                         } else {
                             self.require_type(&checked[0], &Type::Text, "`contains`", "the text");
-                            self.require_type(&checked[1], &Type::Text, "`contains`", "the piece to look for");
+                            self.require_type(
+                                &checked[1],
+                                &Type::Text,
+                                "`contains`",
+                                "the piece to look for",
+                            );
                         }
                         (Type::Boolean, false)
                     }
                     "sort" => {
                         if n != 1 {
-                            self.diags.push(self.bad_arity(&callee, 1, n, call.callee.span));
+                            self.diags
+                                .push(self.bad_arity(&callee, 1, n, call.callee.span));
                         }
                         match checked.first().map(|c| c.ty.clone()) {
                             Some(t) if matches!(t, Type::List(_) | Type::Error) => (t, false),
                             Some(other) => {
-                                self.diags.push(self.combinator_needs_list(&callee, &other, call.callee.span));
+                                self.diags.push(self.combinator_needs_list(
+                                    &callee,
+                                    &other,
+                                    call.callee.span,
+                                ));
                                 (Type::Error, false)
                             }
                             None => (Type::Error, false),
@@ -3245,45 +5585,89 @@ impl<'a> Checker<'a> {
                     // the message text, S-10). -----
                     "open file" => {
                         if n != 1 {
-                            self.diags.push(self.bad_arity(&callee, 1, n, call.callee.span));
+                            self.diags
+                                .push(self.bad_arity(&callee, 1, n, call.callee.span));
                         } else {
-                            self.require_type(&checked[0], &Type::Text, "`open file at …`", "the file path");
+                            self.require_type(
+                                &checked[0],
+                                &Type::Text,
+                                "`open file at …`",
+                                "the file path",
+                            );
                         }
                         (Type::Text, true)
                     }
                     "write file" => {
                         if n != 2 {
-                            self.diags.push(self.bad_arity(&callee, 2, n, call.callee.span));
+                            self.diags
+                                .push(self.bad_arity(&callee, 2, n, call.callee.span));
                         } else {
-                            self.require_type(&checked[0], &Type::Text, "`write file at path`", "the text to write");
-                            self.require_type(&checked[1], &Type::Text, "`write file at path`", "the file path");
+                            self.require_type(
+                                &checked[0],
+                                &Type::Text,
+                                "`write file at path`",
+                                "the text to write",
+                            );
+                            self.require_type(
+                                &checked[1],
+                                &Type::Text,
+                                "`write file at path`",
+                                "the file path",
+                            );
                         }
                         (Type::Text, true)
                     }
                     "append file" => {
                         if n != 2 {
-                            self.diags.push(self.bad_arity(&callee, 2, n, call.callee.span));
+                            self.diags
+                                .push(self.bad_arity(&callee, 2, n, call.callee.span));
                         } else {
-                            self.require_type(&checked[0], &Type::Text, "`append file at path`", "the text to append");
-                            self.require_type(&checked[1], &Type::Text, "`append file at path`", "the file path");
+                            self.require_type(
+                                &checked[0],
+                                &Type::Text,
+                                "`append file at path`",
+                                "the text to append",
+                            );
+                            self.require_type(
+                                &checked[1],
+                                &Type::Text,
+                                "`append file at path`",
+                                "the file path",
+                            );
                         }
                         (Type::Text, true)
                     }
                     "delete file" => {
                         if n != 1 {
-                            self.diags.push(self.bad_arity(&callee, 1, n, call.callee.span));
+                            self.diags
+                                .push(self.bad_arity(&callee, 1, n, call.callee.span));
                         } else {
-                            self.require_type(&checked[0], &Type::Text, "`delete file at …`", "the file path");
+                            self.require_type(
+                                &checked[0],
+                                &Type::Text,
+                                "`delete file at …`",
+                                "the file path",
+                            );
                         }
                         (Type::Text, true)
                     }
                     "file exists" | "file size" => {
                         if n != 1 {
-                            self.diags.push(self.bad_arity(&callee, 1, n, call.callee.span));
+                            self.diags
+                                .push(self.bad_arity(&callee, 1, n, call.callee.span));
                         } else {
-                            self.require_type(&checked[0], &Type::Text, &format!("`{callee} at …`"), "the file path");
+                            self.require_type(
+                                &checked[0],
+                                &Type::Text,
+                                &format!("`{callee} at …`"),
+                                "the file path",
+                            );
                         }
-                        let ty = if callee == "file exists" { Type::Boolean } else { Type::Number };
+                        let ty = if callee == "file exists" {
+                            Type::Boolean
+                        } else {
+                            Type::Number
+                        };
                         (ty, false)
                     }
                     // ----- json module (§19.1). Spellings mirror D-39's
@@ -3297,9 +5681,15 @@ impl<'a> Checker<'a> {
                         // `json from <text>` — parse JSON text (can fail).
                         // Result: a map from text to text (student values).
                         if n != 1 {
-                            self.diags.push(self.bad_arity(&callee, 1, n, call.callee.span));
+                            self.diags
+                                .push(self.bad_arity(&callee, 1, n, call.callee.span));
                         } else {
-                            self.require_type(&checked[0], &Type::Text, "`json from …`", "the JSON text");
+                            self.require_type(
+                                &checked[0],
+                                &Type::Text,
+                                "`json from …`",
+                                "the JSON text",
+                            );
                         }
                         (Type::Map(Box::new(Type::Text), Box::new(Type::Text)), true)
                     }
@@ -3307,7 +5697,8 @@ impl<'a> Checker<'a> {
                         // `json text from <value>` — format a value (S-9's
                         // rules; maps format as JSON objects).
                         if n != 1 {
-                            self.diags.push(self.bad_arity(&callee, 1, n, call.callee.span));
+                            self.diags
+                                .push(self.bad_arity(&callee, 1, n, call.callee.span));
                         }
                         (Type::Text, false)
                     }
@@ -3316,7 +5707,8 @@ impl<'a> Checker<'a> {
                         // value (11.1). The closure's function type fixes the
                         // result; an unknown operand keeps Error.
                         if n < 1 {
-                            self.diags.push(self.bad_arity(&callee, 1, n, call.callee.span));
+                            self.diags
+                                .push(self.bad_arity(&callee, 1, n, call.callee.span));
                         }
                         let ty = match checked.first().map(|c| c.ty.clone()) {
                             Some(Type::Function(_, ret)) => *ret,
@@ -3324,10 +5716,45 @@ impl<'a> Checker<'a> {
                         };
                         (ty, false)
                     }
+                    // Method calls (10.2/R-2): the receiver is the first argument of
+                    // the function the method lowers to. Dispatch keys on the type of
+                    // the receiver argument, not the source order — `bump c` has the
+                    // receiver leading, `add 5 to c` carries it in a prep. "Field
+                    // first": a bare read (`count of c`) is the read form; only a
+                    // call with more arguments dispatches to the method.
+                    _ if is_method_call(self, &callee, checked.first().map(|c| &c.ty)) => {
+                        if n != sig.params.len() {
+                            self.diags.push(self.bad_arity(
+                                &callee,
+                                sig.params.len(),
+                                n,
+                                call.callee.span,
+                            ));
+                        } else {
+                            for (i, c) in checked.iter().enumerate() {
+                                if let Some(pt) = sig.params.get(i) {
+                                    if !matches!(pt, Type::Error) && !matches!(c.ty, Type::Error) {
+                                        self.require_assignable(pt, c, "an argument");
+                                    }
+                                }
+                            }
+                        }
+                        let ret = if matches!(sig.ret, Type::Error) {
+                            Type::Error
+                        } else {
+                            sig.ret.clone()
+                        };
+                        (ret, sig.can_fail)
+                    }
                     // ----- user functions -----
                     _ => {
                         if n != sig.params.len() {
-                            self.diags.push(self.bad_arity(&callee, sig.params.len(), n, call.callee.span));
+                            self.diags.push(self.bad_arity(
+                                &callee,
+                                sig.params.len(),
+                                n,
+                                call.callee.span,
+                            ));
                         }
                         for (i, c) in checked.iter().enumerate() {
                             if let Some(pt) = sig.params.get(i) {
@@ -3337,9 +5764,15 @@ impl<'a> Checker<'a> {
                             }
                         }
                         // Unhandled can-fail call in expression position (13.1):
-                        // legal only inside an attempt's checked region.
+                        // legal only inside an attempt's checked region. In a
+                        // finalizer the same unhandled site is E0377 — a
+                        // cleanup has no caller to propagate to (R-20.3).
                         if sig.can_fail && self.attempt_depth == 0 {
-                            self.diags.push(self.unhandled_failure(&callee, call.span));
+                            if self.in_deinit {
+                                self.diags.push(self.finalizer_failure(&callee, call.span));
+                            } else {
+                                self.diags.push(self.unhandled_failure(&callee, call.span));
+                            }
                         }
                         let ret = if matches!(sig.ret, Type::Error) {
                             Type::Error
@@ -3350,9 +5783,17 @@ impl<'a> Checker<'a> {
                     }
                 };
                 // The E0302 rule keys off can-fail *sites*, not signatures: for
-                // builtins the can-fail-ness comes from the table above.
+                // builtins the can-fail-ness comes from the table above. In a
+                // finalizer body (10.4) the same site is E0377 instead —
+                // there is no caller to propagate to (R-20.3). An
+                // attempt-handled call is legal in both places: the site sits
+                // inside a handler, so `attempt_depth > 0` here.
                 if can_fail && self.attempt_depth == 0 && !matches!(sig.origin, Origin::User) {
-                    self.diags.push(self.unhandled_failure(&callee, call.span));
+                    if self.in_deinit {
+                        self.diags.push(self.finalizer_failure(&callee, call.span));
+                    } else {
+                        self.diags.push(self.unhandled_failure(&callee, call.span));
+                    }
                 }
                 let rebuilt = self.rebuild_call(&call, checked);
                 TypedExpr { expr: rebuilt, ty }
@@ -3400,14 +5841,10 @@ impl<'a> Checker<'a> {
     /// `of`-argument is the base. Type comes from the structure's field table.
     fn field_read(&mut self, field: &str, base: TypedExpr, rebuilt: Expr, span: Span) -> TypedExpr {
         let ty = match &base.ty {
-            Type::Struct(sname) => match self.struct_field(sname, field) {
+            Type::Struct(sname) => match self.struct_or_class_field(sname, field) {
                 Some(t) => t,
                 None => {
-                    let fields = self
-                        .structs
-                        .get(sname)
-                        .map(|s| s.fields.iter().map(|(n, _, _)| n.clone()).collect::<Vec<_>>().join(", "))
-                        .unwrap_or_default();
+                    let fields = self.user_type_fields(sname);
                     self.diags.push(
                         Diagnostic::error(
                             "E0343",
@@ -3436,29 +5873,38 @@ impl<'a> Checker<'a> {
 
     /// A flowing index read (`things at 2`): the callee is the base, the `at`
     /// argument is the index.
-    fn index_read(&mut self, base: TypedExpr, index: TypedExpr, rebuilt: Expr, span: Span) -> TypedExpr {
+    fn index_read(
+        &mut self,
+        base: TypedExpr,
+        index: TypedExpr,
+        rebuilt: Expr,
+        span: Span,
+    ) -> TypedExpr {
         let ty = match &base.ty {
             Type::List(e) => {
                 if !matches!(index.ty, Type::Number | Type::Error) {
-                    self.diags.push(
-                        Diagnostic::error(
-                            "E0342",
-                            format!("A list index must be a number, but this is {}.", index.ty.display()),
-                            span,
+                    self.diags.push(Diagnostic::error(
+                        "E0342",
+                        format!(
+                            "A list index must be a number, but this is {}.",
+                            index.ty.display()
                         ),
-                    );
+                        span,
+                    ));
                 }
                 (**e).clone()
             }
             Type::Map(_, v) => {
                 if !matches!(index.ty, Type::Error) && !same_key_type(&base.ty, &index.ty) {
-                    self.diags.push(
-                        Diagnostic::error(
-                            "E0342",
-                            format!("This map is keyed by {} but the key is {}.", map_key_display(&base.ty), index.ty.display()),
-                            span,
+                    self.diags.push(Diagnostic::error(
+                        "E0342",
+                        format!(
+                            "This map is keyed by {} but the key is {}.",
+                            map_key_display(&base.ty),
+                            index.ty.display()
                         ),
-                    );
+                        span,
+                    ));
                 }
                 (**v).clone()
             }
@@ -3466,13 +5912,14 @@ impl<'a> Checker<'a> {
                 // §7.7: `greeting at 2` — Unicode code point by position
                 // (0-based, like list indexing). Produces a 1-character text.
                 if !matches!(index.ty, Type::Number | Type::Error) {
-                    self.diags.push(
-                        Diagnostic::error(
-                            "E0342",
-                            format!("A text index must be a number, but this is {}.", index.ty.display()),
-                            span,
+                    self.diags.push(Diagnostic::error(
+                        "E0342",
+                        format!(
+                            "A text index must be a number, but this is {}.",
+                            index.ty.display()
                         ),
-                    );
+                        span,
+                    ));
                 }
                 Type::Text
             }
@@ -3496,8 +5943,20 @@ impl<'a> Checker<'a> {
     /// line a secondary label quotes so the error explains the value's
     /// provenance, not just its current type.
     fn binding_label(&self, name: &str, what: &str) -> Option<(Span, String)> {
-        let b = self.scopes.iter().rev().find_map(|s| s.bindings.get(name))?;
-        Some((b.span, format!("{what} (made at line {})", lagom_diagnostics::SourceFile::new("", self.src).line_col(b.span.start).0)))
+        let b = self
+            .scopes
+            .iter()
+            .rev()
+            .find_map(|s| s.bindings.get(name))?;
+        Some((
+            b.span,
+            format!(
+                "{what} (made at line {})",
+                lagom_diagnostics::SourceFile::new("", self.src)
+                    .line_col(b.span.start)
+                    .0
+            ),
+        ))
     }
 
     fn unhandled_failure(&self, callee: &str, span: Span) -> Diagnostic {
@@ -3520,10 +5979,27 @@ impl<'a> Checker<'a> {
         .with_fix_why(format!("the `attempt` turns the error into a value your program handles on the `if it fails` branch — the failure from `{callee}` can no longer escape unhandled"))
     }
 
+    /// R-20.3: an unhandled can-fail site inside `before last reference
+    /// disappears`. The finalizer has no caller, so a failure has nowhere to
+    /// go — cleanup cannot fail, by design (E0377).
+    fn finalizer_failure(&self, what: &str, span: Span) -> Diagnostic {
+        Diagnostic::error(
+            "E0377",
+            format!("{what} can fail, and `before last reference disappears` may not fail."),
+            span,
+        )
+        .with_explanation("A finalizer runs cleanup when the program drops an object's last reference. It has no caller to hand a failure to, so a failing cleanup is a bug class, not a feature (R-20.3). Wrap the call in `attempt … if it fails then … otherwise …` so the failure is handled right here, or do the risky work while the object is still alive.")
+        .with_fix(format!("attempt {what} if it fails then\n    say problem\notherwise\n    say result"))
+        .with_fix_why("an `attempt` with both branches handles the failure inside the finalizer, so dropping the object can never raise an error nobody receives")
+    }
+
     fn bad_arity(&self, callee: &str, want: usize, got: usize, span: Span) -> Diagnostic {
         Diagnostic::error(
             "E0354",
-            format!("`{callee}` needs {want} value{}, but this call gives {got}.", if want == 1 { "" } else { "s" }),
+            format!(
+                "`{callee}` needs {want} value{}, but this call gives {got}.",
+                if want == 1 { "" } else { "s" }
+            ),
             span,
         )
     }
@@ -3588,7 +6064,10 @@ impl<'a> Checker<'a> {
     fn require_function_of_2(&mut self, f: &TypedExpr, callee: &str, acc_ty: &Type) {
         match &f.ty {
             Type::Function(params, ret) if params.len() == 2 => {
-                if !matches!(**ret, Type::Error) && !matches!(acc_ty, Type::Error) && *ret.clone() != *acc_ty {
+                if !matches!(**ret, Type::Error)
+                    && !matches!(acc_ty, Type::Error)
+                    && *ret.clone() != *acc_ty
+                {
                     self.diags.push(
                         Diagnostic::error(
                             "E0369",
@@ -3619,7 +6098,10 @@ impl<'a> Checker<'a> {
                 self.diags.push(
                     Diagnostic::error(
                         "E0366",
-                        format!("`{callee}` needs a function, but this is {}.", other.display()),
+                        format!(
+                            "`{callee}` needs a function, but this is {}.",
+                            other.display()
+                        ),
                         f.span(),
                     )
                     .with_explanation("Write the fold step as a lambda: `using start plus it`."),
@@ -3644,6 +6126,70 @@ impl<'a> Checker<'a> {
             span,
         )
         .with_explanation("The combinators walk a list one element at a time.")
+    }
+
+    /// `send <v> to <ch>` where <ch> is not a channel (14.3).
+    fn send_needs_channel(&self, got: Type, span: Span) -> Diagnostic {
+        Diagnostic::error(
+            "E0393",
+            format!(
+                "`send … to` sends into a channel, but this is {}.",
+                got.display()
+            ),
+            span,
+        )
+        .with_explanation(
+            "A channel is made with `a channel of <type>` — `send` queues the value on it and `receive from` takes it back out.",
+        )
+        .with_note("Write the channel you meant: `send … to <a channel of …>`.")
+    }
+
+    /// `send`/`receive` written as an ordinary comma call (14.3): the
+    /// channel must ride the `to`/`from` prep. Without it the call is not
+    /// the channel form — it would reach the backends as an unknown
+    /// function and panic at runtime, so it is rejected at check time.
+    fn channel_call_needs_prep(&self, callee: &str, span: Span) -> Diagnostic {
+        let (fix, fix_why) = if callee == "send" {
+            (
+                "`send <value> to <channel>`",
+                "the `to` prep is what marks the second argument as the channel — with it, the send queues the value on the channel instead of calling an unknown function",
+            )
+        } else {
+            (
+                "`receive from <channel>`",
+                "the `from` prep is what marks the argument as the channel — with it, the receive dequeues the oldest value instead of calling an unknown function",
+            )
+        };
+        Diagnostic::error(
+            "E0391",
+            format!(
+                "`{callee}` is channel vocabulary, but this call is missing the `{}` that carries the channel.",
+                if callee == "send" { "to" } else { "from" }
+            ),
+            span,
+        )
+        .with_explanation(format!(
+            "`send` and `receive` are not ordinary functions: `send <value> to <channel>` queues a value and `receive from <channel>` takes one out. Written as a comma call, nothing says which argument is the channel, so the call cannot run."
+        ))
+        .with_fix(fix)
+        .with_fix_why(fix_why)
+        .with_concept("Channels (14.3)")
+    }
+
+    /// `receive from <ch>` where <ch> is not a channel (14.3).
+    fn receive_needs_channel(&self, got: &Type, span: Span) -> Diagnostic {
+        Diagnostic::error(
+            "E0394",
+            format!(
+                "`receive from` reads a channel, but this is {}.",
+                got.display()
+            ),
+            span,
+        )
+        .with_explanation(
+            "A channel is made with `a channel of <type>` — `receive from` dequeues the oldest value a task sent.",
+        )
+        .with_note("Write the channel you meant: `receive from <a channel of …>`.")
     }
 
     // -----------------------------------------------------------------------
@@ -3682,16 +6228,28 @@ impl<'a> Checker<'a> {
                 self.diags.push(
                     Diagnostic::error(
                         "E0355",
-                        format!("You cannot compare {} with {}.", lt.ty.display(), rt.ty.display()),
+                        format!(
+                            "You cannot compare {} with {}.",
+                            lt.ty.display(),
+                            rt.ty.display()
+                        ),
                         span,
                     )
-                    .with_explanation("Two values can be compared only when they have the same type."),
+                    .with_explanation(
+                        "Two values can be compared only when they have the same type.",
+                    ),
                 );
             }
-            return TypedExpr { expr: e_binary(op, &lt.expr, &rt.expr, span), ty: Type::Boolean };
+            return TypedExpr {
+                expr: e_binary(op, &lt.expr, &rt.expr, span),
+                ty: Type::Boolean,
+            };
         }
         // Ordering: numbers only (no truthiness — 8.3).
-        if matches!(op, BinOp::Greater | BinOp::Less | BinOp::AtLeast | BinOp::AtMost) {
+        if matches!(
+            op,
+            BinOp::Greater | BinOp::Less | BinOp::AtLeast | BinOp::AtMost
+        ) {
             let lt = self.check_expr(left, None);
             let rt = self.check_expr(right, None);
             let numeric = (lt.ty.is_numeric() || matches!(lt.ty, Type::Error))
@@ -3699,7 +6257,12 @@ impl<'a> Checker<'a> {
             if !numeric {
                 let mut d = Diagnostic::error(
                     "E0356",
-                    format!("`is {}` needs two numbers, but got {} and {}.", op_word(op), lt.ty.display(), rt.ty.display()),
+                    format!(
+                        "`is {}` needs two numbers, but got {} and {}.",
+                        op_word(op),
+                        lt.ty.display(),
+                        rt.ty.display()
+                    ),
                     span,
                 )
                 .with_explanation("Ordering (bigger/smaller) only makes sense for numbers.");
@@ -3708,7 +6271,9 @@ impl<'a> Checker<'a> {
                 // current type at the comparison.
                 for side in [&lt, &rt] {
                     if let Expr::Name { name, .. } = &side.expr {
-                        if let Some((sp, label)) = self.binding_label(&name.display(), "the value was made here") {
+                        if let Some((sp, label)) =
+                            self.binding_label(&name.display(), "the value was made here")
+                        {
                             d = d.with_label(sp, label);
                         }
                     }
@@ -3725,7 +6290,10 @@ impl<'a> Checker<'a> {
                 }
                 self.diags.push(d);
             }
-            return TypedExpr { expr: e_binary(op, &lt.expr, &rt.expr, span), ty: Type::Boolean };
+            return TypedExpr {
+                expr: e_binary(op, &lt.expr, &rt.expr, span),
+                ty: Type::Boolean,
+            };
         }
         // Boolean operators: strictly boolean (S-4, doc 03's open question
         // resolved for M0).
@@ -3763,13 +6331,19 @@ impl<'a> Checker<'a> {
                             let tail_span = self.tail_words_span(span, &name.words, split);
                             let first_arg = ast::Arg {
                                 expr: Box::new(Expr::Name {
-                                    name: Name { words: name.words[split..].to_vec(), span: tail_span },
+                                    name: Name {
+                                        words: name.words[split..].to_vec(),
+                                        span: tail_span,
+                                    },
                                     span: tail_span,
                                 }),
                                 span: tail_span,
                             };
                             let mut call = ast::CallExpr {
-                                callee: Name { words: vec![head], span: name.span },
+                                callee: Name {
+                                    words: vec![head],
+                                    span: name.span,
+                                },
                                 first: Some(Box::new(first_arg)),
                                 preps: Vec::new(),
                                 and_args: Vec::new(),
@@ -3785,11 +6359,22 @@ impl<'a> Checker<'a> {
                             let mut hoisted_where: Option<Box<Expr>> = None;
                             loop {
                                 match cursor {
-                                    Expr::Binary { op: BinOp::And, right: r, .. } => {
+                                    Expr::Binary {
+                                        op: BinOp::And,
+                                        right: r,
+                                        ..
+                                    } => {
                                         let rsp = expr_span(r);
-                                        call.and_args.push(ast::Arg { expr: Box::new((**r).clone()), span: rsp });
+                                        call.and_args.push(ast::Arg {
+                                            expr: Box::new((**r).clone()),
+                                            span: rsp,
+                                        });
                                         cursor = match r.as_ref() {
-                                            Expr::Binary { op: BinOp::And, right: r2, .. } => r2.as_ref(),
+                                            Expr::Binary {
+                                                op: BinOp::And,
+                                                right: r2,
+                                                ..
+                                            } => r2.as_ref(),
                                             _ => break,
                                         };
                                     }
@@ -3798,14 +6383,22 @@ impl<'a> Checker<'a> {
                                         // with the sentence's `using`/`where`
                                         // suffix; per R-3 it belongs to the
                                         // outer call — strip and hoist it.
-                                        if let Some((stripped, using, whr)) = and_arg_with_suffix(other) {
+                                        if let Some((stripped, using, whr)) =
+                                            and_arg_with_suffix(other)
+                                        {
                                             let osp = expr_span(other);
-                                            call.and_args.push(ast::Arg { expr: Box::new(stripped), span: osp });
+                                            call.and_args.push(ast::Arg {
+                                                expr: Box::new(stripped),
+                                                span: osp,
+                                            });
                                             hoisted_using = using;
                                             hoisted_where = whr;
                                         } else {
                                             let osp = expr_span(other);
-                                            call.and_args.push(ast::Arg { expr: Box::new(other.clone()), span: osp });
+                                            call.and_args.push(ast::Arg {
+                                                expr: Box::new(other.clone()),
+                                                span: osp,
+                                            });
                                         }
                                         break;
                                     }
@@ -3833,13 +6426,21 @@ impl<'a> Checker<'a> {
                 let mut hoisted_where: Option<Box<Expr>> = None;
                 loop {
                     match cursor {
-                        Expr::Binary { op: BinOp::And, left: l, right: r, .. } => {
+                        Expr::Binary {
+                            op: BinOp::And,
+                            left: l,
+                            right: r,
+                            ..
+                        } => {
                             let rsp = self.check_expr(r, None);
                             let _ = rsp;
                             // Checked below via the rebuilt call; stash raw.
                             cursor = l;
                             let rspan = expr_span(r);
-                            call.and_args.push(ast::Arg { expr: Box::new((**r).clone()), span: rspan });
+                            call.and_args.push(ast::Arg {
+                                expr: Box::new((**r).clone()),
+                                span: rspan,
+                            });
                         }
                         other => {
                             // The parser closes the final and-arg with the
@@ -3847,12 +6448,18 @@ impl<'a> Checker<'a> {
                             // belongs to the outer call — strip and hoist it.
                             if let Some((stripped, using, whr)) = and_arg_with_suffix(other) {
                                 let osp = expr_span(other);
-                                call.and_args.push(ast::Arg { expr: Box::new(stripped), span: osp });
+                                call.and_args.push(ast::Arg {
+                                    expr: Box::new(stripped),
+                                    span: osp,
+                                });
                                 hoisted_using = using;
                                 hoisted_where = whr;
                             } else {
                                 let osp = expr_span(other);
-                                call.and_args.push(ast::Arg { expr: Box::new(other.clone()), span: osp });
+                                call.and_args.push(ast::Arg {
+                                    expr: Box::new(other.clone()),
+                                    span: osp,
+                                });
                             }
                             break;
                         }
@@ -3867,14 +6474,20 @@ impl<'a> Checker<'a> {
             let rt = self.check_expr(right, Some(&Type::Boolean));
             self.require_boolean(&lt, "`and`");
             self.require_boolean(&rt, "`or`");
-            return TypedExpr { expr: e_binary(op, &lt.expr, &rt.expr, span), ty: Type::Boolean };
+            return TypedExpr {
+                expr: e_binary(op, &lt.expr, &rt.expr, span),
+                ty: Type::Boolean,
+            };
         }
         if matches!(op, BinOp::Or) {
             let lt = self.check_expr(left, Some(&Type::Boolean));
             let rt = self.check_expr(right, Some(&Type::Boolean));
             self.require_boolean(&lt, "`or`");
             self.require_boolean(&rt, "`or`");
-            return TypedExpr { expr: e_binary(op, &lt.expr, &rt.expr, span), ty: Type::Boolean };
+            return TypedExpr {
+                expr: e_binary(op, &lt.expr, &rt.expr, span),
+                ty: Type::Boolean,
+            };
         }
         // Arithmetic: numeric; mixed promotes to decimal (S-1/S-3); `divided
         // by` always promotes (D-10). **Exception (docs/14 G-20):** `plus` on
@@ -3884,13 +6497,19 @@ impl<'a> Checker<'a> {
         let lt = self.check_expr(left, None);
         let rt = self.check_expr(right, expected);
         if op == BinOp::Add && matches!(lt.ty, Type::Text) && matches!(rt.ty, Type::Text) {
-            return TypedExpr { expr: e_binary(op, &lt.expr, &rt.expr, span), ty: Type::Text };
+            return TypedExpr {
+                expr: e_binary(op, &lt.expr, &rt.expr, span),
+                ty: Type::Text,
+            };
         }
         if !lt.ty.is_numeric() && !matches!(lt.ty, Type::Error) {
             self.diags.push(
                 Diagnostic::error(
                     "E0357",
-                    format!("Arithmetic needs numbers, but the left side is {}.", lt.ty.display()),
+                    format!(
+                        "Arithmetic needs numbers, but the left side is {}.",
+                        lt.ty.display()
+                    ),
                     lt.span(),
                 )
                 .with_explanation(format!("`{}` works on numbers and decimals.", op_word(op))),
@@ -3900,7 +6519,10 @@ impl<'a> Checker<'a> {
             self.diags.push(
                 Diagnostic::error(
                     "E0357",
-                    format!("Arithmetic needs numbers, but the right side is {}.", rt.ty.display()),
+                    format!(
+                        "Arithmetic needs numbers, but the right side is {}.",
+                        rt.ty.display()
+                    ),
                     rt.span(),
                 )
                 .with_explanation(format!("`{}` works on numbers and decimals.", op_word(op))),
@@ -3909,12 +6531,23 @@ impl<'a> Checker<'a> {
         let ty = match op {
             BinOp::Div => Type::Decimal,
             _ => {
-                let l = if matches!(lt.ty, Type::Error) { Type::Number } else { lt.ty.clone() };
-                let r = if matches!(rt.ty, Type::Error) { Type::Number } else { rt.ty.clone() };
+                let l = if matches!(lt.ty, Type::Error) {
+                    Type::Number
+                } else {
+                    lt.ty.clone()
+                };
+                let r = if matches!(rt.ty, Type::Error) {
+                    Type::Number
+                } else {
+                    rt.ty.clone()
+                };
                 unify_numeric(&l, &r).unwrap_or(Type::Error)
             }
         };
-        TypedExpr { expr: e_binary(op, &lt.expr, &rt.expr, span), ty }
+        TypedExpr {
+            expr: e_binary(op, &lt.expr, &rt.expr, span),
+            ty,
+        }
     }
 
     fn require_boolean(&mut self, t: &TypedExpr, what: &str) {
@@ -3932,13 +6565,14 @@ impl<'a> Checker<'a> {
                 );
             }
             other => {
-                self.diags.push(
-                    Diagnostic::error(
-                        "E0358",
-                        format!("{what} needs a yes-or-no (boolean) value, but this is {}.", other.display()),
-                        t.span(),
+                self.diags.push(Diagnostic::error(
+                    "E0358",
+                    format!(
+                        "{what} needs a yes-or-no (boolean) value, but this is {}.",
+                        other.display()
                     ),
-                );
+                    t.span(),
+                ));
             }
         }
     }
@@ -3949,13 +6583,15 @@ impl<'a> Checker<'a> {
         }
         let ok = numeric_or_same(want, &t.ty);
         if !ok {
-            self.diags.push(
-                Diagnostic::error(
-                    "E0359",
-                    format!("{what} needs {role} to be {}, but it is {}.", want.display(), t.ty.display()),
-                    t.span(),
+            self.diags.push(Diagnostic::error(
+                "E0359",
+                format!(
+                    "{what} needs {role} to be {}, but it is {}.",
+                    want.display(),
+                    t.ty.display()
                 ),
-            );
+                t.span(),
+            ));
         }
     }
 
@@ -3978,13 +6614,50 @@ impl<'a> Checker<'a> {
             // inferred from use) — every concrete value is assignable into
             // it, and the checker unifies per call site.
             (Type::Anything, _) => true,
+            // 10.5: a subclass IS-A base (single inheritance, copy-redirect
+            // dispatch) — a `dog` may be passed where the base declares
+            // `animal`. Constructors and field types still demand the exact
+            // class, so subclass fields initialize exactly as declared.
+            (Type::Struct(w), Type::Struct(g)) if w != g && self.is_base_of(w, g) => true,
             // §12.1 inside containers: `takes a list of anything called items`
             // takes a list of concrete values (the checker unifies per call
             // site; monomorphization happens in MIR).
             (Type::List(w), Type::List(_)) if matches!(**w, Type::Anything) => true,
+            // 12.3: a constrained parameter (or existential) takes exactly the
+            // values that satisfy its interface — the call-site check. A value
+            // with the same constraint passes; a wider one passes too (more
+            // values, still a promise).
+            (Type::Iface(i), t) => self.value_satisfies(i, &t.clone()),
+            // 12.3 inside containers: `a list of some type that does comparable
+            // called items` — the constraint rides the element type, so a
+            // `list of numbers` satisfies `list of comparable` and a `list of
+            // text` does not. The violation is reported on the element type.
+            (Type::List(w), Type::List(g))
+                if matches!(&**w, Type::Iface(_)) && !matches!(&**g, Type::Error) =>
+            {
+                match (&**w, &**g) {
+                    (Type::Iface(i), g) if !self.value_satisfies(i, g) => {
+                        let elem = TypedExpr {
+                            expr: got.expr.clone(),
+                            ty: (*g).clone(),
+                        };
+                        self.constraint_violation(i, &elem, what);
+                        return;
+                    }
+                    _ => true,
+                }
+            }
             (a, b) => a == b,
         };
         if !ok {
+            // 12.3 violations get their own causal diagnostic (E0383) — a
+            // constraint failure is not a wrong-type problem, it is a broken
+            // promise about the argument, and its smallest correct fix is
+            // different (the fix-why states why the fix addresses it).
+            if let Type::Iface(i) = want {
+                self.constraint_violation(i, got, what);
+                return;
+            }
             // M2 provenance: when the mismatched value is a binding, name
             // where it was made — the origin of the wrong type is usually
             // the actual root cause, not the annotated use site. The fix is
@@ -4007,12 +6680,108 @@ impl<'a> Checker<'a> {
                 got.ty.display()
             ));
             if let Expr::Name { name, .. } = &got.expr {
-                if let Some((sp, label)) = self.binding_label(&name.display(), "the value was made here") {
+                if let Some((sp, label)) =
+                    self.binding_label(&name.display(), "the value was made here")
+                {
                     d = d.with_label(sp, label);
                 }
             }
             self.diags.push(d);
         }
+    }
+
+    /// 12.3: does `t` satisfy interface `iname`? The one satisfaction owner:
+    /// a class satisfies exactly the interfaces it `does` (10.6 — no witness
+    /// protocol), a built-in satisfies per the documented operator table, a
+    /// same-or-wider `Iface` value satisfies (more values, still a promise),
+    /// and a list's element type inherits the element constraint.
+    fn value_satisfies(&self, iname: &str, t: &Type) -> bool {
+        match t {
+            Type::Error | Type::Anything => true, // recovery keeps checking
+            Type::Struct(s) | Type::Kind(s) => self
+                .class_ifaces
+                .get(s)
+                .map_or(false, |list| list.iter().any(|(n, _)| n == iname)),
+            Type::Iface(have) => have == iname,
+            Type::List(e) => self.value_satisfies(iname, e),
+            _ => builtin_satisfies(iname, t),
+        }
+    }
+
+    /// The 12.3 violation diagnostic: what/why/smallest-correct-fix. The fix
+    /// is the *argument* — give the callee a value that actually satisfies
+    /// the promised interface (make it a conforming class, or pass a type
+    /// the built-in table covers) — never "drop the constraint", which would
+    /// move the failure into the callee's body where nothing is known.
+    fn constraint_violation(&mut self, iname: &str, got: &TypedExpr, what: &str) {
+        let ty = got.ty.clone();
+        let (why, fix, fix_why) = if !self.interfaces.contains_key(iname) {
+            (
+                format!(
+                    "the constraint names `{iname}`, but no interface with that name is declared in this program — the promise cannot be checked (or kept)"
+                ),
+                format!(
+                    "declare it (`interface {iname}` with its `can` lines) — or correct the spelling in `that does {iname}`"
+                ),
+                "a constraint is a promise about the argument; the promise names an interface that must exist".to_string(),
+            )
+        } else if matches!(ty, Type::Struct(_)) {
+            (
+                format!(
+                    "the value's class `{}` does not do `{iname}` — the function's body will call `{iname}`'s methods on it, and this class has none of them guaranteed",
+                    ty.display()
+                ),
+                format!(
+                    "make the class keep the same promise (`class {} does {iname}`) — or pass a class that does {iname}",
+                    ty.display()
+                ),
+                format!(
+                    "with `does {iname}` the class has every method `{iname}` requires, so the body's calls on the value are real"
+                ),
+            )
+        } else {
+            (
+                format!(
+                    "a {} does not satisfy `{iname}` — {}",
+                    ty.display(),
+                    match iname {
+                        "comparable" => "only numbers, decimals, and classes that do `comparable` can be ordered",
+                        "addable" => "only numbers, decimals, text, and classes that do `addable` can be combined with `plus`",
+                        _ => "the value must be a class that does the interface, or a built-in the operator table covers",
+                    }
+                ),
+                format!(
+                    "pass a value that satisfies `{iname}` here — {}",
+                    if matches!(ty, Type::Text) && iname == "comparable" {
+                        "text has no bigger/smaller order; compare its length (`size of …`) or the number the text stands for (`number from …`)".to_string()
+                    } else {
+                        format!("a number (for `{iname}`), or a class that does `{iname}`")
+                    }
+                ),
+                format!(
+                    "the function's body may call `{iname}`'s methods on this value — the argument must be something those methods exist for"
+                ),
+            )
+        };
+        let mut d = Diagnostic::error(
+            "E0383",
+            format!(
+                "{what} needs a value that does `{iname}`, but got {}.",
+                ty.display()
+            ),
+            got.span(),
+        )
+        .with_explanation(format!(
+            "`takes … that does {iname}` is a promise about the argument: every call site passes a value that satisfies {iname}. {why}"
+        ))
+        .with_fix(fix)
+        .with_fix_why(fix_why);
+        if let Expr::Name { name, .. } = &got.expr {
+            if let Some((sp, label)) = self.binding_label(&name.display(), "the value was made here") {
+                d = d.with_label(sp, label);
+            }
+        }
+        self.diags.push(d);
     }
 }
 
@@ -4042,6 +6811,21 @@ fn unknown_alias_ref(t: &Type, raw: &[(String, Type)]) -> Option<String> {
     .filter(|name| !raw.iter().any(|(n, _)| n == name))
 }
 
+/// 12.3's documented built-in table: which frozen built-in types satisfy an
+/// interface by their operator behavior. `comparable` — the ordering
+/// operators (`is less than`/`is greater than`/`bigger`/`smaller`) are
+/// number/decimal-only by frozen rule; text's order was explicitly rejected
+/// (frozen S-61 line). `addable` — `plus` is defined on number, decimal,
+/// and text. Everything else: a class satisfies exactly the interfaces it
+/// `does` (10.6), and no other built-in satisfies anything.
+fn builtin_satisfies(iname: &str, ty: &Type) -> bool {
+    match (iname, ty) {
+        ("comparable", Type::Number | Type::Decimal | Type::NumericLit) => true,
+        ("addable", Type::Number | Type::Decimal | Type::NumericLit | Type::Text) => true,
+        _ => false,
+    }
+}
+
 /// The fix text for "use a {T} value here": containers read naturally with
 /// the article inside (`a list of numbers`), so the outer article is only
 /// added for the words that need it (D-10's reading-first fix text).
@@ -4066,14 +6850,18 @@ fn s_stmt_span(s: &Stmt) -> Span {
         | Stmt::Attempt { span, .. }
         | Stmt::CheckThat { span, .. }
         | Stmt::Match { span, .. }
-        | Stmt::ExprStmt { span, .. } => *span,
+        | Stmt::ExprStmt { span, .. }
+        | Stmt::StartTask { span, .. }
+        | Stmt::WaitForAllTasks { span } => *span,
         Stmt::Repeat(r) => *repeat_span(r),
     }
 }
 
 fn repeat_span(r: &Repeat) -> &Span {
     match r {
-        Repeat::Count { span, .. } | Repeat::While { span, .. } | Repeat::ForEach { span, .. } => span,
+        Repeat::Count { span, .. } | Repeat::While { span, .. } | Repeat::ForEach { span, .. } => {
+            span
+        }
     }
 }
 
@@ -4094,20 +6882,34 @@ fn stmt_gives_back(s: &ast::Stmt) -> bool {
         // path and the success path are exhaustive by construction (13.1),
         // so a `gives back` in the tail counts as a return. A missing
         // `otherwise` can fall through, so it breaks the guarantee.
-        ast::Stmt::Attempt { tail: Some(ast::AttemptTail::IfItFails { then_block, otherwise }), .. } => {
-            body_gives_back(then_block)
-                && otherwise.as_ref().map(body_gives_back).unwrap_or(false)
+        ast::Stmt::Attempt {
+            tail:
+                Some(ast::AttemptTail::IfItFails {
+                    then_block,
+                    otherwise,
+                }),
+            ..
+        } => {
+            body_gives_back(then_block) && otherwise.as_ref().map(body_gives_back).unwrap_or(false)
         }
-        ast::Stmt::Attempt { tail: Some(ast::AttemptTail::As { block, otherwise, .. }), .. } => {
-            body_gives_back(block)
-                && otherwise.as_ref().map(body_gives_back).unwrap_or(false)
-        }
-        ast::Stmt::Match { arms, otherwise, .. } => {
+        ast::Stmt::Attempt {
+            tail: Some(ast::AttemptTail::As {
+                block, otherwise, ..
+            }),
+            ..
+        } => body_gives_back(block) && otherwise.as_ref().map(body_gives_back).unwrap_or(false),
+        ast::Stmt::Match {
+            arms, otherwise, ..
+        } => {
             !arms.is_empty()
                 && arms.iter().all(|(_, b)| body_gives_back(b))
                 && otherwise.as_ref().map(body_gives_back).unwrap_or(true)
         }
-        ast::Stmt::If { branches, otherwise, .. } => {
+        ast::Stmt::If {
+            branches,
+            otherwise,
+            ..
+        } => {
             !branches.is_empty()
                 && branches.iter().all(|(_, b)| body_gives_back(b))
                 && otherwise.as_ref().map(body_gives_back).unwrap_or(false)
@@ -4144,7 +6946,11 @@ fn unify_numeric(a: &Type, b: &Type) -> Option<Type> {
         (Type::Decimal, Type::Decimal) => Some(Type::Decimal),
         (Type::NumericLit, other) | (other, Type::NumericLit) => {
             if other.is_numeric() {
-                Some(if matches!(other, Type::NumericLit) { Type::Number } else { other.clone() })
+                Some(if matches!(other, Type::NumericLit) {
+                    Type::Number
+                } else {
+                    other.clone()
+                })
             } else {
                 None
             }
@@ -4212,7 +7018,8 @@ fn did_you_mean(name: &str, candidates: &[String]) -> Vec<String> {
         // Containment (`score` in `scores`) only counts for names of at
         // least 3 characters — a 2-letter name sits inside half the
         // dictionary (`it` in `split`) and the suggestion misleads.
-        let containment = (cl.contains(&lower) || lower.contains(&cl)) && lower.chars().count() >= 3;
+        let containment =
+            (cl.contains(&lower) || lower.contains(&cl)) && lower.chars().count() >= 3;
         if containment || d <= 2 {
             scored.push((d, c));
         }
@@ -4249,9 +7056,7 @@ fn one_edit_distance(a: &str, b: &str) -> usize {
     for i in 1..=al {
         for j in 1..=bl {
             let cost = usize::from(a[i - 1] != b[j - 1]);
-            d[i + 1][j + 1] = (d[i][j] + cost)
-                .min(d[i + 1][j] + 1)
-                .min(d[i][j + 1] + 1);
+            d[i + 1][j + 1] = (d[i][j] + cost).min(d[i + 1][j] + 1).min(d[i][j + 1] + 1);
             if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
                 d[i + 1][j + 1] = d[i + 1][j + 1].min(d[i - 1][j - 1] + 1);
             }
@@ -4300,7 +7105,8 @@ mod tests {
     }
 
     fn render(d: &Diagnostic) -> String {
-        let f = lagom_diagnostics::SourceFile::new("test.lagom", TEST_SRC.with(|s| s.borrow().clone()));
+        let f =
+            lagom_diagnostics::SourceFile::new("test.lagom", TEST_SRC.with(|s| s.borrow().clone()));
         lagom_diagnostics::render_student(&f, d)
     }
 
@@ -4318,15 +7124,25 @@ mod tests {
         // The main body's last statement is say(greet(who)): a Call whose
         // argument is itself a Call.
         let last = out.items.last().expect("a statement");
-        let CheckedItem::Stmt(s) = last else { panic!("expected a statement") };
-        let CheckedStmtKind::ExprStmt { expr } = &s.kind else { panic!("expected an effect statement") };
-        let Expr::Call(outer) = &expr.expr else { panic!("expected a call, got {:?}", expr.expr) };
+        let CheckedItem::Stmt(s) = last else {
+            panic!("expected a statement")
+        };
+        let CheckedStmtKind::ExprStmt { expr } = &s.kind else {
+            panic!("expected an effect statement")
+        };
+        let Expr::Call(outer) = &expr.expr else {
+            panic!("expected a call, got {:?}", expr.expr)
+        };
         assert_eq!(outer.callee.display(), "say");
         let arg = outer.first.as_ref().expect("say takes the greeting");
-        let Expr::Call(inner) = arg.expr.as_ref() else { panic!("the argument must be a checked call, got {:?}", arg.expr) };
+        let Expr::Call(inner) = arg.expr.as_ref() else {
+            panic!("the argument must be a checked call, got {:?}", arg.expr)
+        };
         assert_eq!(inner.callee.display(), "greet");
         let inner_arg = inner.first.as_ref().expect("greet takes the name");
-        let Expr::Name { name: n, .. } = inner_arg.expr.as_ref() else { panic!("expected the name argument") };
+        let Expr::Name { name: n, .. } = inner_arg.expr.as_ref() else {
+            panic!("expected the name argument")
+        };
         assert_eq!(n.display(), "who");
     }
 
@@ -4338,14 +7154,27 @@ mod tests {
             "function greet\n    takes text called name\n    returns a text\n    gives back \"Hello, {name}!\"\n\nmake who equal to \"bo\"\nsay \"{greet who}\"\n",
         );
         let last = out.items.last().expect("a statement");
-        let CheckedItem::Stmt(s) = last else { panic!("expected a statement") };
-        let CheckedStmtKind::ExprStmt { expr } = &s.kind else { panic!("expected an effect statement") };
-        let Expr::Call(outer) = &expr.expr else { panic!("expected a call") };
+        let CheckedItem::Stmt(s) = last else {
+            panic!("expected a statement")
+        };
+        let CheckedStmtKind::ExprStmt { expr } = &s.kind else {
+            panic!("expected an effect statement")
+        };
+        let Expr::Call(outer) = &expr.expr else {
+            panic!("expected a call")
+        };
         assert_eq!(outer.callee.display(), "say");
         let arg = outer.first.as_ref().expect("the formatted text");
-        let Expr::Interp { parts, .. } = arg.expr.as_ref() else { panic!("expected interpolation, got {:?}", arg.expr) };
-        let has_call = parts.iter().any(|p| matches!(p, ast::InterpPart::Expr(e) if matches!(e, Expr::Call(_))));
-        assert!(has_call, "the interpolated call must stay a call: {parts:?}");
+        let Expr::Interp { parts, .. } = arg.expr.as_ref() else {
+            panic!("expected interpolation, got {:?}", arg.expr)
+        };
+        let has_call = parts
+            .iter()
+            .any(|p| matches!(p, ast::InterpPart::Expr(e) if matches!(e, Expr::Call(_))));
+        assert!(
+            has_call,
+            "the interpolated call must stay a call: {parts:?}"
+        );
     }
 
     /// The greedy split reaches builtins through the same path: `say square
@@ -4354,12 +7183,20 @@ mod tests {
     fn greedy_split_reaches_builtins() {
         let out = check_ok("use math\nsay square root of 16\n");
         let last = out.items.last().expect("a statement");
-        let CheckedItem::Stmt(s) = last else { panic!("expected a statement") };
-        let CheckedStmtKind::ExprStmt { expr } = &s.kind else { panic!("expected an effect statement") };
-        let Expr::Call(outer) = &expr.expr else { panic!("expected a call") };
+        let CheckedItem::Stmt(s) = last else {
+            panic!("expected a statement")
+        };
+        let CheckedStmtKind::ExprStmt { expr } = &s.kind else {
+            panic!("expected an effect statement")
+        };
+        let Expr::Call(outer) = &expr.expr else {
+            panic!("expected a call")
+        };
         assert_eq!(outer.callee.display(), "say");
         let arg = outer.first.as_ref().expect("the root");
-        let Expr::Call(inner) = arg.expr.as_ref() else { panic!("expected nested call, got {:?}", arg.expr) };
+        let Expr::Call(inner) = arg.expr.as_ref() else {
+            panic!("expected nested call, got {:?}", arg.expr)
+        };
         assert_eq!(inner.callee.display(), "square root");
     }
 
@@ -4368,7 +7205,10 @@ mod tests {
     #[test]
     fn remainder_of_call_form_checks() {
         check_ok("make total equal to 7\nmake rest equal to remainder of total and 2\n");
-        check_err("make total equal to 7\nmake rest equal to remainder of total and \"x\"", "E0357");
+        check_err(
+            "make total equal to 7\nmake rest equal to remainder of total and \"x\"",
+            "E0357",
+        );
     }
 
     // ----- M1: kinds, match, options, closures, combinators -----
@@ -4466,9 +7306,7 @@ say describe f\n";
     fn type_aliases_are_transparent() {
         // 8.4: the alias IS the type — annotations, params, returns, and list
         // element types all accept it, and it needs no runtime presence.
-        check_ok(
-            "a type called score is a number\nmake s equal to 15 of type score\nsay s",
-        );
+        check_ok("a type called score is a number\nmake s equal to 15 of type score\nsay s");
         check_ok(
             "a type called score is a number\na type called scores is a list of score\nmake xs equal to a list of 1, 2 of type scores\nsay size of xs",
         );
@@ -4488,13 +7326,19 @@ say describe f\n";
         );
         // Errors: duplicate alias / shadowing a real type / self-reference /
         // a two-alias cycle.
-        check_err("a type called score is a number\na type called score is a text", "E0371");
+        check_err(
+            "a type called score is a number\na type called score is a text",
+            "E0371",
+        );
         check_err(
             "structure player\n    has name of type text\n\na type called player is a number",
             "E0371",
         );
         check_err("a type called score is a score", "E0372");
-        check_err("a type called left is a right\na type called right is a left", "E0372");
+        check_err(
+            "a type called left is a right\na type called right is a left",
+            "E0372",
+        );
         // Unknown target: the words after `is a` name no type.
         check_err("a type called gem is a jewel", "E0373");
     }
@@ -4537,9 +7381,7 @@ say describe f\n";
     fn m1_corpus_match_on_every_pattern_form() {
         // 7.15's pattern production: literal, binding name, variant
         // destructure, nothing, something with value, pair.
-        check_ok(
-            "match 3\n    when 3\n        say \"three\"\n    when other\n        say other",
-        );
+        check_ok("match 3\n    when 3\n        say \"three\"\n    when other\n        say other");
         check_ok(SHAPE_PROGRAM);
         check_ok(
             "make m equal to first of a list of \"x\"\nmatch m\n    when nothing\n        say \"empty\"\n    when something with value v\n        say v",
@@ -4559,8 +7401,15 @@ say describe f\n";
         // missing case named" — the diagnostic text carries the name.
         let src = "kind shape\n    is a circle with radius of type number\n    is a blank\n\nfunction describe\n    takes shape called s\n    match s\n        when a circle with radius r\n            gives back \"round\"";
         let diags = check_err(src, "E0360");
-        let shown = diags.iter().map(|d| d.message.clone()).collect::<Vec<_>>().join("\n");
-        assert!(shown.contains("blank"), "missing case must be named: {shown}");
+        let shown = diags
+            .iter()
+            .map(|d| d.message.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            shown.contains("blank"),
+            "missing case must be named: {shown}"
+        );
         // Option matches must cover both halves (8.5).
         check_err(
             "make m equal to first of a list of \"x\"\nmatch m\n    when nothing\n        say \"empty\"",
@@ -4733,7 +7582,11 @@ say describe f\n";
     }
 
     fn assert_no_errors(src: &str, diags: &[Diagnostic]) {
-        let errs: Vec<Diagnostic> = diags.iter().filter(|d| d.severity == lagom_diagnostics::Severity::Error).cloned().collect();
+        let errs: Vec<Diagnostic> = diags
+            .iter()
+            .filter(|d| d.severity == lagom_diagnostics::Severity::Error)
+            .cloned()
+            .collect();
         assert!(
             errs.is_empty(),
             "expected clean check for:\n{src}\ngot:\n{}",
@@ -4768,11 +7621,19 @@ say describe f\n";
     fn short_unknown_names_get_no_false_suggestion() {
         let diags = check_err("make split equal to \"a, b\"\nsay it", "E0344");
         let e = diags.iter().find(|d| d.code == "E0344").expect("E0344");
-        assert!(e.fix.is_none(), "no misleading suggestion, got: {:?}", e.fix);
+        assert!(
+            e.fix.is_none(),
+            "no misleading suggestion, got: {:?}",
+            e.fix
+        );
         // And the typo path still works.
         let diags = check_err("make score equal to 1\nsay scoer", "E0344");
         let e = diags.iter().find(|d| d.code == "E0344").expect("E0344");
-        assert!(e.fix.as_deref().unwrap_or_default().contains("score"), "suggests the real name: {:?}", e.fix);
+        assert!(
+            e.fix.as_deref().unwrap_or_default().contains("score"),
+            "suggests the real name: {:?}",
+            e.fix
+        );
     }
 
     #[test]
@@ -4790,7 +7651,8 @@ say describe f\n";
     #[test]
     fn immutable_rebind_diagnoses() {
         check_err("make score equal to 10\nset score to 5", "E0339");
-    }    #[test]
+    }
+    #[test]
     fn mutable_targets_pass() {
         check_ok("make changing score equal to 10\nset score to 5");
     }
@@ -4854,7 +7716,10 @@ say describe f\n";
 
     #[test]
     fn decimal_to_number_is_not_implicit() {
-        check_err("\nfunction f\n    returns a number\n    gives back 1.5", "E0360");
+        check_err(
+            "\nfunction f\n    returns a number\n    gives back 1.5",
+            "E0360",
+        );
     }
 
     #[test]
@@ -4867,9 +7732,15 @@ say describe f\n";
 
     #[test]
     fn no_truthiness_for_text() {
-        let errs = check_err("make name equal to \"bo\"\nif name\n    say \"yes\"", "E0358");
+        let errs = check_err(
+            "make name equal to \"bo\"\nif name\n    say \"yes\"",
+            "E0358",
+        );
         let d = errs.iter().find(|d| d.code == "E0358").unwrap();
-        assert!(d.fix.is_some(), "the teaching diagnostic suggests the size comparison");
+        assert!(
+            d.fix.is_some(),
+            "the teaching diagnostic suggests the size comparison"
+        );
     }
 
     #[test]
@@ -4904,7 +7775,10 @@ say describe f\n";
 
     #[test]
     fn nothing_against_plain_value_diagnoses() {
-        check_err("make n equal to 5\nif n is nothing\n    say \"no\"", "E0355");
+        check_err(
+            "make n equal to 5\nif n is nothing\n    say \"no\"",
+            "E0355",
+        );
     }
 
     #[test]
@@ -4992,7 +7866,10 @@ say describe f\n";
     #[test]
     fn conversion_can_fail_and_types() {
         check_ok("make answer equal to ask \"n?\"\nattempt number from answer if it fails then\n    say \"not a number\"\notherwise\n    say result");
-        check_err("make answer equal to ask \"n?\"\nmake n equal to number from answer", "E0302");
+        check_err(
+            "make answer equal to ask \"n?\"\nmake n equal to number from answer",
+            "E0302",
+        );
         check_err("make n equal to number from 5", "E0359");
     }
 
@@ -5001,7 +7878,9 @@ say describe f\n";
     #[test]
     fn all_three_loop_forms_check() {
         check_ok("repeat 3 times\n    say \"hi\"");
-        check_ok("make changing n equal to 3\nrepeat while n is greater than 0\n    decrease n by 1");
+        check_ok(
+            "make changing n equal to 3\nrepeat while n is greater than 0\n    decrease n by 1",
+        );
         check_ok("make things equal to a list of 1, 2\nrepeat for each item, position in things\n    say position");
     }
 
@@ -5103,7 +7982,8 @@ fn is_single_arg_call(e: &Expr) -> bool {
 /// and the stripped name. Returns `None` for anything else.
 fn and_arg_with_suffix(e: &Expr) -> Option<(Expr, Option<Box<Expr>>, Option<Box<Expr>>)> {
     let Expr::Call(c) = e else { return None };
-    if c.first.is_some() || !c.preps.is_empty() || !c.and_args.is_empty() || !c.with_args.is_empty() {
+    if c.first.is_some() || !c.preps.is_empty() || !c.and_args.is_empty() || !c.with_args.is_empty()
+    {
         return None;
     }
     if c.using_arg.is_none() && c.where_expr.is_none() {
@@ -5113,14 +7993,95 @@ fn and_arg_with_suffix(e: &Expr) -> Option<(Expr, Option<Box<Expr>>, Option<Box<
         return None;
     }
     Some((
-        Expr::Name { name: c.callee.clone(), span: c.callee.span },
+        Expr::Name {
+            name: c.callee.clone(),
+            span: c.callee.span,
+        },
         c.using_arg.clone(),
         c.where_expr.clone(),
     ))
 }
+/// Is `callee` a method of a registered class? (Free fn: borrows the
+/// checker without the borrow-checker dance inside the big match.)
+fn method_callee_class(cx: &Checker<'_>, callee: &str) -> Option<String> {
+    if !callee.starts_with("method ") {
+        return None;
+    }
+    let rest = &callee["method ".len()..];
+    let (cname, mname) = rest.split_once(' ')?;
+    let cls = cx.classes.get(cname)?;
+    // The class must own this method (checked via the function table's
+    // origin and the class's existence — the name is parser-mangled).
+    let _ = mname;
+    let _ = cls;
+    Some(cname.to_string())
+}
 
-pub fn expr_span(e: &Expr) -> Span {    match e {
-        Expr::Int { span, .. }
+impl Checker<'_> {
+    /// 10.5's copy-redirect: resolve `method <c> <m>` through `<c>`'s base
+    /// chain (walking toward the root), then through any interface whose
+    /// default the class copied in — the defining class's own method wins
+    /// over a copied default. Returns the callee to actually call.
+    fn resolve_inherited_method(&self, cname: &str, mname: &str) -> Option<String> {
+        let mut cur = cname.to_string();
+        let mut hops = 0usize;
+        loop {
+            let owner = format!("method {cur} {mname}");
+            if self.functions.contains_key(&owner) {
+                return Some(owner);
+            }
+            // A default copied from a conformed interface lives under the
+            // class's own name already, so nothing extra to find here.
+            match self.class_base.get(&cur) {
+                Some((base, _)) if hops <= self.class_base.len() => {
+                    cur = base.clone();
+                    hops += 1;
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// 10.5: is `base` an ancestor of `derived` (or the same class)? The
+    /// chain is validated acyclic before any body checks, so the walk
+    /// terminates.
+    fn is_base_of(&self, base: &str, derived: &str) -> bool {
+        let mut cur = derived;
+        let mut hops = 0usize;
+        while hops <= self.class_base.len() {
+            if cur == base {
+                return true;
+            }
+            match self.class_base.get(cur) {
+                Some((b, _)) => cur = b,
+                None => return false,
+            }
+            hops += 1;
+        }
+        false
+    }
+}
+
+/// The method-call dispatch arm's guard: the callee is a method AND the
+/// checked receiver argument carries that class's type. When the receiver
+/// is an Error (earlier failure), dispatch still succeeds — recovery keeps
+/// downstream diagnostics meaningful.
+fn is_method_call(cx: &Checker<'_>, callee: &str, receiver: Option<&Type>) -> bool {
+    let Some(cname) = method_callee_class(cx, callee) else {
+        return false;
+    };
+    match receiver {
+        None => true,
+        Some(Type::Struct(s)) => *s == cname || cx.classes.contains_key(s),
+        Some(Type::Error) => true,
+        Some(_) => false,
+    }
+}
+
+pub fn expr_span(e: &Expr) -> Span {
+    match e {
+        Expr::NewObject { span, .. }
+        | Expr::Int { span, .. }
         | Expr::Float { span, .. }
         | Expr::Text { span, .. }
         | Expr::Bool { span, .. }
@@ -5138,7 +8099,8 @@ pub fn expr_span(e: &Expr) -> Span {    match e {
         | Expr::VariantLit { span, .. }
         | Expr::SomeValue { span, .. }
         | Expr::Lambda { span, .. }
-        | Expr::AttemptExpr { span, .. } => *span,
+        | Expr::AttemptExpr { span, .. }
+        | Expr::ChannelLit { span, .. } => *span,
         Expr::Call(c) => c.span,
     }
 }
