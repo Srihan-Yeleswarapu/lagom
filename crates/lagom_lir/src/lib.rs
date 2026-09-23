@@ -34,6 +34,13 @@ pub struct LirProgram {
     pub strings: Vec<String>,
     /// Structures in declaration order (field registration at program start).
     pub structs: Vec<(String, Vec<String>)>,
+    /// 10.4 finalizers: `(class name, deinit function name)` in declaration
+    /// order — registered with the runtime at program start so objects of
+    /// the class run the function at their last-reference drop.
+    pub deinits: Vec<(String, String)>,
+    /// 12.3/10.6: interface → `(class, method callee)` entries — the vtables
+    /// backing body-side dispatch on constrained parameters.
+    pub iface_dispatch: Vec<(String, Vec<(String, String)>)>,
     /// The function name invoked by the entry shim's `lagom_main`.
     pub entry: String,
 }
@@ -123,12 +130,26 @@ pub enum LirInstr {
     Binary { dest: SlotId, op: i64, left: LirOperand, right: LirOperand, line: i64 },
     /// `dest = callee(args…)` — a user call; the failed flag is explicit.
     Call { dest: SlotId, callee: String, args: Vec<LirOperand>, line: i64 },
+    /// `dest = iface <I> <m>(receiver, args…)` (12.3/10.6): vtable dispatch
+    /// on the receiver's runtime class — the native counterpart of the
+    /// interpreter's `iface_dispatch` lookup. Failure rides the out triple
+    /// like [`LirInstr::Call`].
+    CallIface {
+        dest: SlotId,
+        iface: String,
+        method: String,
+        args: Vec<LirOperand>,
+        line: i64,
+    },
     /// `say value`.
     Say { value: LirOperand, line: i64 },
     /// `dest = ask question`.
     Ask { dest: SlotId, question: LirOperand, line: i64 },
     /// `dest = Name { field: value, … }`.
     StructNew { dest: SlotId, name: StrId, fields: Vec<(StrId, LirOperand)>, line: i64 },
+    /// `dest = a new Name with field value …` (10.2) — an ARC'd reference
+    /// object: shared by every alias, fields mutable in place (9.3).
+    ObjectNew { dest: SlotId, name: StrId, fields: Vec<(StrId, LirOperand)>, line: i64 },
     /// `dest = base.field` (field as an interned name).
     FieldGet { dest: SlotId, base: LirOperand, field: StrId, line: i64 },
     /// `base.field = value` — the base slot receives the rebuilt box.
@@ -175,6 +196,16 @@ pub enum LirInstr {
     MakeClosure { dest: SlotId, function: StrId, captures: Vec<LirOperand>, line: i64 },
     /// `dest = f(args…)` applying a closure value (11.1) — can fail.
     CallClosure { dest: SlotId, f: LirOperand, args: Vec<LirOperand>, line: i64 },
+    /// `start a task` (14.2): enqueue the closure value at `f`.
+    SpawnTask { f: LirOperand, keep_going: bool, line: i64 },
+    /// `wait for all tasks` / the region's implicit join (14.2).
+    DrainTasks { line: i64 },
+    /// `send value to channel` (14.3).
+    SendChannel { value: LirOperand, channel: LirOperand, line: i64 },
+    /// `dest = receive from channel` (14.3) — can fail on still-empty.
+    ReceiveChannel { dest: SlotId, channel: LirOperand, line: i64 },
+    /// `dest = a channel of T` (14.3).
+    NewChannel { dest: SlotId, line: i64 },
     /// `dest = map/keep list with f` (which selects the op).
     MapList { dest: SlotId, list: LirOperand, f: LirOperand, is_map: bool, line: i64 },
     /// `dest = combine list start f`.
@@ -276,7 +307,14 @@ pub fn lower(prog: &MirProgram, dev: bool) -> LirProgram {
         })
         .unwrap_or_default();
 
-    LirProgram { functions, strings: inr.strings, structs, entry }
+    LirProgram {
+        functions,
+        strings: inr.strings,
+        structs,
+        deinits: prog.deinits.clone(),
+        iface_dispatch: prog.iface_dispatch.clone(),
+        entry,
+    }
 }
 
 /// The string pool: deduplicated, stable-order, data-section ready.
@@ -390,6 +428,21 @@ fn lower_instr(i: &lagom_mir::Instr, dev: bool, inr: &mut Interner, out: &mut Ve
             right: lower_operand(right, inr),
             line: line_of(span),
         }),
+        M::Call { dest, callee, args, span, .. } if callee.starts_with("iface ") => {
+            // 12.3/10.6 vtable dispatch: split the `iface <I> <m>` callee
+            // into its two names so the runtime lookup has them directly.
+            let mut words = callee.split(' ');
+            let _ = words.next();
+            let iface = words.next().unwrap_or_default().to_string();
+            let method = words.next().unwrap_or_default().to_string();
+            out.push(LirInstr::CallIface {
+                dest: SlotId(dest.0),
+                iface,
+                method,
+                args: args.iter().map(|a| lower_operand(a, inr)).collect(),
+                line: line_of(span),
+            });
+        }
         M::Call { dest, callee, args, span, .. } => out.push(LirInstr::Call {
             dest: SlotId(dest.0),
             callee: callee.clone(),
@@ -406,6 +459,15 @@ fn lower_instr(i: &lagom_mir::Instr, dev: bool, inr: &mut Interner, out: &mut Ve
             line: line_of(span),
         }),
         M::StructNew { dest, name, fields, span } => out.push(LirInstr::StructNew {
+            dest: SlotId(dest.0),
+            name: inr.intern(name),
+            fields: fields
+                .iter()
+                .map(|(n, v)| (inr.intern(n), lower_operand(v, inr)))
+                .collect(),
+            line: line_of(span),
+        }),
+        M::ObjectNew { dest, name, fields, span } => out.push(LirInstr::ObjectNew {
             dest: SlotId(dest.0),
             name: inr.intern(name),
             fields: fields
@@ -580,6 +642,27 @@ fn lower_instr(i: &lagom_mir::Instr, dev: bool, inr: &mut Interner, out: &mut Ve
             dest: SlotId(dest.0),
             f: lower_operand(f, inr),
             args: args.iter().map(|a| lower_operand(a, inr)).collect(),
+            line: line_of(span),
+        }),
+        // 14.2/14.3: tasks and channels — one LIR op per MIR op.
+        M::SpawnTask { f, keep_going, span } => out.push(LirInstr::SpawnTask {
+            f: lower_operand(f, inr),
+            keep_going: *keep_going,
+            line: line_of(span),
+        }),
+        M::DrainTasks { span } => out.push(LirInstr::DrainTasks { line: line_of(span) }),
+        M::SendChannel { value, channel, span } => out.push(LirInstr::SendChannel {
+            value: lower_operand(value, inr),
+            channel: lower_operand(channel, inr),
+            line: line_of(span),
+        }),
+        M::ReceiveChannel { dest, channel, span } => out.push(LirInstr::ReceiveChannel {
+            dest: SlotId(dest.0),
+            channel: lower_operand(channel, inr),
+            line: line_of(span),
+        }),
+        M::NewChannel { dest, span } => out.push(LirInstr::NewChannel {
+            dest: SlotId(dest.0),
             line: line_of(span),
         }),
         M::MapList { dest, list, f, span } => out.push(LirInstr::MapList {

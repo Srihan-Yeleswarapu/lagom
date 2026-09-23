@@ -1296,6 +1296,25 @@ $ lagom run wordarith5.lagom
 20
 ```
 
+### Command 6
+
+The value in a `say` sentence is the call's argument: an operator after a
+bare name binds inside the argument, so `say age plus 1` prints `age plus 1`.
+
+```lagom
+make age equal to 12
+say age plus 1
+say age times 2
+```
+
+Terminal transcript:
+
+```sh
+$ lagom run wordarith6.lagom
+13
+24
+```
+
 ---
 
 ## 16. Division and remainder forms — M0
@@ -5743,7 +5762,7 @@ failed
 
 ---
 
-## 65. `class` declarations — M1+ (planned)
+## 65. `class` declarations — M1+
 
 ### Command 1
 
@@ -5833,7 +5852,7 @@ Ada
 
 ---
 
-## 66. `can` methods and `myself` — M1+ (planned)
+## 66. `can` methods and `myself` — M1+
 
 ### Command 1
 
@@ -5844,7 +5863,7 @@ class counter
         set count of myself to 0
 
 make c equal to a new counter with count 5
-bump c
+reset c
 say count of c
 ```
 
@@ -5852,7 +5871,7 @@ Terminal transcript:
 
 ```sh
 $ lagom run method1.lagom
-6
+0
 ```
 
 ### Command 2
@@ -5883,7 +5902,7 @@ class player
     can add points
         increase score of myself by 10
 
-make p equal to a new player with name "Ada" and score 0
+make p equal to a new player with score 0
 add points of p
 say score of p
 ```
@@ -5937,7 +5956,7 @@ false
 
 ---
 
-## 67. `construction` and `a new` — M1+ (planned)
+## 67. `construction` and `a new` — M1+
 
 ### Command 1
 
@@ -6010,14 +6029,16 @@ class point
     has y of type number
 
 make p equal to a new point with x 3 and y 4
-say point
+say p
+say x of p
 ```
 
 Terminal transcript:
 
 ```sh
 $ lagom run constr4.lagom
-3 and 4
+a point(3, 4)
+3
 ```
 
 ### Command 5
@@ -6042,7 +6063,7 @@ $ lagom run constr5.lagom
 
 ---
 
-## 68. `before last reference disappears` — M1+ (planned)
+## 68. `before last reference disappears` — M1+
 
 ### Command 1
 
@@ -6051,7 +6072,7 @@ class document
     before last reference disappears
         say "document released"
 
-make d equal to a new document with title "Lagom"
+make d equal to a new document
 say "created"
 say "done"
 ```
@@ -6069,6 +6090,7 @@ document released
 
 ```lagom
 class file handle
+    has name of type text
     before last reference disappears
         say "file released"
 
@@ -6090,6 +6112,7 @@ file released
 
 ```lagom
 class connection
+    has address of type text
     before last reference disappears
         say "connection released"
 
@@ -6111,6 +6134,7 @@ connection released
 
 ```lagom
 class temporary folder
+    has name of type text
     before last reference disappears
         say "folder removed"
 
@@ -6132,6 +6156,7 @@ folder removed
 
 ```lagom
 class lock guard
+    has name of type text
     before last reference disappears
         say "lock released"
 
@@ -6151,7 +6176,7 @@ lock released
 
 ---
 
-## 69. `extends` inheritance — M1+ (planned)
+## 69. `extends` inheritance — M1+
 
 ### Command 1
 
@@ -6268,7 +6293,7 @@ managing users as admin
 
 ---
 
-## 70. `interface` and `does` — M2+ (planned)
+## 70. `interface` and `does` — M2+
 
 ### Command 1
 
@@ -6277,6 +6302,7 @@ interface drawable
     can draw
 
 class circle does drawable
+    has radius of type number
     can draw
         say "drawing circle"
 
@@ -6298,6 +6324,7 @@ interface printable
     can print
 
 class report does printable
+    has title of type text
     can print
         say "printing report"
 
@@ -6371,10 +6398,11 @@ interface comparable
         gives back true
 
 class value does comparable
-    can compare to other
+    can compare to
+        takes anything called other
         gives back true
 
-make v equal to a new value with name "x"
+make v equal to a new value
 say compare to of v with other "y"
 ```
 
@@ -6585,7 +6613,7 @@ x
 
 ---
 
-## 73. Generic constraints — M2+ (planned)
+## 73. Generic constraints — M2+
 
 ### Command 1
 
@@ -6667,12 +6695,15 @@ interface printable
     can print
         say "printed"
 
+class card does printable
+    has rank of type number
+
 function print value
     takes anything that does printable called value
-    print value
+    print of value
 
-make v equal to a new value
-print value v
+make v equal to a new card with rank 7
+print value of v
 ```
 
 Terminal transcript:
@@ -6689,12 +6720,15 @@ interface drawable
     can draw
         say "drawn"
 
+class shape does drawable
+    has sides of type number
+
 function draw item
     takes anything that does drawable called item
-    draw item
+    draw of item
 
-make d equal to a new drawable
-draw item d
+make d equal to a new shape with sides 4
+draw item of d
 ```
 
 Terminal transcript:
@@ -7243,7 +7277,7 @@ done
 
 ---
 
-## 80. `start a task` — Structured concurrency / M2+ (planned)
+## 80. `start a task` — Structured concurrency / M2+
 
 ### Command 1
 
@@ -7332,7 +7366,7 @@ done
 
 ---
 
-## 81. `wait for all tasks` — Structured concurrency / M2+ (planned)
+## 81. `wait for all tasks` — Structured concurrency / M2+
 
 ### Command 1
 

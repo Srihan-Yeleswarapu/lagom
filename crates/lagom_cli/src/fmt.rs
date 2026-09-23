@@ -62,6 +62,53 @@ fn format_item(out: &mut String, item: &Item) {
                 out.push('\n');
             }
         }
+        Item::Class(c) => {
+            // `class name ⏎ INDENT { has … | can <name> … block }` (10.2).
+            // Methods re-render from their receiver-first function form; the
+            // receiver parameter (`myself`) is synthesis machinery, not
+            // source, so the clause lines re-emit from the body's leading
+            // clauses while the receiver param itself is skipped.
+            out.push_str(&format!("class {}", c.name.display()));
+            if let Some(base) = &c.extends {
+                out.push_str(&format!(" extends {}", base.display()));
+            }
+            if !c.does.is_empty() {
+                let names: Vec<String> = c.does.iter().map(|n| n.display()).collect();
+                out.push_str(&format!(" does {}", names.join(", ")));
+            }
+            out.push('\n');
+            for field in &c.fields {
+                out.push_str(&format!(
+                    "{INDENT}has {} of type {}\n",
+                    field.name.display(),
+                    field.ty.display()
+                ));
+            }
+            for (mname, m) in &c.methods {
+                out.push_str(&format!("{INDENT}can {}\n", mname.display()));
+                format_body_without_receiver(out, m);
+            }
+            if let Some(d) = &c.deinit {
+                // 10.4: the finalizer re-renders from its receiver-first
+                // form; the body has no clauses of its own (no takes /
+                // returns / can fail on a finalizer).
+                out.push_str(&format!(
+                    "{INDENT}before last reference disappears\n"
+                ));
+                format_block(out, &d.body, 2);
+            }
+        }
+        Item::Interface(i) => {
+            // `interface name ⏎ INDENT { can <name> [body] }` (10.6). A
+            // requirement line has no body; a default re-renders its body.
+            out.push_str(&format!("interface {}\n", i.name.display()));
+            for (mname, body) in &i.methods {
+                out.push_str(&format!("{INDENT}can {}\n", mname.display()));
+                if let Some(m) = body {
+                    format_body_without_receiver(out, m);
+                }
+            }
+        }
         Item::TypeAlias(a) => {
             // One canonical line: the article spelling is uniform, the target
             // type renders in its 7.10 word style.
@@ -88,6 +135,29 @@ fn format_item(out: &mut String, item: &Item) {
         },
         Item::Stmt(s) => format_stmt(out, s, 0),
     }
+}
+
+fn format_body_without_receiver(out: &mut String, m: &FunctionDecl) {
+    // Method bodies re-render from the receiver-first lowering (R-2): skip
+    // the leading receiver param (`myself`), print any further clauses.
+    for p in m.params.iter().skip(1) {
+        if matches!(p.ty, TypeExpr::Inferred) {
+            out.push_str(&format!("{INDENT}{INDENT}takes {}\n", p.name.display()));
+        } else {
+            out.push_str(&format!(
+                "{INDENT}{INDENT}takes {} called {}\n",
+                p.ty.display(),
+                p.name.display()
+            ));
+        }
+    }
+    if let Some(ty) = &m.returns {
+        out.push_str(&format!("{INDENT}{INDENT}returns {}\n", ty.display()));
+    }
+    if m.can_fail {
+        out.push_str(&format!("{INDENT}{INDENT}can fail\n"));
+    }
+    format_block(out, &m.body, 2);
 }
 
 fn format_function(out: &mut String, f: &FunctionDecl) {
@@ -259,6 +329,17 @@ fn format_stmt_indented(out: &mut String, s: &Stmt, depth: usize) {
             format_expr(out, expr, 0, depth);
             out.push('\n');
         }
+        // 14.2: the spawn's body prints as an indented block; the `keep
+        // going` suffix prints on its own line at the spawn's depth.
+        Stmt::StartTask { body, keep_going, .. } => {
+            out.push_str("start a task\n");
+            format_block(out, body, depth + 1);
+            if *keep_going {
+                out.push_str(&INDENT.repeat(depth));
+                out.push_str("keep going\n");
+            }
+        }
+        Stmt::WaitForAllTasks { .. } => out.push_str("wait for all tasks\n"),
     }
 }
 
@@ -405,6 +486,11 @@ fn format_expr_inner(out: &mut String, e: &Expr, depth: usize) {
             format_expr(out, right, p + 1, depth);
         }
         Expr::Call(c) => format_call(out, c, depth),
+        // 14.3: the channel construction is the type phrase itself.
+        Expr::ChannelLit { elem, .. } => {
+            out.push_str("a channel of ");
+            out.push_str(&elem.display());
+        }
         Expr::ListLit { elements, .. } => {
             out.push_str("a list of ");
             let parts: Vec<String> = elements
@@ -436,6 +522,16 @@ fn format_expr_inner(out: &mut String, e: &Expr, depth: usize) {
         }
         Expr::StructLit { name, fields, .. } => {
             out.push_str(&format!("a {}", name.display()));
+            for (i, (fname, val)) in fields.iter().enumerate() {
+                out.push_str(if i == 0 { " with " } else { " and " });
+                out.push_str(&fname.display());
+                out.push(' ');
+                format_expr(out, val, 0, depth);
+            }
+        }
+        Expr::NewObject { name, fields, .. } => {
+            // Class construction (10.2) prints its canonical form.
+            out.push_str(&format!("a new {}", name.display()));
             for (i, (fname, val)) in fields.iter().enumerate() {
                 out.push_str(if i == 0 { " with " } else { " and " });
                 out.push_str(&fname.display());

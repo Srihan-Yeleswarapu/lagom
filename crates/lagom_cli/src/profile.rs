@@ -12,6 +12,29 @@ use super::args::{
     CliResult,
 };
 
+/// The user-facing form of a profiled function's internal name: a student's
+/// functions print as themselves; a compiler-synthesized lambda names the
+/// construct and where it sits, with the internal name kept after it for
+/// cross-reference against `--trace`.
+pub fn friendly_fn(name: &str) -> String {
+    if let Some(owner) = name.strip_prefix("%lambda fn:") {
+        return format!("a lambda inside `{owner}`");
+    }
+    // Script form: `%lambda <owner>s<seq>` (MIR's next_lambda_name bakes the
+    // owner in and separates it with `s`).
+    if let Some(rest) = name.strip_prefix("%lambda ") {
+        let digits = rest.len() - rest.trim_end_matches(|c: char| c.is_ascii_digit()).len();
+        if digits > 0 {
+            if let Some(owner) = rest[..rest.len() - digits].strip_suffix('s') {
+                if !owner.is_empty() {
+                    return format!("a lambda in `{owner}`");
+                }
+            }
+        }
+    }
+    name.to_string()
+}
+
 pub fn cmd_profile(rest: &[String]) -> CliResult {
     let path = source_path(rest)?;
     let src = read_source(&path)?;
@@ -53,7 +76,7 @@ pub fn cmd_profile(rest: &[String]) -> CliResult {
         println!("function calls ({total} total):");
         for (name, count) in calls.iter().take(15) {
             let pct = if total > 0 { (*count as f64 / total as f64) * 100.0 } else { 0.0 };
-            println!("  {name:>28}  {count:>8}  ({pct:.1}%)");
+            println!("  {:>28}  {count:>8}  ({pct:.1}%)  [{name}]", friendly_fn(name));
         }
     }
     Ok(())

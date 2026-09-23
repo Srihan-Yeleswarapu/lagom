@@ -99,9 +99,9 @@ impl Session {
                     // echoed separately, so a `make` line teaches its type
                     // and a `say` line shows its value.
                     let mut echo = Vec::new();
-                    for (name, ty, value) in interp.entry_scope() {
+                    for (name, ty, printed) in interp.entry_scope() {
                         if !names_before.contains(name) {
-                            echo.push(format!("{name} is a {} = {}", type_word(ty), value.format()));
+                            echo.push(format!("{name} is a {} = {}", type_word(ty), printed));
                         }
                     }
                     let _ = host;

@@ -64,6 +64,34 @@ pub type ListRef = Rc<Vec<Value>>;
 pub type MapRef = Rc<Vec<(Value, Value)>>;
 pub type StructRef = Rc<(String, Vec<Value>)>;
 
+/// A class instance's shared, mutable field storage (10.2/9.3). The inner
+/// `RefCell` is what makes copies references: deep-clone clones the `Rc`,
+/// never the cells.
+pub type ObjectRef = Rc<(String, RefCell<Vec<Value>>)>;
+
+/// The compiled finalizer ABI (10.4): the one-parameter user ABI —
+/// `(out, receiver_tag, receiver_payload)` — writing the
+/// `(tag, payload, failed)` return triple through `out` (always
+/// `(nothing, 0, 0)`: finalizers return nothing and cannot fail, R-20.3).
+pub type DeinitFn = unsafe extern "C" fn(out: *mut i64, recv_tag: i64, recv_pay: i64);
+
+/// Class name → compiled `deinit <class>` function, registered by generated
+/// init before `lagom_main` runs.
+static DEINIT_FNS: Mutex<Vec<(String, DeinitFn)>> = Mutex::new(Vec::new());
+
+// Every constructed object of a class that HAS a finalizer, awaiting the
+// final sweep. The native backend's value boxes are leaked by design (the
+// M0 bootstrap model), so an `Rc`-drop hook cannot fire there; instead the
+// runtime remembers finalizable objects at construction and runs their
+// `before last reference disappears` bodies when the program ends — after
+// `lagom_main` unwinds, which is where a script body's locals go out of
+// scope. Classes without a finalizer never register (no overhead in
+// release). The interpreter backend implements the precise per-drop
+// semantics and is the reference (see `lagom_interp`).
+thread_local! {
+    static PENDING_DEINITS: RefCell<Vec<ObjectRef>> = const { RefCell::new(Vec::new()) };
+}
+
 /// The runtime value. Machine types stay unboxed; the general data language
 /// is boxed (§8.2). Text shares its `Rc<String>` on copy — text is immutable
 /// at M0, so sharing *is* value semantics; mutable containers deep-copy.
@@ -81,6 +109,10 @@ pub enum Value {
     Map(MapRef),
     Pair(Box<Value>, Box<Value>),
     Struct(StructRef),
+    /// A class instance (10.2) — an ARC'd reference (9.3): every copy shares
+    /// the same `RefCell` field storage, so field writes through any alias
+    /// mutate the one object; equality is identity (R-6, `Rc::ptr_eq`).
+    Object(ObjectRef),
     /// A closure value (11.1): the synthetic function's interned name plus
     /// its captured values. Calling one goes through `rt_call_closure`.
     Closure(Rc<(String, Vec<Value>)>),
@@ -96,6 +128,7 @@ impl Value {
     pub const TAG_MAP: i64 = 6;
     pub const TAG_PAIR: i64 = 7;
     pub const TAG_STRUCT: i64 = 8;
+    pub const TAG_OBJECT: i64 = 10;
     /// The fail payload of a user-call return (`failed = 1`).
     pub const TAG_FAILED: i64 = 9;
 
@@ -110,6 +143,7 @@ impl Value {
             Value::Map(_) => Self::TAG_MAP,
             Value::Pair(..) => Self::TAG_PAIR,
             Value::Struct(_) => Self::TAG_STRUCT,
+            Value::Object(_) => Self::TAG_STRUCT,
             Value::Closure(_) => Self::TAG_STRUCT,
         }
     }
@@ -139,6 +173,7 @@ unsafe fn unbox(tag: i64, pay: i64) -> Value {
         Value::TAG_MAP => deref_value(pay).clone(),
         Value::TAG_PAIR => deref_value(pay).clone(),
         Value::TAG_STRUCT => deref_value(pay).clone(),
+        Value::TAG_OBJECT => deref_value(pay).clone(),
         _ => rt_panic("internal: a value with an unknown tag reached the runtime."),
     }
 }
@@ -181,6 +216,18 @@ pub fn format_value(v: &Value) -> String {
         Value::Struct(s) => {
             let inner: Vec<String> = s.1.iter().map(format_value).collect();
             format!("{}({})", s.0, inner.join(", "))
+        }
+        // S-9's class rendering: the indefinite article marks the value as
+        // a reference object, not a struct — `a counter(5)`.
+        Value::Object(o) => {
+            // 14.3: a channel prints as the messages it still holds — the
+            // student-visible queue, never an opaque handle.
+            if o.0 == "channel" {
+                let inner: Vec<String> = o.1.borrow().iter().map(format_value).collect();
+                return format!("a channel holding [{}]", inner.join(", "));
+            }
+            let inner: Vec<String> = o.1.borrow().iter().map(format_value).collect();
+            format!("a {}({})", o.0, inner.join(", "))
         }
         Value::Closure(_) => "a function".to_string(),
     }
@@ -347,6 +394,9 @@ fn deep_clone(v: &Value) -> Value {
         Value::Struct(s) => {
             Value::Struct(Rc::new((s.0.clone(), s.1.iter().map(deep_clone).collect())))
         }
+        // An object clone is another reference to the SAME object (9.3): the
+        // refcount climbs, the cells never copy.
+        Value::Object(o) => Value::Object(o.clone()),
         Value::Closure(c) => {
             Value::Closure(Rc::new((c.0.clone(), c.1.iter().map(deep_clone).collect())))
         }
@@ -624,6 +674,9 @@ pub fn values_equal(a: &Value, b: &Value) -> bool {
                 && s1.1.len() == s2.1.len()
                 && s1.1.iter().zip(s2.1.iter()).all(|(x, y)| values_equal(x, y))
         }
+        // R-6: class equality is IDENTITY — two distinct objects with equal
+        // fields are never `equal to`.
+        (Value::Object(a), Value::Object(b)) => Rc::ptr_eq(a, b),
         (Value::Closure(c1), Value::Closure(c2)) => c1.0 == c2.0,
         _ => false,
     }
@@ -774,6 +827,12 @@ pub unsafe extern "C" fn rt_field_get(
             // A read hands out an owned value (deep clone — §9).
             deep_clone(&s.1[ix])
         }
+        Value::Object(o) => {
+            let s = o.1.borrow();
+            let ix = field_index(&o.0, &fname, line);
+            // A read hands out an owned value (deep clone — §9).
+            deep_clone(&s[ix])
+        }
         other => rt_panic_at(
             &format!("`of` reads a structure's field, but this is {}.", format_value(&other)),
             line,
@@ -810,6 +869,14 @@ pub unsafe extern "C" fn rt_field_set(
                 slot @ Value::Struct(_) => *slot = rebuilt,
                 _ => rt_panic("internal: field write on a non-struct box."),
             }
+        }
+        Value::Object(o) => {
+            // A class reference writes through the shared object (9.3): the
+            // RefCell's cells change in place — every alias sees the new
+            // value, no rebuild.
+            let ix = field_index(&o.0, &fname, line);
+            let mut cells = o.1.borrow_mut();
+            cells[ix] = unbox(v_tag, v_pay);
         }
         other => rt_panic_at(
             &format!("`of` assigns a structure's field, but this is {}.", format_value(&other)),
@@ -906,6 +973,49 @@ pub unsafe extern "C" fn rt_struct_push(s_pay: i64, _f_ptr: *const u8, _f_len: i
             }
         }
         _ => rt_panic("internal: `rt_struct_push` on a non-struct."),
+    }
+}
+
+/// # Safety
+/// `out` must point at 16 writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn rt_object_new(out: *mut i64, n_ptr: *const u8, n_len: i64) -> i64 {
+    let name = read_str(n_ptr, n_len);
+    let object: ObjectRef = Rc::new((name, RefCell::new(Vec::new())));
+    // 10.4: only finalizable classes are remembered — `rt_register_deinit`
+    // runs before any user code, so this lookup is a tiny vec scan.
+    let finalizable = DEINIT_FNS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .any(|(n, _)| *n == object.0);
+    if finalizable {
+        PENDING_DEINITS.with(|q| q.borrow_mut().push(object.clone()));
+    }
+    write_out(out, &Value::Object(object));
+    0
+}
+
+/// Rebuild an object handle around a payload already owned elsewhere
+/// (finalizer receivers: the drain owns the payload; the receiver adds no
+/// hook, so cleanup cannot re-fire itself).
+
+/// Push one field onto a *fresh* object (constructor chaining; field order
+/// is the registration order, mirroring `rt_struct_push`).
+/// # Safety
+/// `s_pay` must be a live object box just created by `rt_object_new`.
+#[no_mangle]
+pub unsafe extern "C" fn rt_object_push(s_pay: i64, _f_ptr: *const u8, _f_len: i64, v_tag: i64, v_pay: i64) {
+    let v = deep_clone(&unbox(v_tag, v_pay));
+    match &mut *unbox_mut(s_pay) {
+        Value::Object(o) => {
+            // Objects are reference values (9.3): the cells mutate in place
+            // through any alias — including the finalizer registry, which
+            // holds its own handle. No exclusivity requirement here (that
+            // rule belongs to structs, whose push rebuilds the box).
+            o.1.borrow_mut().push(v);
+        }
+        _ => rt_panic("internal: `rt_object_push` on a non-object."),
     }
 }
 
@@ -1613,6 +1723,351 @@ pub unsafe extern "C" fn rt_call_closure(
     unsafe { *out.add(2) }
 }
 
+/// 12.3/10.6 vtable dispatch: interface → `(class, method callee)` rows and
+/// class → function address, both registered at program init (the checker
+/// builds the tables; codegen emits the registrations, deinit-style).
+static IFACE_ROWS: Mutex<Vec<(String, String, String, String)>> =
+    Mutex::new(Vec::new());
+/// Callee name → (arity = number of user params, raw function address).
+/// Method implementations have the uniform direct user ABI (out triple +
+/// 2×params), so the address is transmuted per stored arity at dispatch.
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct IfaceFnPtr(pub *const ());
+unsafe impl Send for IfaceFnPtr {}
+unsafe impl Sync for IfaceFnPtr {}
+static IFACE_FNS: Mutex<Vec<(String, usize, IfaceFnPtr)>> = Mutex::new(Vec::new());
+
+/// Register one vtable row: `(iface, class, method) → implementing callee`
+/// (own method, inherited, or copied default — checker resolution).
+/// # Safety
+/// pointers must be valid UTF-8 of the given lengths.
+#[no_mangle]
+pub unsafe extern "C" fn rt_register_iface_method(
+    iface_ptr: *const u8,
+    iface_len: i64,
+    class_ptr: *const u8,
+    class_len: i64,
+    method_ptr: *const u8,
+    method_len: i64,
+    callee_ptr: *const u8,
+    callee_len: i64,
+) {
+    let iface = read_str(iface_ptr, iface_len);
+    let class = read_str(class_ptr, class_len);
+    let method = read_str(method_ptr, method_len);
+    let callee = read_str(callee_ptr, callee_len);
+    let mut t = IFACE_ROWS.lock().unwrap_or_else(|e| e.into_inner());
+    if !t
+        .iter()
+        .any(|(i, c, m, _)| *i == iface && *c == class && *m == method)
+    {
+        t.push((iface, class, method, callee));
+    }
+}
+
+/// Register the function address behind a callee name. Method
+/// implementations use the same uniform user ABI as every generated
+/// function (out triple + 2×params); `arity` is the callee's user-param
+/// count so dispatch can transmute the raw address to the right shape.
+/// # Safety
+/// pointers must be valid UTF-8 of the given lengths; `f` must have the
+/// direct user ABI for `arity` params.
+#[no_mangle]
+pub unsafe extern "C" fn rt_register_iface_fn(
+    f: IfaceFnPtr,
+    name_ptr: *const u8,
+    name_len: i64,
+    arity: i64,
+) {
+    let name = read_str(name_ptr, name_len);
+    let mut t = IFACE_FNS.lock().unwrap_or_else(|e| e.into_inner());
+    if !t.iter().any(|(n, _, _)| *n == name) {
+        t.push((name, arity as usize, f));
+    }
+}
+
+/// Dispatch `iface <I> <m>` on a receiver object: look up the receiver's
+/// class row for the interface, then call the registered implementation —
+/// the native counterpart of the interpreter's table lookup. Status is the
+/// failed slot of the out triple, exactly like `rt_call_closure`.
+/// # Safety
+/// `out` must point at 24 writable bytes; `args` at `2*argc` i64s; the
+/// receiver (arg 0) must be a live object box.
+#[no_mangle]
+pub unsafe extern "C" fn rt_call_iface(
+    out: *mut i64,
+    iface_ptr: *const u8,
+    iface_len: i64,
+    method_ptr: *const u8,
+    method_len: i64,
+    args: *const i64,
+    argc: i64,
+) -> i64 {
+    let iface = read_str(iface_ptr, iface_len);
+    let method = read_str(method_ptr, method_len);
+    // The receiver's class name: every object value boxes an `Rc<(String,
+    // fields)>`; arg 0's payload is that box (same shape `deref_value`
+    // consumes).
+    let recv = unbox(*args.add(0), *args.add(1));
+    let Value::Object(object) = recv else {
+        rt_panic_at(
+            &format!("internal: `iface {iface} {method}` dispatched on a non-object value."),
+            0,
+        );
+    };
+    let class = object.0.clone();
+    let callee = IFACE_ROWS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find(|(i, c, m, _)| *i == iface && *c == class && *m == method)
+        .map(|(_, _, _, callee)| callee.clone());
+    let Some(callee) = callee else {
+        rt_panic_at(
+            &format!(
+                "internal: `{class}` does not implement `{method}` for interface `{iface}`."
+            ),
+            0,
+        );
+    };
+    let (code, arity) = IFACE_FNS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find(|(n, _, _)| *n == callee)
+        .map(|(_, a, f)| (f.0, *a))
+        .unwrap_or((std::ptr::null(), 0usize));
+    if code.is_null() {
+        rt_panic_at(&format!("internal: method function `{callee}` was not registered."), 0);
+    }
+    // The implementing function is a receiver-first user function with the
+    // direct call ABI: `(out, t0, p0, t1, p1, …)` — every generated function
+    // shares it, so the registered address is transmuted to the stored
+    // arity. Extern "C" calls are arity-fixed at the call site, hence the
+    // arity arm (method arities here are receiver + at most a few extras).
+    let f: unsafe extern "C" fn(*mut i64, ...) -> i64 =
+        std::mem::transmute::<*const (), unsafe extern "C" fn(*mut i64, ...) -> i64>(code);
+    let a = |i: i64| -> (i64, i64) {
+        if i < argc {
+            (*args.add((i * 2) as usize), *args.add((i * 2 + 1) as usize))
+        } else {
+            (0, 0)
+        }
+    };
+    let (t0, p0) = a(0);
+    let (t1, p1) = a(1);
+    let (t2, p2) = a(2);
+    let (t3, p3) = a(3);
+    match arity {
+        0 => f(out),
+        1 => f(out, t0, p0),
+        2 => f(out, t0, p0, t1, p1),
+        3 => f(out, t0, p0, t1, p1, t2, p2),
+        4 => f(out, t0, p0, t1, p1, t2, p2, t3, p3),
+        _ => rt_panic_at(
+            &format!(
+                "internal: `iface {iface} {method}` dispatched with an arity-{arity} method; at most 4 params are supported."
+            ),
+            0,
+        ),
+    };
+    // The failed flag lives in the out triple's third slot (every user
+    // function writes it there; the direct call itself returns nothing).
+    unsafe { *out.add(2) }
+}
+
+// ---------------------------------------------------------------------------
+// 14.2 structured tasks + 14.3 channels
+// ---------------------------------------------------------------------------
+
+/// The task region: closures queued by `start a task`, in spawn order, with
+/// their supervision mode. One queue per program (the script body is the
+/// outermost region; a queued task runs at the next join).
+struct Task {
+    function: String,
+    captures: Vec<Value>,
+    keep_going: bool,
+}
+thread_local! {
+    static TASKS: RefCell<Vec<Task>> = const { RefCell::new(Vec::new()) };
+    /// The first failure of a non-`keep going` task since the last join.
+    static TASK_FAILURE: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// `start a task`: queue the closure value (the closure box's function name
+/// plus its captured values — the same shape `rt_call_closure` consumes).
+/// # Safety
+/// `f_pay` must be a live closure box.
+#[no_mangle]
+pub unsafe extern "C" fn rt_spawn_task(f_tag: i64, f_pay: i64, keep_going: i64) {
+    let fv = unbox(f_tag, f_pay);
+    let Value::Closure(c) = fv else {
+        rt_panic_at(
+            &format!(
+                "`start a task` needs a task body, but got {}.",
+                format_value(&fv)
+            ),
+            0,
+        );
+    };
+    TASKS.with(|q| {
+        q.borrow_mut().push(Task {
+            function: c.0.clone(),
+            captures: c.1.iter().map(deep_clone).collect(),
+            keep_going: keep_going != 0,
+        })
+    });
+}
+
+/// Drain queued tasks: run each to completion in spawn order through the
+/// uniform closure ABI, then report the first failure supervision did not
+/// consume (`keep going`) — 1 with the message stored, 0 when all passed.
+fn drain_tasks(line: i64) -> i64 {
+    let mut tasks: Vec<Task> = TASKS.with(|q| std::mem::take(&mut *q.borrow_mut()));
+    for task in tasks.drain(..) {
+        // The uniform closure ABI: the packed args list is the synthetic
+        // function's one parameter (formals first — a zero-param task body's
+        // list is exactly its captures).
+        let list = Value::List(Rc::new(task.captures));
+        let (l_tag, l_pay) = (Value::TAG_LIST, box_value(list));
+        let entry = LAMBDA_FNS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|(n, _)| *n == task.function)
+            .map(|(_, f)| *f);
+        let Some(f) = entry else {
+            rt_panic_at(
+                &format!("internal: task function `{}` was not registered.", task.function),
+                line,
+            );
+        };
+        let mut slot = [0i64; 3];
+        unsafe { f(slot.as_mut_ptr(), l_tag, l_pay) };
+        let failed = slot[2] != 0;
+        if failed {
+            let msg = FAIL_SLOT.with(|s| s.borrow_mut().take());
+            if let Some(m) = msg {
+                if !task.keep_going {
+                    TASK_FAILURE.with(|t| {
+                        let mut b = t.borrow_mut();
+                        if b.is_none() {
+                            *b = Some(m);
+                        }
+                    });
+                }
+            }
+        }
+    }
+    let failure = TASK_FAILURE.with(|t| t.borrow_mut().take());
+    match failure {
+        Some(m) => {
+            set_fail_message(m);
+            1
+        }
+        None => 0,
+    }
+}
+
+/// `wait for all tasks` / the region's implicit join. Status is the failed
+/// flag (the re-raised first failure), exactly like a failing user call.
+#[no_mangle]
+pub extern "C" fn rt_drain_tasks(line: i64) -> i64 {
+    drain_tasks(line)
+}
+
+/// `a channel of T`: build the FIFO queue value — an object-shaped box whose
+/// `RefCell<Vec<Value>>` is the queue (interior mutability so copies of the
+/// binding share one channel; the name slot carries the element type only
+/// for diagnostics). TAG_OBJECT reuses the object ABI; `format_value` renders
+/// a channel by its queued messages.
+#[no_mangle]
+pub extern "C" fn rt_new_channel(out: *mut i64) {
+    unsafe {
+        *out = Value::TAG_OBJECT;
+        *out.add(1) = box_value(Value::Object(Rc::new((
+            String::from("channel"),
+            RefCell::new(Vec::new()),
+        ))));
+    }
+}
+
+/// `send value to channel`: queue a deep copy (values cross the boundary,
+/// R-8's teaching form).
+/// # Safety
+/// `ch`/`v` must be live value boxes.
+#[no_mangle]
+pub unsafe extern "C" fn rt_send_channel(ch_tag: i64, ch_pay: i64, v_tag: i64, v_pay: i64, line: i64) {
+    let cv = unbox(ch_tag, ch_pay);
+    let Value::Object(o) = &cv else {
+        rt_panic_at(
+            &format!(
+                "`send … to` needs a channel, but this is {}.",
+                format_value(&cv)
+            ),
+            line,
+        );
+    };
+    if o.0 != "channel" {
+        rt_panic_at(
+            &format!(
+                "`send … to` needs a channel, but this is {}.",
+                format_value(&cv)
+            ),
+            line,
+        );
+    }
+    let v = unbox(v_tag, v_pay);
+    let v = deep_clone(&v);
+    o.1.borrow_mut().push(v);
+}
+
+/// `receive from channel`: dequeue the front message; an empty queue fails
+/// (native tasks only run at joins, so an empty channel at a receive with no
+/// queued work IS empty — the interpreter's join-barrier wait collapses to
+/// the same rule). Status 1 = failed with the message stored.
+/// # Safety
+/// `out` must point at 16 writable bytes; `ch` a live channel box.
+#[no_mangle]
+pub unsafe extern "C" fn rt_receive_channel(
+    out: *mut i64,
+    ch_tag: i64,
+    ch_pay: i64,
+    line: i64,
+) -> i64 {
+    let cv = unbox(ch_tag, ch_pay);
+    let Value::Object(o) = &cv else {
+        rt_panic_at(
+            &format!(
+                "`receive from` needs a channel, but this is {}.",
+                format_value(&cv)
+            ),
+            line,
+        );
+    };
+    if o.0 != "channel" {
+        rt_panic_at(
+            &format!(
+                "`receive from` needs a channel, but this is {}.",
+                format_value(&cv)
+            ),
+            line,
+        );
+    }
+    let mut q = o.1.borrow_mut();
+    if q.is_empty() {
+        set_fail_message(String::from("receive from an empty channel"));
+        return 1;
+    }
+    let v = q.remove(0);
+    drop(q);
+    let (t, p) = encode_pair(&v);
+    *out = t;
+    *out.add(1) = p;
+    0
+}
+
 /// `map`/`keep` (11.2): one loop in the runtime; `is_map` selects. The
 /// predicate runs via `rt_call_closure` per element; a failing element call
 /// propagates (status 1).
@@ -1838,6 +2293,7 @@ fn json_format_value(v: &Value) -> String {
                 .collect();
             format!("{{{}}}", inner.join(", "))
         }
+        Value::Object(_) => "null".to_string(),
         Value::Closure(_) => "null".to_string(),
     }
 }
@@ -2180,9 +2636,64 @@ extern "C" {
 pub extern "C" fn __lagom_start() -> i32 {
     init_random();
     let failed = unsafe { lagom_main() };
+    // 10.4: the program's final drop sweep. lagom_main's locals — every
+    // object the script body still held — drop as its frame unwinds, so the
+    // last-reference finalizers queue here and run now, whether the program
+    // completed or ended with an unhandled failure. Deterministic cleanup is
+    // never skipped (10.4); R-20.3 keeps the bodies from failing.
+    drain_deinits();
     if failed == 0 {
         0
     } else {
         rt_unhandled_failure()
     }
+}
+
+/// Generated init registers one class's finalizer body by address: the
+/// compiled `deinit <class>` function has the one-parameter user ABI, so a
+/// drained finalizer is a direct call with the receiver as its argument.
+/// # Safety
+/// `class_ptr/class_len` must be valid UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn rt_register_deinit(
+    f: DeinitFn,
+    class_ptr: *const u8,
+    class_len: i64,
+) {
+    let class = read_str(class_ptr, class_len);
+    let mut t = DEINIT_FNS.lock().unwrap_or_else(|e| e.into_inner());
+    if !t.iter().any(|(n, _)| *n == class) {
+        t.push((class, f));
+    }
+}
+
+/// Run every finalizable object's `deinit <class>` body once, in creation
+/// order — the order a scope-held program releases its objects in. A
+/// finalizer body's own constructions register during the sweep; those
+/// entries are discarded after, so a cleanup that allocates finalizable
+/// resources cannot recurse the drain (10.4's no-re-entrancy rule).
+#[cfg(not(test))] // test builds have no `__lagom_start` caller (cfg above)
+fn drain_deinits() {
+    let batch: Vec<ObjectRef> =
+        PENDING_DEINITS.with(|q| std::mem::take(&mut *q.borrow_mut()));
+    for object in batch {
+        let f = {
+            let fns = DEINIT_FNS.lock().unwrap_or_else(|e| e.into_inner());
+            fns.iter().find(|(n, _)| *n == object.0).map(|(_, f)| *f)
+        };
+        let Some(f) = f else { continue };
+        let receiver = Value::Object(object);
+        let (t, p) = (receiver.tag(), box_value(receiver));
+        let mut out = [0i64; 3];
+        unsafe { f(out.as_mut_ptr(), t, p) };
+        // R-20.3: the body cannot fail; `out[2]` must be 0. A nonzero flag
+        // here means the checker was bypassed — crash honestly.
+        if out[2] != 0 {
+            rt_panic(
+                "internal: a finalizer body failed, but finalizers cannot fail (R-20.3).",
+            );
+        }
+    }
+    // Constructions inside finalizer bodies land here; drop them (see doc).
+    PENDING_DEINITS.with(|q| q.borrow_mut().clear());
 }

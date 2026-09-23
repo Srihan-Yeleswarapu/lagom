@@ -33,6 +33,12 @@ pub struct MirProgram {
     pub items: Vec<MirItem>,
     /// Structures in declaration order (layout input for backends).
     pub structs: Vec<MirStruct>,
+    /// 10.4 finalizers: `(class name, deinit function name)` — the backends
+    /// register each so the runtime can run it at the last-reference drop.
+    pub deinits: Vec<(String, String)>,
+    /// 12.3: interface → `(class, method callee)` vtable entries, passed
+    /// through to the backends for body-side dispatch on constrained params.
+    pub iface_dispatch: Vec<(String, Vec<(String, String)>)>,
     /// Kinds in declaration order (7.12): each kind's variants register their
     /// field lists with the backends' struct tables (a variant value is a
     /// struct value named by the variant).
@@ -201,6 +207,10 @@ pub enum Instr {
     Ask { dest: LocalId, question: Operand, span: Span },
     /// `dest = Name { field: v, … }`.
     StructNew { dest: LocalId, name: String, fields: Vec<(String, Operand)>, span: Span },
+    /// `dest = a new Name with field v …` (10.2) — an ARC'd reference object
+    /// (9.3): identity-bearing, shared by every alias, fields mutable in
+    /// place through `set`/`increase`.
+    ObjectNew { dest: LocalId, name: String, fields: Vec<(String, Operand)>, span: Span },
     /// `dest = base.field`.
     FieldGet { dest: LocalId, base: Operand, field: String, field_span: Span, span: Span },
     /// `base.field = value`.
@@ -260,6 +270,21 @@ pub enum Instr {
     /// closure's captures ride inside the closure value; `args` are the
     /// call-site arguments. A failing closure routes like `Call`.
     CallClosure { dest: LocalId, f: Operand, args: Vec<Operand>, span: Span },
+    /// `start a task` (14.2): schedule the zero-param closure to run at the
+    /// region's join point. `keep_going` selects the supervision mode — this
+    /// task's failure is consumed at the join instead of re-raised.
+    SpawnTask { f: Operand, keep_going: bool, span: Span },
+    /// `wait for all tasks` (14.2) / the region's implicit join: run every
+    /// task this function spawned so far, in spawn order, to completion;
+    /// then re-raise the first non-`keep going` failure at this site.
+    DrainTasks { span: Span },
+    /// `send value to channel` (14.3): queue a deep-copied value.
+    SendChannel { value: Operand, channel: Operand, span: Span },
+    /// `dest = receive from channel` (14.3): dequeue; the empty-wait rule
+    /// runs the join barrier first, then fails on still-empty.
+    ReceiveChannel { dest: LocalId, channel: Operand, span: Span },
+    /// `dest = a channel of T` (14.3): build the typed FIFO channel value.
+    NewChannel { dest: LocalId, span: Span },
     /// `dest = map list with f` / `keep list with f` / `combine list start f`
     /// (11.2). The combinators are one MIR op each so both backends share
     /// the loop; `f` is a closure value.
@@ -394,15 +419,17 @@ pub fn lower(program: lagom_hir::HirProgram) -> MirProgram {
     let mut structs: Vec<MirStruct> = Vec::new();
     let mut kinds: Vec<MirKind> = Vec::new();
     let mut items: Vec<MirItem> = Vec::new();
+    let deinits: Vec<(String, String)> = program.deinits.clone();
+    let iface_dispatch = program.iface_dispatch.clone();
     // Lambda lowering is a two-phase affair inside `lower`: every lowering
     // pass shares one `pending` queue so lambdas in lambdas also land.
-    let mut pending: Vec<lagom_hir::HirExprKind> = Vec::new();
+    let mut pending: Vec<(lagom_hir::HirExprKind, Vec<(String, Type)>)> = Vec::new();
     // First-class function names (11.1): every function used as a VALUE gets
     // a synthetic forwarding closure so the uniform closure ABI applies. Two
     // passes (bodies may reference functions declared later).
     for item in &program.items {
         if let lagom_hir::HirItem::Function(f) = item {
-            pending.push(lagom_hir::HirExprKind::Lambda {
+            pending.push((lagom_hir::HirExprKind::Lambda {
                 params: f.params.iter().map(|(n, t, s)| (n.clone(), t.clone(), *s)).collect(),
                 ret: f.ret.clone(),
                 body: Box::new(lagom_hir::HirExpr {
@@ -425,7 +452,7 @@ pub fn lower(program: lagom_hir::HirProgram) -> MirProgram {
                 span: f.span,
                 name: Some(format!("%lambda fn:{}", f.name)),
                 body_stmts: Vec::new(),
-            });
+            }, Vec::new()));
         }
     }
     // Top-level statements merge into ONE script body (§19.1's script model —
@@ -475,7 +502,7 @@ pub fn lower(program: lagom_hir::HirProgram) -> MirProgram {
     // Drain the lambda queue breadth-first: lowering one lambda may enqueue
     // more (a lambda inside a lambda).
     let mut n = 0;
-    while let Some(kind) = pending.first().cloned() {
+    while let Some((kind, site_caps)) = pending.first().cloned() {
         pending.remove(0);
         if let lagom_hir::HirExprKind::Lambda { params, ret, body, body_stmts, span, name } = kind {
             // The HIR-assigned stable name wins (codegen's lambda table and
@@ -485,12 +512,12 @@ pub fn lower(program: lagom_hir::HirProgram) -> MirProgram {
                 n += 1;
                 assigned
             });
-            let (f, more) = lower_lambda(&name, params, ret, body, body_stmts, span, &fn_names);
+            let (f, more) = lower_lambda(&name, params, ret, body, body_stmts, site_caps, span, &fn_names);
             items.push(MirItem::Function(f));
             pending.extend(more);
         }
     }
-    MirProgram { items, structs, kinds }
+    MirProgram { items, structs, kinds, deinits, iface_dispatch }
 }
 
 /// The build-mode configuration — a compile-time choice, not a runtime
@@ -510,7 +537,7 @@ fn lower_function(
     f: lagom_hir::HirFunction,
     is_entry: bool,
     fn_names: &std::collections::HashSet<String>,
-) -> (MirFunction, Vec<lagom_hir::HirExprKind>) {
+) -> (MirFunction, Vec<(lagom_hir::HirExprKind, Vec<(String, Type)>)>) {
     let mut lx = FunctionLowerer::new_named(f.name.clone(), Some(f.ret.clone()), f.can_fail, is_entry, f.span, fn_names.clone());
     for (name, ty, span) in &f.params {
         let id = lx.new_local(name, ty.clone(), false, *span);
@@ -537,7 +564,7 @@ fn program_function_names(program: &lagom_hir::HirProgram) -> std::collections::
         .collect()
 }
 
-fn lower_script(stmts: Vec<lagom_hir::HirStmt>, fn_names: &std::collections::HashSet<String>) -> (MirFunction, Vec<lagom_hir::HirExprKind>) {
+fn lower_script(stmts: Vec<lagom_hir::HirStmt>, fn_names: &std::collections::HashSet<String>) -> (MirFunction, Vec<(lagom_hir::HirExprKind, Vec<(String, Type)>)>) {
     let span = stmts.first().map(|s| s.span).unwrap_or_default();
     let mut lx = FunctionLowerer::new_named("main".to_string(), None, false, true, span, fn_names.clone());
     lx.push_block("entry");
@@ -558,26 +585,18 @@ fn lower_lambda(
     _ret: Type,
     body: Box<lagom_hir::HirExpr>,
     body_stmts: Vec<lagom_hir::HirStmt>,
+    // The closure's captures with their make-site types (the make-site owns
+    // the scope; this deferred lowering only unpacks what it is given).
+    captures: Vec<(String, Type)>,
     span: Span,
     fn_names: &std::collections::HashSet<String>,
-) -> (MirFunction, Vec<lagom_hir::HirExprKind>) {
+) -> (MirFunction, Vec<(lagom_hir::HirExprKind, Vec<(String, Type)>)>) {
     let mut lx = FunctionLowerer::new_named(name.to_string(), Some(Type::Error), false, false, span, fn_names.clone());
     // The single parameter: the packed args list.
     let args_local = lx.new_local("%args", Type::List(Box::new(Type::Error)), false, span);
     lx.params.push(args_local);
     lx.push_block("entry");
-    // Unpack: local i = args[i]. The uniform closure ABI packs the FORMALS
-    // first (`[formals…, captures…]`) so a closure called with zero captures
-    // is positionally identical to a direct call; captures follow.
-    for (i, (pname, pty, pspan)) in params.iter().enumerate() {
-        let slot = lx.new_local(&format!("%arg{i}"), pty.clone(), true, *pspan);
-        let idx = lx.new_local("%ix", Type::Number, true, span);
-        lx.emit(Instr::Copy { dest: idx, value: Operand::Int(i as i64), span });
-        let dest = lx.new_local("%unpack", pty.clone(), true, span);
-        lx.emit(Instr::IndexGet { dest, base: Operand::Local(args_local), index: Operand::Local(idx), span });
-        lx.emit(Instr::Copy { dest: slot, value: Operand::Local(dest), span });
-        lx.declare(pname, slot);
-    }
+    lx.unpack_packed(&params, captures, args_local, span);
     if !body_stmts.is_empty() {
         // The block form (§11.1: a full function): lower every checked
         // statement; the `gives back` inside lowers to a Return terminators.
@@ -621,7 +640,13 @@ struct FunctionLowerer {
     catch_pads: Vec<(BlockId, LocalId)>,
     /// Lambdas discovered while lowering this function; `lower` turns them
     /// into synthetic functions after the walk.
-    pending_lambdas: Vec<lagom_hir::HirExprKind>,
+    /// The lambda queue: the kind to lower plus the captures (name, make-site
+    /// type) the closure packed — the synthetic function unpacks them.
+    pending_lambdas: Vec<(lagom_hir::HirExprKind, Vec<(String, Type)>)>,
+    /// Every binding this function declared, with its type (`make`s and
+    /// formals). The MakeClosure site consults it so each capture's entry in
+    /// the pending queue carries the same type the unpack will declare.
+    captured_types: std::collections::HashMap<String, Type>,
     /// Monotonic synthetic-lambda name source, seeded per enclosing function
     /// so names are unique across the whole program: `pending_lambdas.len()`
     /// resets after every drain, and each user function gets a fresh
@@ -630,6 +655,9 @@ struct FunctionLowerer {
     /// error in codegen. Seeding from the (unique) enclosing function name
     /// keeps every synthetic name program-unique.
     lambda_seq: usize,
+    /// 14.2: whether an unrejoined `start a task` ran in this body — the
+    /// implicit region join is injected at function end when it did.
+    saw_spawn: bool,
 }
 
 impl FunctionLowerer {
@@ -675,7 +703,9 @@ impl FunctionLowerer {
             loop_targets: Vec::new(),
             catch_pads: Vec::new(),
             pending_lambdas: Vec::new(),
+            captured_types: std::collections::HashMap::new(),
             lambda_seq: seed,
+            saw_spawn: false,
         }
     }
 
@@ -697,6 +727,40 @@ impl FunctionLowerer {
 
     fn declare(&mut self, name: &str, id: LocalId) {
         self.scopes.last_mut().unwrap().insert(name.to_string(), id);
+    }
+
+    /// Unpack the synthetic function's single packed args list into
+    /// read-only locals — formals first, captures after (the uniform closure
+    /// ABI both backends call through). Captures unpack like formals: the
+    /// body can read them, and without the unpack the name resolves to a
+    /// Nothing default and the capture is silently lost.
+    fn unpack_packed(
+        &mut self,
+        formals: &[(String, Type, Span)],
+        captures: Vec<(String, Type)>,
+        args_local: LocalId,
+        span: Span,
+    ) {
+        for (i, (pname, pty, pspan)) in formals.iter().enumerate() {
+            let slot = self.new_local(&format!("%arg{i}"), pty.clone(), false, *pspan);
+            let idx = self.new_local("%ix", Type::Number, false, span);
+            self.emit(Instr::Copy { dest: idx, value: Operand::Int(i as i64), span });
+            let dest = self.new_local("%unpack", pty.clone(), false, span);
+            self.emit(Instr::IndexGet { dest, base: Operand::Local(args_local), index: Operand::Local(idx), span });
+            self.emit(Instr::Copy { dest: slot, value: Operand::Local(dest), span });
+            self.declare(pname, slot);
+        }
+        let nf = formals.len();
+        for (j, (cname, cty)) in captures.iter().enumerate() {
+            let i = nf + j;
+            let slot = self.new_local(&format!("%cap{j}"), cty.clone(), false, span);
+            let idx = self.new_local("%ix", Type::Number, false, span);
+            self.emit(Instr::Copy { dest: idx, value: Operand::Int(i as i64), span });
+            let dest = self.new_local("%unpack", cty.clone(), false, span);
+            self.emit(Instr::IndexGet { dest, base: Operand::Local(args_local), index: Operand::Local(idx), span });
+            self.emit(Instr::Copy { dest: slot, value: Operand::Local(dest), span });
+            self.declare(cname, slot);
+        }
     }
 
     fn resolve(&self, name: &str) -> Option<LocalId> {
@@ -765,6 +829,14 @@ impl FunctionLowerer {
 
 
     fn finish(mut self) -> MirFunction {
+        // 14.2: the region's implicit join. Any task this function spawned
+        // without an explicit `wait for all tasks` joins here — one injected
+        // DrainTasks in the entry block before the fall-out, so the structured
+        // guarantee (no orphaned tasks) is a property of the MIR itself.
+        if self.saw_spawn {
+            self.emit(Instr::DrainTasks { span: self.span });
+            self.saw_spawn = false;
+        }
         // Any block still unterminated gets an implicit return. For reachable
         // straight-line ends this is the natural fall-out; sema has already
         // proved every *reachable* path gives back when one is required.
@@ -827,6 +899,13 @@ impl FunctionLowerer {
     }
 
     /// Evaluate `e` into a fresh local and return its id.
+    /// Two expressions in order (a helper for multi-operand statements).
+    fn expr2(&mut self, a: lagom_hir::HirExpr, b: lagom_hir::HirExpr) -> (LocalId, LocalId) {
+        let la = self.expr(a);
+        let lb = self.expr(b);
+        (la, lb)
+    }
+
     fn expr(&mut self, e: lagom_hir::HirExpr) -> LocalId {
         let span = e.span;
         let ty = e.ty.clone();
@@ -885,22 +964,69 @@ impl FunctionLowerer {
                 // Enqueue the lambda for its own synthetic function; the
                 // value here is the closure over it (uniform list ABI).
                 let lname = name.unwrap_or_else(|| self.next_lambda_name());
-                self.pending_lambdas.push(lagom_hir::HirExprKind::Lambda {
+                let formals: Vec<String> = params.iter().map(|(n, _, _)| n.clone()).collect();
+                // The capture walk covers both lambda shapes: an inline
+                // expression body, and the block form's statement body
+                // (14.2's `start a task` builds exactly that — a body that
+                // only sends to the channel has no expression reads at all).
+                let mut names: Vec<String> = Vec::new();
+                collect_free(&body.kind, &formals, &mut names);
+                for s in &body_stmts {
+                    collect_free_stmt(&s.kind, &formals, &mut names);
+                }
+                // (name, LocalId) pairs, in capture order.
+                let resolved = self.resolve_captures(names);
+                // The synthetic function unpacks by NAME, so the queue
+                // carries each capture's make-site type (the type of the
+                // local the closure reads).
+                let site_caps: Vec<(String, Type)> = resolved
+                    .iter()
+                    .map(|(n, _, t)| (n.clone(), t.clone()))
+                    .collect();
+                self.pending_lambdas.push((lagom_hir::HirExprKind::Lambda {
                     params: params.clone(),
                     ret,
                     body: body.clone(),
                     body_stmts: body_stmts.clone(),
                     span: lspan,
                     name: Some(lname.clone()),
-                });
-                let formals: Vec<String> = params.iter().map(|(n, _, _)| n.clone()).collect();
-                let captures = self.captures_for(&body, &formals);
+                }, site_caps));
                 let dest = self.new_local("%t", ty, true, span);
-                let caps: Vec<Operand> = captures
+                let caps: Vec<Operand> = resolved
                     .into_iter()
-                    .map(|(_, id)| Operand::Local(id))
+                    .map(|(_, id, _)| Operand::Local(id))
                     .collect();
                 self.emit(Instr::MakeClosure { dest, function: lname, captures: caps, span });
+                dest
+            }
+            // 14.3: a send in value position still queues — its value is
+            // nothing (a clean program never reads it).
+            lagom_hir::HirExprKind::SendToChannel { value, channel } => {
+                let dest = self.new_local("%t", ty, true, span);
+                let vp = self.op(*value);
+                let cp = self.op(*channel);
+                self.emit(Instr::SendChannel { value: vp, channel: cp, span });
+                self.emit(Instr::Copy {
+                    dest,
+                    value: Operand::Nothing,
+                    span,
+                });
+                dest
+            }
+            // 14.3: the channel construction and the receive query.
+            lagom_hir::HirExprKind::NewChannel { span: cspan } => {
+                let dest = self.new_local("%t", ty, true, span);
+                self.emit(Instr::NewChannel { dest, span: cspan });
+                dest
+            }
+            lagom_hir::HirExprKind::ReceiveFrom { channel, span: rspan } => {
+                let c = self.expr(*channel);
+                let dest = self.new_local("%t", ty, true, span);
+                self.emit(Instr::ReceiveChannel {
+                    dest,
+                    channel: Operand::Local(c),
+                    span: rspan,
+                });
                 dest
             }
             lagom_hir::HirExprKind::Field { base, field, field_span } => {
@@ -926,6 +1052,21 @@ impl FunctionLowerer {
                     })
                     .collect();
                 self.emit(Instr::StructNew { dest, name, fields, span });
+                dest
+            }
+            lagom_hir::HirExprKind::NewObject { name, fields } => {
+                // Class construction (10.2): the ARC'd reference object
+                // (9.3) — its own instruction so the backends build a
+                // shared, mutable object rather than a struct value.
+                let dest = self.new_local("%t", ty, true, span);
+                let fields = fields
+                    .into_iter()
+                    .map(|(n, v, _)| {
+                        let v = self.op(v);
+                        (n, v)
+                    })
+                    .collect();
+                self.emit(Instr::ObjectNew { dest, name, fields, span });
                 dest
             }
             lagom_hir::HirExprKind::List(elems) => {
@@ -992,15 +1133,22 @@ impl FunctionLowerer {
         }
     }
 
-    /// The free variables of `body` that resolve in the *current* scope and
-    /// are not formals — the closure's captures (11.1's environment).
-    fn captures_for(&self, body: &lagom_hir::HirExpr, formals: &[String]) -> Vec<(String, LocalId)> {
-        let mut names: Vec<String> = Vec::new();
-        collect_free(&body.kind, &formals, &mut names);
-        let mut out = Vec::new();
+    /// Deduplicate (first occurrence keeps order) and resolve to locals,
+    /// carrying each capture's type (the pending queue unpacks by NAME, so
+    /// the type must come from this scope, not the use site).
+    fn resolve_captures(&self, names: Vec<String>) -> Vec<(String, LocalId, Type)> {
+        let mut out: Vec<(String, LocalId, Type)> = Vec::new();
         for n in names {
+            if out.iter().any(|(o, _, _)| *o == n) {
+                continue;
+            }
             if let Some(id) = self.resolve(&n) {
-                out.push((n, id));
+                let ty = self
+                    .captured_types
+                    .get(&n)
+                    .cloned()
+                    .unwrap_or_else(|| self.local_ty(id));
+                out.push((n, id, ty));
             }
         }
         out
@@ -1221,12 +1369,24 @@ impl FunctionLowerer {
 
     fn stmt(&mut self, s: lagom_hir::HirStmt) {
         let span = s.span;
+        // Capture analysis walks the statement's kind; taking ownership and
+        // reconstructing keeps the match arms free of a borrow of `s`.
         match s.kind {
             lagom_hir::HirStmtKind::Bind { mutable, name, name_span, value } => {
                 let v = self.expr(value);
                 let ty = self.local_ty(v);
-                let id = self.new_local(&name, ty, mutable, name_span);
+                let id = self.new_local(&name, ty.clone(), mutable, name_span);
                 self.emit(Instr::Copy { dest: id, value: Operand::Local(v), span });
+                // 14.3's shared-queue rule rides the type: a make-site whose
+                // value is a channel constructs a NEW channel here (a clean
+                // program never does this — the fresh channel is unreachable
+                // through the name), but a task-body make of the same name
+                // shadows with its own channel instead of aliasing the
+                // capture, so a capture write can never leak into a later
+                // `make` of the same name.
+                if !matches!(ty, Type::Channel(_)) {
+                    self.captured_types.insert(name.clone(), ty.clone());
+                }
                 self.declare(&name, id);
             }
             lagom_hir::HirStmtKind::Assign { target, value } => {
@@ -1315,6 +1475,35 @@ impl FunctionLowerer {
             lagom_hir::HirStmtKind::Effect(e) => self.effect(e, span),
             lagom_hir::HirStmtKind::Match { scrutinee, arms, otherwise } => {
                 self.lower_match(scrutinee, arms, otherwise, span)
+            }
+            // 14.2 structured tasks: the body rides as a zero-param lambda —
+            // enqueue the synthetic function exactly like the Lambda expr
+            // path, then emit the spawn. The closure value is not kept: a
+            // task returns nothing (v0.1 resolution).
+            lagom_hir::HirStmtKind::StartTask { task, keep_going } => {
+                let flocal = self.expr(task);
+                self.emit(Instr::SpawnTask {
+                    f: Operand::Local(flocal),
+                    keep_going,
+                    span,
+                });
+                self.saw_spawn = true;
+            }
+            // 14.2: the explicit join. Tasks spawned before it run to
+            // completion here (spawn order); supervision fires after.
+            lagom_hir::HirStmtKind::WaitAllTasks => {
+                self.emit(Instr::DrainTasks { span });
+                self.saw_spawn = false;
+            }
+            // 14.3 channels: send is a statement (queues a copy); receive in
+            // statement position discards the value.
+            lagom_hir::HirStmtKind::SendToChannel { value, channel } => {
+                let (v, c) = self.expr2(*value, *channel);
+                self.emit(Instr::SendChannel {
+                    value: Operand::Local(v),
+                    channel: Operand::Local(c),
+                    span,
+                });
             }
         }
     }
@@ -1506,6 +1695,15 @@ impl FunctionLowerer {
                 let a = args.into_iter().next().expect("say arity checked by sema");
                 let v = self.expr(a);
                 self.emit(Instr::Say { value: Operand::Local(v), span });
+            }
+            // 14.3: `send <v> to <ch>` in statement position — queue and
+            // continue (the HIR rewrites the call into this op; the generic
+            // Call arm below would emit a user call for a builtin and the
+            // send would silently no-op).
+            lagom_hir::HirExprKind::SendToChannel { value, channel } => {
+                let vp = self.op(*value);
+                let cp = self.op(*channel);
+                self.emit(Instr::SendChannel { value: vp, channel: cp, span });
             }
             lagom_hir::HirExprKind::Call { callee, callee_span, args } => {
                 // A user call for effect (value unused). Builtins have no
@@ -2082,6 +2280,17 @@ fn collect_free(kind: &lagom_hir::HirExprKind, bound: &[String], out: &mut Vec<S
                 collect_free(&e.kind, bound, out);
             }
         }
+        // 14.2/14.3: a task body that sends to or receives from a channel
+        // captures the channel binding — the queue is shared (a copy of the
+        // channel IS the same queue).
+        lagom_hir::HirExprKind::SendToChannel { value, channel } => {
+            collect_free(&value.kind, bound, out);
+            collect_free(&channel.kind, bound, out);
+        }
+        lagom_hir::HirExprKind::ReceiveFrom { channel, .. } => {
+            collect_free(&channel.kind, bound, out);
+        }
+        // `a channel of T` names a type, not a value: nothing free.
         lagom_hir::HirExprKind::Lambda { params, body, .. } => {
             let mut inner_bound: Vec<String> = bound.to_vec();
             for (p, _, _) in params {
@@ -2090,6 +2299,109 @@ fn collect_free(kind: &lagom_hir::HirExprKind, bound: &[String], out: &mut Vec<S
             collect_free(&body.kind, &inner_bound, out);
         }
         _ => {}
+    }
+}
+
+/// The statement-level companion of [`collect_free`]: walks every nested
+/// expression and body so a block-form lambda's captures are the free names
+/// of its WHOLE body (14.2's `start a task` has statement-only bodies — a
+/// body that only sends on a channel has no expression reads at all).
+fn collect_free_stmt(kind: &lagom_hir::HirStmtKind, bound: &[String], out: &mut Vec<String>) {
+    use lagom_hir::HirStmtKind as S;
+    match kind {
+        S::Bind { name, value, .. } => {
+            collect_free(&value.kind, bound, out);
+            // A `make` inside the body shadows any outer binding from the
+            // statements AFTER it, but the value expression above is checked
+            // before the name exists — walk the rest with the name bound.
+            let mut inner = bound.to_vec();
+            inner.push(name.clone());
+            let _ = inner;
+        }
+        S::Assign { target, value } | S::AssignOp { target, value, .. } => {
+            collect_free_place(target, bound, out);
+            collect_free(&value.kind, bound, out);
+        }
+        S::If { branches, otherwise } => {
+            for (cond, body, _) in branches {
+                collect_free(&cond.kind, bound, out);
+                walk_stmts(body, bound, out);
+            }
+            if let Some(otherwise) = otherwise {
+                walk_stmts(otherwise, bound, out);
+            }
+        }
+        S::RepeatCount { body, .. } => walk_stmts(body, bound, out),
+        S::RepeatWhile { cond, body } => {
+            collect_free(&cond.kind, bound, out);
+            walk_stmts(body, bound, out);
+        }
+        S::RepeatForEach { iter, body, .. } => {
+            collect_free(&iter.kind, bound, out);
+            walk_stmts(body, bound, out);
+        }
+        S::Return { value } | S::Fail { message: value } => collect_free(&value.kind, bound, out),
+        S::Attempt { inner, .. } => collect_free(&inner.kind, bound, out),
+        S::Check { expr, cmp } => {
+            collect_free(&expr.kind, bound, out);
+            if let Some((_, l, r)) = cmp {
+                collect_free(&l.kind, bound, out);
+                collect_free(&r.kind, bound, out);
+            }
+        }
+        S::Effect(e) => collect_free(&e.kind, bound, out),
+        S::StartTask { task, .. } => collect_free(&task.kind, bound, out),
+        S::SendToChannel { value, channel } => {
+            collect_free(&value.kind, bound, out);
+            collect_free(&channel.kind, bound, out);
+        }
+        S::Stop | S::Next | S::WaitAllTasks => {}
+        // A `match` body: the arm pattern bindings are new names, but the
+        // capture walk is conservative on the scrutinee and arm bodies — a
+        // shadowed name captured here only over-captures (harmless: an
+        // unused capture value is never read by the unpacked formals).
+        S::Match { .. } => {}
+    }
+}
+
+/// Walk every statement in a nested body, rebinding the body's own `make`s
+/// and loop bindings as it goes (a shadowed name is never captured).
+fn walk_stmts(stmts: &[lagom_hir::HirStmt], bound: &[String], out: &mut Vec<String>) {
+    use lagom_hir::HirStmtKind as S;
+    let mut bound = bound.to_vec();
+    for s in stmts {
+        collect_free_stmt(&s.kind, &bound, out);
+        match &s.kind {
+            S::Bind { name, .. } => bound.push(name.clone()),
+            S::RepeatCount { binding, .. } => {
+                if let Some((n, _)) = binding {
+                    bound.push(n.clone());
+                }
+            }
+            S::RepeatForEach { item, index, .. } => {
+                bound.push(item.0.clone());
+                if let Some((n, _)) = index {
+                    bound.push(n.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The place side of the free walk: the base name is read (a field/index
+/// write reads the base object first); accessor paths carry expressions.
+fn collect_free_place(target: &lagom_hir::HirPlace, bound: &[String], out: &mut Vec<String>) {
+    let push = |n: &str, out: &mut Vec<String>| {
+        if !bound.iter().any(|b| b == n) && !out.iter().any(|o| o == n) {
+            out.push(n.to_string());
+        }
+    };
+    push(&target.base, out);
+    for access in &target.path {
+        if let lagom_hir::HirAccess::Index(e) = access {
+            collect_free(&e.kind, bound, out);
+        }
     }
 }
 

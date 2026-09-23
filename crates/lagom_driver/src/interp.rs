@@ -108,7 +108,11 @@ pub fn run_traced(src: &str, stdin: Vec<String>, seed: Option<u64>) -> Option<la
 /// false positive is only that piped/redirected input is consumed; a false
 /// negative would hang an interactive run, so the heuristic errs visible.
 pub fn needs_input(src: &str) -> bool {
-    src.contains("ask")
+    // The word `ask` (comments, strings, any word position) — matching the
+    // documented heuristic. Not a substring test: `task` must not read
+    // stdin (14.2's `start a task` made the substring form hang every task
+    // program on the traced path).
+    src.split(|c: char| !c.is_alphanumeric()).any(|w| w == "ask")
 }
 
 /// Per-function call counts from the LOM ring of one dev run — `lagom
