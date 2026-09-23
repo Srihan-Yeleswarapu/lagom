@@ -87,6 +87,7 @@ lagom run
 | `lagom play` | the REPL — evaluate line by line, teaching mode shows each new binding with its type |
 | `lagom doc [file]` | render `##` doc comments to markdown; `--check` verifies `>>>` examples |
 | `lagom add <name> <path>` | vendor a package into `packages/` and record it in `Lagom.toml` |
+| `lagom uninstall [--rc] [--yes]` | remove an installed copy of the compiler — plan first, delete with `--yes`; `--rc` also cleans the PATH line from shell rc files |
 | `lagom profile [file]` | run with per-function call counts and the compile-time breakdown |
 
 Everything works from any directory on a single `.lagom` file — no project manifest needed. In a folder with a `Lagom.toml`, `run`/`build`/`test` also compile every vendored package in `packages/`, and `lagom add`/`remove` manage them.

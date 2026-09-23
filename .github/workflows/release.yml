@@ -7,8 +7,10 @@ name: release
 #
 # install-test then plays the user: nothing but the downloaded package (no
 # checkout, no Rust toolchain), executing the release page's printed
-# instructions step by step on all three OSes. Publishing waits for it, so
-# a release only appears once its own install guide has been run by CI.
+# instructions step by step on all three OSes — sha256 verify, unpack, run,
+# the day-one flow, the PATH step, and the Uninstall section. Publishing
+# waits for it, so a release only appears once its own install guide has
+# been run by CI.
 
 on:
   push:
@@ -279,6 +281,38 @@ jobs:
           lagom new hello2
           cd hello2
           echo you | lagom run | grep "Hello, you!"
+
+      - name: Uninstall (the page's Uninstall section)
+        # The page's two commands, plan then --yes. The rc line is created
+        # exactly as the page's macOS/Linux step writes it so --rc has
+        # something real to clean (CI's PATH came from GITHUB_PATH, not an
+        # rc file — a Windows PATH never lives in an rc file at all). On
+        # Windows the running exe cannot delete itself: the tool removes
+        # everything else and names the leftover — asserted as promised.
+        shell: bash
+        run: |
+          [ "$RUNNER_OS" = "Windows" ] && BIN=lagom.exe || BIN=lagom
+          cd "$HOME"
+          test -f "$HOME/lagom/$BIN"
+          if [ "$RUNNER_OS" != "Windows" ]; then
+            echo 'export PATH="$PATH:'"$HOME"'/lagom"' >> ~/.zshrc
+          fi
+          # Plan only: prints, deletes nothing.
+          lagom uninstall --rc | grep "nothing was changed"
+          test -f "$HOME/lagom/$BIN"
+          # Execute.
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            lagom uninstall --rc --yes | grep "almost done"
+            test ! -e "$HOME/lagom/lib"
+          else
+            lagom uninstall --rc --yes | grep "lagom is uninstalled"
+            test ! -e "$HOME/lagom"
+          fi
+          if [ "$RUNNER_OS" != "Windows" ]; then
+            # The rc file was created with exactly one lagom line; it must
+            # now contain none (other content, had there been any, stays).
+            ! grep -qi lagom ~/.zshrc
+          fi
 
   publish:
     name: publish (GitHub Release)

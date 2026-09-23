@@ -29,6 +29,7 @@ commands:
   check [file]              parse and check; show diagnostics
   fmt [file] [--write]      print the canonically formatted source (or rewrite)
   new <name>                start a new Lagom project directory
+  uninstall [--rc] [--yes]  remove an installed copy (plan only, unless --yes; --rc also cleans PATH lines in shell rc files)
   play [--seed N]           the REPL: run lines now, teach types as you go
   doc [file] [--check]      render ## doc comments to markdown (verify examples)
   add <package>             record a dependency (Lagom.toml + Lagom.lock)

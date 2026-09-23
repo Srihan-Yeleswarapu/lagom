@@ -61,6 +61,23 @@ Type your name when it asks: `Who is it? Hello, you!` (Once PATH is set, plain `
 
 ---
 
+## Uninstall
+
+An install is a folder plus (optionally) a PATH line — `lagom uninstall` removes both. It shows the plan first and deletes nothing until you say `--yes`.
+
+Run it, read the plan, then run it again with `--yes`:
+
+```
+lagom uninstall --rc        # the plan: what will go, what is skipped and why
+lagom uninstall --rc --yes  # do it
+```
+
+`--rc` also removes the PATH line the install steps above added (it rewrites only lines mentioning a `lagom` folder, and only in the shell rc files that have one). Open a **new** terminal afterwards.
+
+It refuses to delete anything that is not a release install: a folder holding `Cargo.toml` (your source checkout) is skipped, as is a cargo `target` build cache — if you installed with `cargo install --path crates/lagom_cli`, remove it with `cargo uninstall lagom` instead.
+
+---
+
 ## Verify the download (optional but easy)
 
 ```sh
