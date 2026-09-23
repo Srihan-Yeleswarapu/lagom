@@ -366,29 +366,23 @@ jobs:
             echo "no rustc on this runner — the native-run check is covered by install-test"
           fi
 
-      - name: Uninstall via the CLI (folder and PATH line gone)
-        shell: bash
-        run: |
-          case "${{ matrix.os }}" in
-            macos-latest) RC="$HOME/.zshrc" ;;
-            *)            RC="$HOME/.bashrc" ;;
-          esac
-          "$HOME/.lagom/lagom" uninstall --rc --yes | grep "lagom is uninstalled"
-          test ! -e "$HOME/.lagom"
-          test -f "$RC"
-          ! grep -qF "$HOME/.lagom" "$RC"
-
-      - name: Reinstall, then uninstall via the script
+      - name: Uninstall via the script (how older installs are removed)
+        # `lagom uninstall` against the *published* binary is deliberately
+        # not asserted here: the latest release may predate that command
+        # (v0.1.1 does). The current binary's CLI uninstall is covered by
+        # the install-test job on all three OSes; a published install is
+        # removed with install.sh --uninstall, which is what this asserts.
         shell: bash
         run: |
           V="$(gh api repos/${{ github.repository }}/releases/latest --jq .tag_name)"
-          sh install.sh --version "$V" >/dev/null
+          sh install.sh --version "$V" >/dev/null   # reinstall: idempotency
           sh install.sh --uninstall
           test ! -e "$HOME/.lagom"
           case "${{ matrix.os }}" in
             macos-latest) RC="$HOME/.zshrc" ;;
             *)            RC="$HOME/.bashrc" ;;
           esac
+          test -f "$RC"
           ! grep -qF "$HOME/.lagom" "$RC"
           echo "install.sh: install → run → uninstall verified end to end"
 
