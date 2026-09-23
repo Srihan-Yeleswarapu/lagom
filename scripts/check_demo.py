@@ -147,8 +147,26 @@ for sec in sections:
     for i, (src, expected, cmd, stdin) in enumerate(pairs, 1):
         path = os.path.join(tmp, f"s{i}.lagom")
         open(path, "w", encoding="utf8").write(src)
-        r = subprocess.run([L, cmd, path], capture_output=True, timeout=60,
-                           input=stdin, cwd=tmp)
+        # File redirection, not pipes: on Windows a timed-out subprocess's
+        # grandchildren (rustc, the built program) survive the kill and hold
+        # the pipes open forever, wedging communicate() past the timeout.
+        # Files close with the writer's handle table and never wedge.
+        in_path = os.path.join(tmp, "stdin.txt")
+        open(in_path, "wb").write(stdin)
+        out_path = os.path.join(tmp, "out.txt")
+        try:
+            with open(out_path, "wb") as out_f, open(in_path, "rb") as in_f:
+                rc = subprocess.run([L, cmd, path], stdout=out_f, stderr=subprocess.STDOUT,
+                                    stdin=in_f, timeout=60, cwd=tmp).returncode
+            with open(out_path, "rb") as f:
+                raw = f.read()
+            r = subprocess.CompletedProcess([L, cmd], rc, raw, b"")
+        except subprocess.TimeoutExpired:
+            # The direct child died late; collect whatever was produced so a
+            # slow environment shows as an error, not a wedge.
+            with open(out_path, "rb") as f:
+                raw = f.read()
+            r = subprocess.CompletedProcess([L, cmd], 124, raw, b"")
         out = (r.stdout.decode("utf8", "replace") + r.stderr.decode("utf8", "replace")).replace("\r\n", "\n").strip()
         out = "\n".join([x for x in out.splitlines() if x.strip()])
 

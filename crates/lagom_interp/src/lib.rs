@@ -30,6 +30,7 @@ use lagom_mir::{
     MathOp, MirFunction, MirItem, MirProgram, Operand, Term, TextOp, UnOp, failure_report,
     instrument,
 };
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
@@ -37,7 +38,7 @@ use std::fmt::Write as _;
 // Values (the M0 runtime set — S-1/S-13)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Value {
     Number(i64),
     Decimal(f64),
@@ -56,10 +57,63 @@ pub enum Value {
     /// A structure value, fields in declaration order. A *variant* value
     /// (7.12) is the same shape named by its variant.
     Struct { name: String, fields: Vec<Value> },
+    /// A class instance (10.2) — an ARC'd reference (9.3): every copy of the
+    /// binding shares the same `RefCell` field storage, so `set`/`increase`
+    /// through any alias mutate the one object, and equality is identity
+    /// (R-6: two distinct objects with equal fields are never `equal to`).
+    /// The second cell is the finalizer hook (10.4): when the LAST `Rc` to
+    /// this storage drops, the hook queues the object for its class's
+    /// `before last reference disappears` body (run by the VM, never inside
+    /// the drop itself). `None` on finalizer receivers — a cleanup body must
+    /// not re-arm its own hook.
+    Object {
+        name: String,
+        fields: std::rc::Rc<std::cell::RefCell<Vec<Value>>>,
+        on_drop: Option<std::rc::Rc<DropHook>>,
+    },
     /// A closure value (11.1): the synthetic function's name plus the
     /// captured values. Both backends use the same shape.
     Closure { function: String, captures: Vec<Value> },
+    /// A typed channel (14.3): a FIFO queue of messages. Copies of the
+    /// binding share the queue (the ARC'd shape) — send appends, receive
+    /// dequeues, and the queue itself is the synchronization.
+    Channel(std::rc::Rc<std::cell::RefCell<Vec<Value>>>),
 }
+
+/// 10.4: the finalizer hook shared by every handle to one object. The hook
+/// holds a second `Rc` to the field storage (never to a `Value` — that would
+/// cycle and leak). When the last object handle drops, the hook — still
+/// holding the storage alive — fires and queues `(class, storage)` for the
+/// VM: the class's `before last reference disappears` body runs at the next
+/// drain point, with the fields still readable. The body itself is an
+/// ordinary receiver-first function (`deinit <class>`); R-20.3's
+/// cannot-fail rule is enforced by the checker, so the drain never handles
+/// a failure.
+#[derive(Debug)]
+pub struct DropHook {
+    name: String,
+    fields: std::rc::Rc<std::cell::RefCell<Vec<Value>>>,
+    owner: u64,
+}
+
+impl Drop for DropHook {
+    fn drop(&mut self) {
+        PENDING_DEINIT
+            .with(|q| q.borrow_mut().push((self.owner, self.name.clone(), self.fields.clone())));
+    }
+}
+
+// Objects whose last reference dropped mid-run queue here (the `Drop` impl
+// runs without a VM handle, so the queue is thread-local); the VM adopts
+// the queue at its next drain point and runs each object's finalizer.
+thread_local! {
+    static PENDING_DEINIT:
+        RefCell<Vec<(u64, String, std::rc::Rc<std::cell::RefCell<Vec<Value>>>)>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// Interp instance ids (see `Interp::id`).
+static NEXT_INTERP_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl Value {
     /// S-9 (one formatting place, shared by `say`, interpolation, and
@@ -89,7 +143,19 @@ impl Value {
                 let inner: Vec<String> = fields.iter().map(Value::format).collect();
                 format!("{}({})", name, inner.join(", "))
             }
+            // S-9's class rendering: the indefinite article marks the value
+            // as a reference object, not a struct — `a counter(5)`.
+            Value::Object { name, fields, .. } => {
+                let inner: Vec<String> = fields.borrow().iter().map(Value::format).collect();
+                format!("a {}({})", name, inner.join(", "))
+            }
             Value::Closure { .. } => "a function".to_string(),
+            // 14.3: a channel prints as the messages it still holds — the
+            // student-visible queue, never an opaque handle.
+            Value::Channel(q) => {
+                let inner: Vec<String> = q.borrow().iter().map(Value::format).collect();
+                format!("a channel holding [{}]", inner.join(", "))
+            }
         }
     }
 }
@@ -227,11 +293,31 @@ pub struct Interp {
     /// resolve by name against this (MIR carries field *names*; the
     /// declaration order lives in the program table).
     struct_fields: HashMap<String, Vec<String>>,
-    /// The entry frame's final named locals — `(name, type, value)` in
-    /// declaration order, captured when the script body returns. This is the
-    /// REPL's teaching data (26.4: inferred types shown after each line);
-    /// compiler temporaries (`%…`) are excluded. Empty outside a run.
-    entry_scope: Vec<(String, Type, Value)>,
+    /// The entry frame's final named locals — `(name, type word, printed
+    /// value)` in declaration order, captured when the script body returns.
+    /// This is the REPL's teaching data (26.4: inferred types shown after
+    /// each line); compiler temporaries (`%…`) are excluded. Values are kept
+    /// in their *printed* form so the snapshot never roots a class object:
+    /// a rooted object's last reference would never disappear and its
+    /// finalizer would never run. Empty outside a run.
+    entry_scope: Vec<(String, Type, String)>,
+    /// 10.4 finalizers: class name → the `deinit <class>` function.
+    deinits: HashMap<String, String>,
+    /// 12.3/10.6 body-side dispatch: interface name → (class → implementing
+    /// callee). A call to `iface <I> <m>` looks up the receiver's runtime
+    /// class here — the vtable for "the concrete type is not known".
+    iface_dispatch: HashMap<String, HashMap<String, String>>,
+    /// This instance's id: drop-hook queue entries carry the id of the run
+    /// that created their object, and a drain adopts only its own — entries
+    /// from an already-discarded run (the REPL re-runs per submit) die with
+    /// it instead of firing inside some later session.
+    id: u64,
+    /// 14.2 structured tasks: the tasks this function has spawned, in spawn
+    /// order, as `(closure, keep_going)`. Per-run (a script or test body is
+    /// one region at a time); the join consumes the queue. Tasks spawned by
+    /// different functions of one run share the queue — the join at the
+    /// innermost region drains what that region spawned.
+    tasks: Vec<(Value, bool)>,
 }
 
 impl Interp {
@@ -256,6 +342,17 @@ impl Interp {
             .iter()
             .map(|s| (s.name.clone(), s.fields.iter().map(|(n, _)| n.clone()).collect()))
             .collect();
+        let deinits: HashMap<String, String> = prog.deinits.iter().cloned().collect();
+        let iface_dispatch: HashMap<String, HashMap<String, String>> = prog
+            .iface_dispatch
+            .iter()
+            .map(|(i, rows)| {
+                (
+                    i.clone(),
+                    rows.iter().cloned().collect::<HashMap<String, String>>(),
+                )
+            })
+            .collect();
         let ring = if dev { Some(EventRing::new(256)) } else { None };
         // Default runs vary: the seed comes from the clock (two runs of the
         // same program play differently). Replay-determinism is explicit —
@@ -264,7 +361,17 @@ impl Interp {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.subsec_nanos() as u64 ^ d.as_secs())
             .unwrap_or(0x2545_F491_4F6C_DD1D);
-        Interp { host: Host::with_seed(Vec::new(), nanos), ring, dev, struct_fields, entry_scope: Vec::new() }
+        Interp {
+            host: Host::with_seed(Vec::new(), nanos),
+            ring,
+            dev,
+            struct_fields,
+            entry_scope: Vec::new(),
+            deinits,
+            iface_dispatch,
+            id: NEXT_INTERP_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            tasks: Vec::new(),
+        }
     }
 
     pub fn host(&mut self) -> &mut Host {
@@ -275,9 +382,10 @@ impl Interp {
         self.ring.as_ref()
     }
 
-    /// The entry frame's final named locals — `(name, type, value)` — filled
-    /// by the last `run` of a program with a script body (26.4's REPL data).
-    pub fn entry_scope(&self) -> &[(String, Type, Value)] {
+    /// The entry frame's final named locals — `(name, type, printed value)`
+    /// — filled by the last `run` of a program with a script body (26.4's
+    /// REPL data). Printed, not live: see the field docs.
+    pub fn entry_scope(&self) -> &[(String, Type, String)] {
         &self.entry_scope
     }
 
@@ -306,7 +414,13 @@ impl Interp {
         let Some(main) = main else {
             return RunOutcome::Completed;
         };
-        match self.call_function(main, &[], &functions) {
+        let outcome = self.call_function(main, &[], &functions);
+        // 10.4: the program's last drop sweep. Whether the body completed,
+        // failed, or trapped, every object still held by the entry frame
+        // drops as it unwinds and its finalizer runs here — deterministic
+        // end-of-program cleanup, never skipped.
+        self.drain_deinits(&functions);
+        match outcome {
             Ok(()) | Err(Exit::Return(_)) => RunOutcome::Completed,
             Err(Exit::Fail(message)) => {
                 let report = self.ring.as_ref().map(|r| failure_report(r, &main.name, src));
@@ -373,6 +487,87 @@ impl Interp {
     }
 
     /// Call one function with argument values.
+    /// 14.2: the region join — run every queued task to completion, in spawn
+    /// order, then report the first failure that supervision did not consume
+    /// (`keep going`). Deterministic by construction: one order, both
+    /// backends. `Err` carries that failure message for the caller to route
+    /// to its pad (catchable by `attempt`, unhandled otherwise).
+    fn drain_tasks(&mut self, functions: &HashMap<&str, &MirFunction>) -> Result<(), String> {
+        let tasks = std::mem::take(&mut self.tasks);
+        let mut first_failure: Option<String> = None;
+        for (task, keep_going) in tasks {
+            let Value::Closure { function, captures } = task else {
+                continue;
+            };
+            // The uniform closure ABI: the packed args list is the synthetic
+            // function's one parameter (formals first — a zero-param task
+            // body's list is exactly its captures, which `MakeClosure` packed
+            // in formals-then-captures order... zero formals → captures only).
+            let list = Value::List(captures);
+            match self.call_user(&function, vec![list], functions) {
+                CallResult::Done | CallResult::Value(_) => {}
+                CallResult::Fail(msg) => {
+                    if !keep_going && first_failure.is_none() {
+                        first_failure = Some(msg);
+                    }
+                }
+                CallResult::Exit(Exit::Trap(t)) => {
+                    if !keep_going && first_failure.is_none() {
+                        first_failure = Some(t.message);
+                    }
+                }
+                CallResult::Exit(e) => {
+                    // A task's own uncatchable exit (a `stop` escaping its
+                    // body, say) would be a checker bug; treat as a trap.
+                    if let Exit::Trap(t) = e {
+                        if first_failure.is_none() {
+                            first_failure = Some(t.message);
+                        }
+                    }
+                }
+            }
+        }
+        match first_failure {
+            Some(msg) => Err(msg),
+            None => Ok(()),
+        }
+    }
+
+    /// 10.4: run the finalizer bodies of every object whose last reference
+    /// dropped since the last drain, in drop order. Each body is the class's
+    /// receiver-first `deinit <class>` function; its receiver is rebuilt with
+    /// an inert hook (`on_drop: None`) so a cleanup body can never re-arm or
+    /// re-fire itself. R-20.3 guarantees the bodies cannot fail, so nothing
+    /// here needs failure routing — an internal error would be a checker bug.
+    fn drain_deinits(&mut self, functions: &HashMap<&str, &MirFunction>) {
+        let mut queued: Vec<(u64, String, std::rc::Rc<std::cell::RefCell<Vec<Value>>>)> =
+            Vec::new();
+        PENDING_DEINIT.with(|q| queued.append(&mut q.borrow_mut()));
+        let mine: Vec<_> = queued
+            .into_iter()
+            .filter(|(owner, name, _)| *owner == self.id && self.deinits.contains_key(name))
+            .map(|(_, name, storage)| (name, storage))
+            .collect();
+        for (class, storage) in mine {
+            let Some(deinit_name) = self.deinits.get(&class).cloned() else {
+                continue;
+            };
+            let Some(f) = functions.get(deinit_name.as_str()) else {
+                continue;
+            };
+            let receiver = Value::Object {
+                name: class.clone(),
+                fields: storage.clone(),
+                on_drop: None,
+            };
+            let result = self.call_function(f, &[receiver], functions);
+            debug_assert!(
+                matches!(result, Ok(()) | Err(Exit::Return(_))),
+                "finalizer bodies cannot fail (R-20.3) or trap"
+            );
+        }
+    }
+
     fn call_function(
         &mut self,
         f: &MirFunction,
@@ -417,6 +612,12 @@ impl Interp {
                 continue;
             }
             // The instructions finished — run the terminator.
+            // 10.4's drain point: objects dropped mid-block (an overwritten
+            // binding, a dead temporary) get their finalizers run here, while
+            // this frame's locals are still alive — so a deinit body's own
+            // drops chain in order, and a finalizer never re-enters the very
+            // statement that dropped its object.
+            self.drain_deinits(functions);
             let term = block.term.clone();
             match term {
                 Term::Goto(t) => pc = t,
@@ -448,7 +649,11 @@ impl Interp {
                             .enumerate()
                             .filter(|(_, l)| !l.name.starts_with('%'))
                             .map(|(i, l)| {
-                                let lv = locals.get(i).cloned().unwrap_or(Value::Nothing);
+                                let lv = locals
+                                    .get(i)
+                                    .cloned()
+                                    .unwrap_or(Value::Nothing)
+                                    .format();
                                 (l.name.clone(), l.ty.clone(), lv)
                             })
                             .collect();
@@ -623,12 +828,44 @@ impl Interp {
                 locals[dest.0] = Value::Struct { name: name.clone(), fields: vals };
                 Step::Continue
             }
+            Instr::ObjectNew { dest, name, fields, .. } => {
+                let mut vals = Vec::with_capacity(fields.len());
+                for (_, op) in fields {
+                    vals.push(self.read(op, locals));
+                }
+                // 10.4: the finalizer hook rides the object. The hook keeps
+                // the storage alive; when the LAST outer handle drops, the
+                // hook's Drop queues `(class, storage)` for the VM's drain.
+                let fields_rc = std::rc::Rc::new(std::cell::RefCell::new(vals));
+                let hook = std::rc::Rc::new(DropHook {
+                    name: name.clone(),
+                    fields: fields_rc.clone(),
+                    owner: self.id,
+                });
+                locals[dest.0] = Value::Object {
+                    name: name.clone(),
+                    fields: fields_rc,
+                    on_drop: Some(hook),
+                };
+                Step::Continue
+            }
             Instr::FieldGet { dest, base, field, field_span, .. } => {
                 let b = self.read(base, locals);
                 match b {
                     Value::Struct { fields, name } => match self.field_index(&name, field) {
                         Some(i) => {
                             locals[dest.0] = fields.into_iter().nth(i).unwrap_or(Value::Nothing);
+                            Step::Continue
+                        }
+                        None => Step::Exit(Exit::Trap(Trap {
+                            message: format!("`{name}` has no field `{field}`."),
+                            span: *field_span,
+                        })),
+                    },
+                    // A class reference reads through the shared object.
+                    Value::Object { name, fields, .. } => match self.field_index(&name, field) {
+                        Some(i) => {
+                            locals[dest.0] = fields.borrow().get(i).cloned().unwrap_or(Value::Nothing);
                             Step::Continue
                         }
                         None => Step::Exit(Exit::Trap(Trap {
@@ -670,6 +907,31 @@ impl Interp {
                             span: *span,
                         })),
                     },
+                    // A class reference writes through the shared object: the
+                    // local holds a clone of the Rc, so every alias sees the
+                    // new field value (9.3's reference semantics).
+                    Value::Object { name, fields, .. } => {
+                        let fields = fields.clone();
+                        let name = name.clone();
+                        match self.field_index(&name, field) {
+                            Some(i) => {
+                                let mut cells = fields.borrow_mut();
+                                if i < cells.len() {
+                                    cells[i] = v;
+                                    Step::Continue
+                                } else {
+                                    Step::Exit(Exit::Trap(Trap {
+                                        message: format!("`{name}` has no field `{field}`."),
+                                        span: *span,
+                                    }))
+                                }
+                            }
+                            None => Step::Exit(Exit::Trap(Trap {
+                                message: format!("`{name}` has no field `{field}`."),
+                                span: *span,
+                            })),
+                        }
+                    }
                     other => Step::Exit(Exit::Trap(Trap {
                         message: format!(
                             "`of` assigns a structure's field, but this is {}.",
@@ -1027,6 +1289,97 @@ impl Interp {
                         span: *span,
                     })),
                 }
+            }
+            // 14.2: spawn queues the closure; the join (DrainTasks) runs it.
+            Instr::SpawnTask { f, keep_going, span } => {
+                let fv = self.read(f, locals);
+                match fv {
+                    Value::Closure { .. } => {
+                        self.tasks.push((fv, *keep_going));
+                        Step::Continue
+                    }
+                    other => Step::Exit(Exit::Trap(Trap {
+                        message: format!(
+                            "`start a task` needs a task body, but got {}.",
+                            other.format()
+                        ),
+                        span: *span,
+                    })),
+                }
+            }
+            // 14.2: the join — run every queued task to completion in spawn
+            // order, then re-raise the first failure that supervision did not
+            // consume (`keep going`). Deterministic: one backend order, both
+            // backends share it.
+            Instr::DrainTasks { .. } => match self.drain_tasks(functions) {
+                Ok(()) => Step::Continue,
+                Err(msg) => {
+                    self.record_fail(&msg);
+                    route_fail(msg, pad)
+                }
+            },
+            // 14.3: send queues a deep copy (values cross the boundary).
+            Instr::SendChannel { value, channel, span } => {
+                let v = self.read(value, locals);
+                let c = self.read(channel, locals);
+                match c {
+                    Value::Channel(q) => {
+                        q.borrow_mut().push(v);
+                        Step::Continue
+                    }
+                    other => Step::Exit(Exit::Trap(Trap {
+                        message: format!(
+                            "`send … to` needs a channel, but this is {}.",
+                            other.format()
+                        ),
+                        span: *span,
+                    })),
+                }
+            }
+            // 14.3: receive dequeues; on empty, the join barrier runs first
+            // (waiting for the region's remaining tasks), then still-empty
+            // fails — `receive from an empty channel`.
+            Instr::ReceiveChannel { dest, channel, span } => {
+                let c = self.read(channel, locals);
+                match c {
+                    Value::Channel(q) => {
+                        if q.borrow().is_empty() {
+                            // The empty-wait rule: join the region's remaining
+                            // tasks, then look again.
+                            match self.drain_tasks(functions) {
+                                Ok(()) => {}
+                                Err(msg) => {
+                                    self.record_fail(&msg);
+                                    return route_fail(msg, pad);
+                                }
+                            }
+                        }
+                        let next = q.borrow_mut().pop();
+                        match next {
+                            Some(v) => {
+                                locals[dest.0] = v;
+                                Step::Continue
+                            }
+                            None => {
+                                let msg = String::from("receive from an empty channel");
+                                self.record_fail(&msg);
+                                route_fail(msg, pad)
+                            }
+                        }
+                    }
+                    other => Step::Exit(Exit::Trap(Trap {
+                        message: format!(
+                            "`receive from` needs a channel, but this is {}.",
+                            other.format()
+                        ),
+                        span: *span,
+                    })),
+                }
+            }
+            // 14.3: the channel construction.
+            Instr::NewChannel { dest, .. } => {
+                locals[dest.0] = Value::Channel(Default::default());
+                Step::Continue
             }
             Instr::MapList { dest, list, f, span }
             | Instr::KeepList { dest, list, f, span } => {
@@ -1443,6 +1796,51 @@ impl Interp {
         args: Vec<Value>,
         functions: &HashMap<&str, &MirFunction>,
     ) -> CallResult {
+        // 12.3/10.6 vtable dispatch: `iface <I> <m>` resolves through the
+        // receiver's runtime class (arg 0) to the implementing callee —
+        // own method, inherited, or copied default — the same resolution
+        // sema's table encodes. Missing receiver/row is an internal error:
+        // the checker proved the call real before emitting it.
+        let callee: &str = match callee.strip_prefix("iface ") {
+            Some(rest) => {
+                let (iname, m) = rest.split_once(' ').unwrap_or((rest, ""));
+                let class = match args.first() {
+                    Some(Value::Object { name, .. }) => name.clone(),
+                    Some(v) => {
+                        return CallResult::Exit(Exit::Trap(Trap {
+                            message: format!(
+                                "internal: `iface {iname} {m}` dispatched on a non-object value ({v:?})."
+                            ),
+                            span: Span::default(),
+                        }));
+                    }
+                    None => {
+                        return CallResult::Exit(Exit::Trap(Trap {
+                            message: format!(
+                                "internal: `iface {iname} {m}` dispatched with no receiver."
+                            ),
+                            span: Span::default(),
+                        }));
+                    }
+                };
+                match self
+                    .iface_dispatch
+                    .get(iname)
+                    .and_then(|t| t.get(&class))
+                {
+                    Some(target) => target.as_str(),
+                    None => {
+                        return CallResult::Exit(Exit::Trap(Trap {
+                            message: format!(
+                                "internal: `{class}` does not implement `{m}` for interface `{iname}`."
+                            ),
+                            span: Span::default(),
+                        }));
+                    }
+                }
+            }
+            None => callee,
+        };
         let Some(f) = functions.get(callee) else {
             return CallResult::Exit(Exit::Trap(Trap {
                 message: format!("`{callee}` is not a function this program defines."),
@@ -1885,7 +2283,13 @@ fn json_format(v: &Value) -> String {
                 .collect();
             format!("{{{}}}", inner.join(", "))
         }
+        Value::Object { .. } => "null".to_string(),
         Value::Closure { .. } => "null".to_string(),
+        // 14.3: a channel JSON-formats as the messages still queued.
+        Value::Channel(q) => {
+            let inner: Vec<String> = q.borrow().iter().map(json_format).collect();
+            format!("[{}]", inner.join(", "))
+        }
     }
 }
 
@@ -1970,6 +2374,10 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Struct { name: n1, fields: f1 }, Value::Struct { name: n2, fields: f2 }) => {
             n1 == n2 && f1.len() == f2.len() && f1.iter().zip(f2).all(|(x, y)| values_equal(x, y))
         }
+        // R-6: class equality is IDENTITY — two distinct objects with equal
+        // fields are never `equal to`. Comparison is pointer equality of the
+        // shared field storage.
+        (Value::Object { fields: a, .. }, Value::Object { fields: b, .. }) => std::rc::Rc::ptr_eq(a, b),
         (Value::Closure { function: f1, .. }, Value::Closure { function: f2, .. }) => f1 == f2,
         _ => false,
     }

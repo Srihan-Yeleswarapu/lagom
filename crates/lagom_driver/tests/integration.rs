@@ -761,3 +761,222 @@ say optional first list
     assert_eq!(host.stdout, vec!["1"], "interpreter: some type? result");
     assert_says("some_type_opt", src, &["1"]);
 }
+
+// ---------------------------------------------------------------------------
+// 14.2/14.3 structured tasks and channels
+// ---------------------------------------------------------------------------
+
+/// The capture ABI ground truth, pinned for both lambda shapes: the synthetic
+/// function unpacks its captures after its formals, so a task body that only
+/// sends on a captured channel (zero formals, statement-only body) reads the
+/// real channel, and an inline lambda reads its captured local. Regression:
+/// the unpack once covered formals only, so every capture read `nothing`.
+#[test]
+fn task_and_lambda_captures_unpack_on_both_backends() {
+    // Zero-formal task body capturing a channel: the send must reach the
+    // main-side receive (the shared-queue rule, 14.3).
+    let task_src = "\
+make messages equal to a channel of text
+start a task
+    send \"hello\" to messages
+wait for all tasks
+say receive from messages
+";
+    let (host, outcome) = lagom_driver::run_interpreted(task_src, Vec::new(), Some(1));
+    assert!(matches!(outcome, lagom_interp::RunOutcome::Completed), "{outcome:?}");
+    assert_eq!(host.stdout, vec!["hello"], "interpreter: task capture");
+    assert_says("task_capture", task_src, &["hello"]);
+
+    // Inline lambda capturing a local (11.1's environment).
+    let lambda_src = "\
+make base equal to 10
+make f equal to taking n giving back n plus base
+say f of 5
+";
+    let (host, outcome) = lagom_driver::run_interpreted(lambda_src, Vec::new(), Some(1));
+    assert!(matches!(outcome, lagom_interp::RunOutcome::Completed), "{outcome:?}");
+    assert_eq!(host.stdout, vec!["15"], "interpreter: lambda capture");
+    assert_says("lambda_capture", lambda_src, &["15"]);
+}
+
+/// 14.2's join order and supervision, end to end: spawned tasks run in spawn
+/// order at the join; `keep going` consumes its failure; a supervised failure
+/// re-raises at the join and is catchable. Both backends agree.
+#[test]
+fn tasks_join_in_spawn_order_with_supervision_on_both_backends() {
+    let src = "\
+start a task
+    say \"first\"
+start a task
+    say \"second\"
+wait for all tasks
+say \"done\"
+";
+    let (host, outcome) = lagom_driver::run_interpreted(src, Vec::new(), Some(1));
+    assert!(matches!(outcome, lagom_interp::RunOutcome::Completed), "{outcome:?}");
+    assert_eq!(host.stdout, vec!["first", "second", "done"], "interpreter: join order");
+    assert_says("task_join_order", src, &["first", "second", "done"]);
+
+    let keep_src = "\
+start a task keep going
+    fail with \"background boom\"
+wait for all tasks
+say \"survived\"
+";
+    let (host, outcome) = lagom_driver::run_interpreted(keep_src, Vec::new(), Some(1));
+    assert!(matches!(outcome, lagom_interp::RunOutcome::Completed), "{outcome:?}");
+    assert_eq!(host.stdout, vec!["survived"], "interpreter: keep going");
+    assert_says("task_keep_going", keep_src, &["survived"]);
+
+    // The catchable-join shape: the spawn+join live in a `can fail`
+    // function, called under `attempt` (the frozen one-line tail form).
+    let fail_src = "\nfunction run tasks
+    can fail
+    start a task
+        fail with \"boom\"
+    wait for all tasks
+
+attempt run tasks if it fails then
+    say \"caught: {problem}\"
+otherwise
+    say \"ok\"
+";
+    let (host, outcome) = lagom_driver::run_interpreted(fail_src, Vec::new(), Some(1));
+    assert!(matches!(outcome, lagom_interp::RunOutcome::Completed), "{outcome:?}");
+    assert_eq!(host.stdout, vec!["caught: boom"], "interpreter: supervised join");
+    assert_says("task_supervision", fail_src, &["caught: boom"]);
+}
+
+/// 14.2 nesting: a task inside a task and a task inside a function each join
+/// lexically — the inner wait joins only the inner spawn; the outer region
+/// joins the outer spawn. Both backends agree.
+#[test]
+fn task_regions_nest_lexically_on_both_backends() {
+    let nested = "\
+start a task
+    start a task
+        say \"inner\"
+    wait for all tasks
+    say \"inner done\"
+wait for all tasks
+say \"outer done\"
+";
+    let (host, outcome) = lagom_driver::run_interpreted(nested, Vec::new(), Some(1));
+    assert!(matches!(outcome, lagom_interp::RunOutcome::Completed), "{outcome:?}");
+    assert_eq!(host.stdout, vec!["inner", "inner done", "outer done"], "interpreter: nested tasks");
+    assert_says("task_nested", nested, &["inner", "inner done", "outer done"]);
+
+    let in_function = "\
+function do work
+    start a task
+        say \"from the function's task\"
+    wait for all tasks
+    say \"function joined\"
+
+do work
+say \"after function\"
+";
+    let (host, outcome) = lagom_driver::run_interpreted(in_function, Vec::new(), Some(1));
+    assert!(matches!(outcome, lagom_interp::RunOutcome::Completed), "{outcome:?}");
+    assert_eq!(
+        host.stdout,
+        vec!["from the function's task", "function joined", "after function"],
+        "interpreter: task in function"
+    );
+    assert_says(
+        "task_in_function",
+        in_function,
+        &["from the function's task", "function joined", "after function"],
+    );
+}
+
+/// A task body is its own capability boundary (14.2's documented resolution):
+/// `fail with` is legal there WITHOUT a function-level `can fail`, because
+/// the body has no caller to propagate to — the supervision rule replaces it.
+#[test]
+fn task_body_is_its_own_capability_boundary() {
+    let src = "\
+start a task
+    fail with \"supervision signal\"
+wait for all tasks
+say \"never\"
+";
+    let (_, outcome) = lagom_driver::run_interpreted(src, Vec::new(), Some(1));
+    match outcome {
+        lagom_interp::RunOutcome::Failed { message, .. } => {
+            assert_eq!(message, "supervision signal", "the failure message rides: {message}");
+        }
+        other => panic!("a supervised failure must surface: {other:?}"),
+    }
+}
+
+/// `wait for all tasks` with no prior spawn is a misplaced join (E0390): the
+/// diagnostic names the region, why nothing is running, and the smallest
+/// correct fix — never a merely-silencing one.
+#[test]
+fn wait_without_spawn_names_the_misplaced_join() {
+    let src = "\
+say \"no tasks\"
+wait for all tasks
+";
+    match lagom_driver::frontend(src) {
+        Ok(_) => panic!("a join with no spawn must not compile"),
+        Err(lagom_driver::FrontendError::Diagnostics(diags)) => {
+            let found = diags
+                .iter()
+                .find(|d| d.code == "E0390")
+                .unwrap_or_else(|| panic!("expected E0390 in {:?}", diags.iter().map(|d| d.code).collect::<Vec<_>>()));
+            let rendered =
+                lagom_driver::render_diagnostics("prog.lagom", src, std::slice::from_ref(found));
+            assert!(rendered.contains("found no `start a task`"), "what:\n{rendered}");
+            assert!(rendered.contains("joins the tasks this program started"), "why:\n{rendered}");
+            assert!(rendered.contains("wants to come after the task"), "where the join belongs:\n{rendered}");
+            assert!(rendered.contains("remove the `wait for all tasks` line"), "the fix:\n{rendered}");
+        }
+        Err(other) => panic!("internal error, not a student diagnostic: {other:?}"),
+    }
+}
+
+/// `send … to` / `receive from` on a non-channel (E0393/E0394): the
+/// diagnostics name what the value IS, explain the channel model, and point
+/// at the construction the student skipped.
+#[test]
+fn channel_ops_on_non_channels_name_the_real_type() {
+    let send_src = "\
+make x equal to 5
+send \"hi\" to x
+";
+    match lagom_driver::frontend(send_src) {
+        Ok(_) => panic!("send to a non-channel must not compile"),
+        Err(lagom_driver::FrontendError::Diagnostics(diags)) => {
+            let found = diags
+                .iter()
+                .find(|d| d.code == "E0393")
+                .unwrap_or_else(|| panic!("expected E0393 in {:?}", diags.iter().map(|d| d.code).collect::<Vec<_>>()));
+            let rendered = lagom_driver::render_diagnostics("prog.lagom", send_src, std::slice::from_ref(found));
+            assert!(rendered.contains("sends into a channel, but this is number"), "what:\n{rendered}");
+            assert!(rendered.contains("a channel of <type>"), "the model:\n{rendered}");
+            assert!(rendered.contains("Write the channel you meant"), "the fix:\n{rendered}");
+        }
+        Err(other) => panic!("internal error, not a student diagnostic: {other:?}"),
+    }
+
+    let recv_src = "\
+make x equal to 5
+say receive from x
+";
+    match lagom_driver::frontend(recv_src) {
+        Ok(_) => panic!("receive from a non-channel must not compile"),
+        Err(lagom_driver::FrontendError::Diagnostics(diags)) => {
+            let found = diags
+                .iter()
+                .find(|d| d.code == "E0394")
+                .unwrap_or_else(|| panic!("expected E0394 in {:?}", diags.iter().map(|d| d.code).collect::<Vec<_>>()));
+            let rendered = lagom_driver::render_diagnostics("prog.lagom", recv_src, std::slice::from_ref(found));
+            assert!(rendered.contains("reads a channel, but this is number"), "what:\n{rendered}");
+            assert!(rendered.contains("dequeues the oldest value"), "the model:\n{rendered}");
+            assert!(rendered.contains("Write the channel you meant"), "the fix:\n{rendered}");
+        }
+        Err(other) => panic!("internal error, not a student diagnostic: {other:?}"),
+    }
+}

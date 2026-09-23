@@ -276,6 +276,12 @@ pub fn lookup(code: &str) -> Option<String> {
             "bigger of (a and b) or c   — or —   bigger of a and (b or c)",
             "Ambiguity rule (7.9)",
         ),
+        "E0210" => (
+            "A comparison cannot end a `say`/`ask` sentence — it is ambiguous here.",
+            "Call arguments bind at the additive level (R-4), so a comparison after the value would be read as a comparison on the whole call, not part of the printed value. Parentheses make the comparison its own value.",
+            "make changing count equal to 0\nsay (count is less than 3)",
+            "Unified call grammar (7.15)",
+        ),
         "E0350" => (
             "This function gives the same value back twice under different names.",
             "A function's `gives back` names must be distinct — two clauses answering under one name is a contradiction, not a second answer.",
@@ -372,6 +378,97 @@ pub fn lookup(code: &str) -> Option<String> {
             "a type called score is a number",
             "Type aliases (8.4)",
         ),
+        "E0375" => (
+            "No construction clause takes these names.",
+            "A class with `construction` clauses builds its objects through one of them: the names after `with` must match a clause's `takes` names exactly (order is free, but the names decide which clause runs).",
+            "construction\n    takes number called starting count\n    set count of myself to starting count\n\nmake c equal to a new counter with starting count 0",
+            "Named constructors (10.3)",
+        ),
+        "E0374" => (
+            "The method needs an object of its class as its receiver.",
+            "A method is called on an object: the words after the method's name must name an object made from the method's class. Here those words name something of another type (or nothing at all), so there is no receiver to pass.",
+            "make c equal to a new counter with count 0\nbump c",
+            "Classes and methods (10.2)",
+        ),
+        "E0376" => (
+            "This class already has a `before last reference disappears` clause.",
+            "A class gets one finalizer: the cleanup that runs when its last reference disappears. Splitting cleanup across two clauses would make the order they run in part of the program's meaning — so a class has exactly one, and everything that belongs in cleanup belongs in it.",
+            "class document\n    before last reference disappears\n        say \"document released\"",
+            "Destructors and finalization (10.4)",
+        ),
+        "E0377" => (
+            "This call can fail, and `before last reference disappears` may not fail.",
+            "A finalizer runs when the program drops an object's last reference. It has no caller, so a failure inside it has nowhere to go — a failing cleanup is a bug class, not a feature (R-20.3). Handle the call with `attempt` right inside the finalizer, or do the risky work while the object is still alive.",
+            "attempt write file \"bye\" at \"log.txt\" if it fails then\n    say problem\notherwise\n    say \"logged\"",
+            "Destructors and finalization (10.4)",
+        ),
+        "E0378" => (
+            "The class does not satisfy its interface.",
+            "Writing `does <interface>` is a promise: the class has every method the interface requires, with the same name and shape. The class's own methods count, inherited ones count, and a requirement with a default body in the interface counts too — but one missing method breaks the promise, and the class cannot be made.",
+            "interface drawable\n    can draw\n\nclass circle does drawable\n    can draw\n        say \"drawing\"",
+            "Interfaces (10.6)",
+        ),
+        "E0379" => (
+            "There is no interface by that name.",
+            "`does` names an interface declared with `interface` somewhere in this program. Check the spelling of the name after `does` — or add the `interface` declaration it should point at.",
+            "interface drawable\n    can draw\n\nclass circle does drawable\n    can draw\n        say \"drawing\"",
+            "Interfaces (10.6)",
+        ),
+        "E0381" => (
+            "The class claims the same interface twice.",
+            "Each interface is claimed once in a class's `does` list — one promise per interface is enough. Remove the repeated name (or one of the repeats).",
+            "interface printable\n    can print\n\nclass report does printable\n    can print\n        say \"printing\"",
+            "Interfaces (10.6)",
+        ),
+        "E0380" => (
+            "The `extends` chain is broken or loops.",
+            "A class may extend exactly one other class, the base must be declared with `class` in this program, and the chain of `extends` links must never come back around to where it started. Single inheritance only — `extends` is the only inheritance word (10.5).",
+            "class animal\n    can speak\n        say \"…\"\n\nclass dog extends animal\n    can speak\n        say \"Woof\"",
+            "Inheritance (10.5)",
+        ),
+        "E0382" => (
+            "Two interfaces both provide a default for the same method.",
+            "When a class conforms to two interfaces that each implement the same requirement, neither default is more specific — the compiler will not choose which code runs. Give the class its own method; it replaces every default.",
+            "interface speaker\n    can speak\n        say \"interface speaker\"\n\nclass bird does speaker does talker\n    can speak\n        say \"chirp\"",
+            "Interfaces (10.6)",
+        ),
+        "E0383" => (
+            "The argument does not satisfy the constraint.",
+            "`takes … that does <interface>` is a promise about the argument: the function's body may call the interface's methods on any value it receives, so every call site must pass a value that keeps that promise — a class that `does` the interface, or a built-in the operator table covers (numbers and decimals are `comparable`; numbers, decimals, and text are `addable`). The smallest correct fix is at the value: conform the class or pass one that already conforms. Dropping the constraint would move the failure into the function's body, where nothing is known about the value.",
+            "interface scored\n    can score\n        returns number\n\nclass player does scored\n    has points of type number\n    can score\n        returns number\n        gives back points\n\nfunction total\n    takes anything that does scored called thing\n    returns number\n    gives back score of thing",
+            "Generic constraints (12.3)",
+        ),
+        "E0384" => (
+            "That call is outside the constraint's promises.",
+            "A parameter written `anything that does <interface>` might be ANY conforming value, so the body may call exactly the methods the interface requires — no more. The constraint is what makes those calls real on every value the function could ever receive; anything else cannot be proven. Call a method the interface requires, or add the method to the interface's `can` lines if every conforming class should have it.",
+            "interface scored\n    can score\n        returns number\n\nfunction total\n    takes anything that does scored called thing\n    returns number\n    gives back score of thing",
+            "Generic constraints (12.3)",
+        ),
+        "E0391" => (
+            "`send`/`receive` written as an ordinary call, missing the prep that carries the channel.",
+            "`send` and `receive` are channel vocabulary, not ordinary functions: `send <value> to <channel>` queues a value and `receive from <channel>` takes one out. Written as a comma call, nothing says which argument is the channel, so the call cannot run — and it would reach the backends as an unknown function and panic. The `to`/`from` prep is the marker the compiler lowers on.",
+            "make messages equal to a channel of text
+send \"hello\" to messages",
+            "Channels (14.3)",
+        ),
+        "E0390" => (
+            "`wait for all tasks` found no `start a task` to wait for.",
+            "`wait for all tasks` joins the tasks this function (or the script) started before it. No `start a task` runs before it here, so it waits for nothing — the join line wants to come after the spawn it should join. Tasks join where they were spawned: an inner `wait for all tasks` joins only the tasks spawned before it in the same body.",
+            "start a task\n    say \"work\"\nwait for all tasks\nsay \"done\"",
+            "Structured tasks (14.2)",
+        ),
+        "E0393" => (
+            "`send … to` sends into a channel, but the value is not a channel.",
+            "A channel is made with `a channel of <type>` — `send` queues the value on it and `receive from` takes values back out, first in first out. Sending into a non-channel has no meaning the compiler can prove, and guessing one would hide the mistake. Make the channel first, then send into it.",
+            "make messages equal to a channel of text\nsend \"hello\" to messages",
+            "Channels (14.3)",
+        ),
+        "E0394" => (
+            "`receive from` reads a channel, but the value is not a channel.",
+            "A channel is made with `a channel of <type>` — `receive from` dequeues the oldest value a task sent. Receiving from a non-channel has no meaning the compiler can prove, and guessing one would hide the mistake. Make the channel first, then receive from it.",
+            "make messages equal to a channel of text\nsay receive from messages",
+            "Channels (14.3)",
+        ),
         "E0101" => (
             "The lexer could not read this character.",
             "Every character must belong to the language: identifiers, the operator symbols, or text.",
@@ -393,8 +490,8 @@ pub fn lookup(code: &str) -> Option<String> {
 pub fn code_index() -> String {
     let mut out = String::new();
     out.push_str("  lexer   E0101–E0108: characters and text that cannot be read\n");
-    out.push_str("  parser  E0201–E0209: lines that do not fit the grammar\n");
-    out.push_str("  sema    E0302, E0330–E0373: names, types, capabilities, structure rules, and type aliases\n");
+    out.push_str("  parser  E0201–E0210: lines that do not fit the grammar\n");
+    out.push_str("  sema    E0302, E0330–E0384, E0390–E0391, E0393–E0394: names, types, capabilities, structure rules, type aliases, classes, inheritance, interfaces, generic constraints, and tasks/channels\n");
     out.push_str("\nEvery diagnostic names its code; run `lagom explain <code>` for the full\nteaching page. A few to start with:\n\n  E0344  the name is not defined (typos, use-before-make)\n  E0302  a can-fail call must be wrapped in attempt\n  E0330  a name can only mean one thing\n  E0360  the value is not the type the annotation promised\n\nM2 runtime lessons (from failure reports):\n  R001  list indexes count from 0 and stop before the size\n  R002  text and numbers are different kinds of values\n  R003  dividing by zero has no answer\n  R004  ask reads one line per question\n  R005  number is a 64-bit integer\n");
     out
 }
@@ -441,4 +538,43 @@ pub fn runtime_lesson(code: &str) -> Option<String> {
     Some(format!(
         "{code} — {what}\n\n{why}\n\nTo fix, write:\n\n    {fix}\n\nConcept: {concept}\n"
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    /// Doc 09's rule — the write-ups ship with the version that emits them:
+    /// the two 12.3 constraint codes have pages naming the concept, so an
+    /// emitted diagnostic never meets `no write-up yet`.
+    #[test]
+    fn constraint_diagnostics_have_explain_pages() {
+        for code in ["E0383", "E0384"] {
+            let page = super::lookup(code)
+                .unwrap_or_else(|| panic!("{code} has no explain page"));
+            assert!(
+                page.contains("constraint") || page.contains("promis"),
+                "{code} page: {page}"
+            );
+            assert!(
+                page.contains("interface"),
+                "{code} page names the concept: {page}"
+            );
+        }
+    }
+    /// The index's range strings are claims about real pages: every code a
+    /// range names must resolve, so the strings cannot drift from the
+    /// registry again (E0390 once had a page under the wrong key).
+    #[test]
+    fn index_ranges_name_only_real_pages() {
+        let idx = super::code_index();
+        for (lo, hi) in [(101u32, 108), (201, 210), (330, 384), (390, 391), (393, 394)] {
+            for n in lo..=hi {
+                let code = format!("E0{n:03}");
+                assert!(
+                    super::lookup(&code).is_some(),
+                    "{code} is claimed by the index but has no page"
+                );
+            }
+        }
+        assert!(idx.contains("E0302"), "the index highlights a real code");
+    }
 }

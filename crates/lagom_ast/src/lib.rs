@@ -19,8 +19,13 @@ pub struct Program {
 pub enum Item {
     Function(FunctionDecl),
     Structure(StructureDecl),
+    /// `class counter … has … can …` (10.2) — a stateful, identity-bearing
+    /// object (composition-first, 10.1: classes are taught after structs).
+    Class(ClassDecl),
     /// `kind shape … is a circle with radius …` (7.12) — the sum type.
     Kind(KindDecl),
+    /// `interface drawable … can draw …` (10.6) — the substitution contract.
+    Interface(InterfaceDecl),
     /// `a type called score is a number` (8.4) — the type alias.
     TypeAlias(TypeAliasDecl),
     Test(TestDecl),
@@ -43,7 +48,7 @@ impl TypeAliasDecl {
     pub fn ty_span(&self) -> Span {
         match &self.ty {
             TypeExpr::User(n) => n.span,
-            TypeExpr::List(t) | TypeExpr::Map(t, _) | TypeExpr::Pair(t, _) => match t.as_ref() {
+            TypeExpr::List(t) | TypeExpr::Map(t, _) | TypeExpr::Pair(t, _) | TypeExpr::Channel(t) => match t.as_ref() {
                 TypeExpr::User(n) => n.span,
                 _ => self.name.span,
             },
@@ -77,7 +82,7 @@ pub struct VariantDecl {
 // ---------------------------------------------------------------------------
 
 /// `function calculate average … takes … returns … block` (7.8).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FunctionDecl {
     pub name: Name,
     pub params: Vec<Param>,
@@ -88,10 +93,54 @@ pub struct FunctionDecl {
 }
 
 /// `takes number called x` / `takes a list of numbers called scores` / `takes number of correct answers` (7.8).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Param {
     pub name: Name,
     pub ty: TypeExpr,
+    pub span: Span,
+}
+
+/// `class counter … has … can … block` (10.2): fields plus methods. Methods
+/// lower to receiver-first functions (R-2 — "methods are functions that take
+/// the object first"), so this carries only the class surface; the parser
+/// synthesizes each `can` body as a real `FunctionDecl` named `method <class>
+/// <name>` — unspellable as a user call head because `method` is a reserved
+/// word once a class exists.
+#[derive(Debug)]
+pub struct ClassDecl {
+    pub name: Name,
+    /// `has <field> of type <T>` lines, in declaration order.
+    pub fields: Vec<FieldDecl>,
+    /// `construction` clauses (10.3): named constructors, parsed as
+    /// receiver-first functions (the `takes` clauses are the parameters;
+    /// full field initialization is sema's Swift rule). Multiple clauses
+    /// dispatch by argument names (D-14), never arity.
+    pub constructions: Vec<FunctionDecl>,
+    /// Methods: (plain name, receiver-first function synthesized by the parser).
+    pub methods: Vec<(Name, FunctionDecl)>,
+    /// `extends <class>` (10.5): the single base class, if any. Sema
+    /// copy-redirects dispatch through the base chain — no field/method
+    /// cloning in the AST.
+    pub extends: Option<Name>,
+    /// `does <interface>, <interface>` (10.6): conformance claims checked
+    /// against the interface's requirement table.
+    pub does: Vec<Name>,
+    /// `before last reference disappears` clause (10.4): the parser
+    /// synthesizes it as a receiver-first function named `deinit <class>`;
+    /// at most one per class. Sema enforces R-20.3 (finalizers cannot fail).
+    pub deinit: Option<FunctionDecl>,
+    pub span: Span,
+}
+
+/// `interface drawable … can draw …` (10.6): a named set of method
+/// requirements. A `can` line with a body is a default implementation —
+/// conforming classes inherit it unless they define their own.
+#[derive(Debug)]
+pub struct InterfaceDecl {
+    pub name: Name,
+    /// (plain name, optional default body as a receiver-first function of
+    /// the interface's own name).
+    pub methods: Vec<(Name, Option<FunctionDecl>)>,
     pub span: Span,
 }
 
@@ -192,6 +241,19 @@ pub enum Stmt {
     Match { scrutinee: Expr, arms: Vec<(Pattern, Block)>, otherwise: Option<Block>, span: Span },
     /// A bare flowing call used for effect: `bump c` (7.15 exprstmt).
     ExprStmt { expr: Expr, span: Span },
+    /// `start a task` block { `keep going` suffix } — one spawn per statement
+    /// (14.2): the body runs concurrently with the spawning function; the
+    /// region joins at `wait for all tasks` or function exit.
+    StartTask {
+        body: Block,
+        /// `keep going` — this task's failure must not fail the region.
+        keep_going: bool,
+        span: Span,
+    },
+    /// `wait for all tasks` — the explicit join (14.2). The reserved
+    /// phrase-token needs no payload; the join's failure surface is the
+    /// supervision rule.
+    WaitForAllTasks { span: Span },
 }
 
 /// Patterns (7.15's `pattern` production, M1):
@@ -309,6 +371,11 @@ pub enum Expr {
     PairLit { first: Box<Expr>, second: Box<Expr>, span: Span },
     /// `a player with name "bo" and score 0` (7.11) — labeled construction.
     StructLit { name: Name, fields: Vec<(Name, Expr)>, span: Span },
+    /// `a new <class> with <field> <value> [and …]` (10.2/10.3) — class
+    /// construction. Sema checks full field initialization (the Swift rule,
+    /// 10.3) and types the result as the class; both backends produce an
+    /// ARC'd reference object (9.3).
+    NewObject { name: Name, fields: Vec<(Name, Expr)>, span: Span },
     /// `a <kind-variant> with <field> <additive> and …` — variant construction
     /// (7.12): the same reader shape as structlit, resolved against `kind`
     /// tables by sema.
@@ -319,6 +386,10 @@ pub enum Expr {
     /// or the inline form (`taking n giving back n times 2` — body one
     /// comparison). `it` is resolved by sema, never stored here.
     Lambda { params: Vec<Name>, body: LambdaBody, span: Span },
+    /// `a channel of T` as a value (14.3): the type expression IS the
+    /// construction — a channel is made by naming it. The element type rides
+    /// along for `fmt` round-tripping; sema erases it to the message type.
+    ChannelLit { elem: Box<TypeExpr>, span: Span },
 }
 
 /// A lambda's body (R-3, 11.1): the block form owns statements; the inline
@@ -416,6 +487,8 @@ pub enum TypeExpr {
     Boolean,
     List(Box<TypeExpr>),
     Map(Box<TypeExpr>, Box<TypeExpr>),
+    /// `a channel of T` (14.3): a typed FIFO channel.
+    Channel(Box<TypeExpr>),
     Pair(Box<TypeExpr>, Box<TypeExpr>),
     /// A user-defined structure or kind name.
     User(Name),
@@ -425,7 +498,15 @@ pub enum TypeExpr {
     /// The type parameter (12.1/12.2): `anything` (implicit, inferred from
     /// use) and `some type` (the explicit spelling of the same word) are the
     /// one concept — frozen grammar words, not user names.
-    TypeParam,
+    /// The type parameter (12.1/12.2): `anything` / `some type`, optionally
+    /// constrained — `… that does <interface>` (12.3). `None` is the
+    /// unconstrained parameter; `Some(name, span)` names the interface every
+    /// call-site argument must satisfy. (The 12.3 existential — the same
+    /// words read as a value type — is the same surface; v0.1 checks it as
+    /// the constrained parameter it always appears as.)
+    TypeParam {
+        iface: Option<(String, Span)>,
+    },
     /// Missing annotation (inferred).
     Inferred,
 }
@@ -440,10 +521,14 @@ impl TypeExpr {
             TypeExpr::Boolean => "boolean".into(),
             TypeExpr::List(t) => format!("a list of {}", t.display()),
             TypeExpr::Map(k, v) => format!("a map from {} to {}", k.display(), v.display()),
+            TypeExpr::Channel(t) => format!("a channel of {}", t.display()),
             TypeExpr::Pair(a, b) => format!("a pair of {} and {}", a.display(), b.display()),
             TypeExpr::User(n) => n.display(),
             TypeExpr::OptionT(t) => format!("{}?", t.display()),
-            TypeExpr::TypeParam => "anything".into(),
+            TypeExpr::TypeParam { iface: None } => "anything".into(),
+            TypeExpr::TypeParam {
+                iface: Some((i, _)),
+            } => format!("anything that does {i}"),
             TypeExpr::Inferred => "inferred".into(),
         }
     }
