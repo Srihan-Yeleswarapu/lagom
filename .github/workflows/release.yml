@@ -369,7 +369,7 @@ jobs:
       - name: Uninstall via the script (how older installs are removed)
         # `lagom uninstall` against the *published* binary is deliberately
         # not asserted here: the latest release may predate that command
-        # (v0.1.1 does). The current binary's CLI uninstall is covered by
+        # (pre-v0.2.0 releases do). The current binary's CLI uninstall is covered by
         # the install-test job on all three OSes; a published install is
         # removed with install.sh --uninstall, which is what this asserts.
         shell: bash

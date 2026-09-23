@@ -4,7 +4,7 @@
 # Lagom installer & uninstaller (macOS + Linux; Windows uses the release zip).
 #
 #   sh install.sh                          install the latest release
-#   sh install.sh --version v0.1.1         install a pinned release
+#   sh install.sh --version v0.2.0         install a pinned release
 #   sh install.sh --dir ~/.lagom           install somewhere specific
 #   sh install.sh --uninstall              remove it again (folder + PATH line)
 #
@@ -35,7 +35,7 @@ UNINSTALL=0
 # ---------------------------------------------------------------- arguments
 while [ $# -gt 0 ]; do
     case "$1" in
-        --version)  [ $# -ge 2 ] || { echo "error: --version needs a value (e.g. v0.1.1)" >&2; exit 2; }
+        --version)  [ $# -ge 2 ] || { echo "error: --version needs a value (e.g. v0.2.0)" >&2; exit 2; }
                     VERSION="$2"; shift 2 ;;
         --dir)      [ $# -ge 2 ] || { echo "error: --dir needs a value" >&2; exit 2; }
                     DIR="$2"; shift 2 ;;

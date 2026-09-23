@@ -1,4 +1,4 @@
-# Lagom __VERSION__ — the M0 compiler
+# Lagom __VERSION__
 
 One binary plus a bundled runtime. **No Rust toolchain, no source checkout** — download the file for your OS, unpack, run.
 
@@ -11,6 +11,10 @@ One binary plus a bundled runtime. **No Rust toolchain, no source checkout** —
 `sha256sums.txt` lets you verify what you downloaded (see below).
 
 **The one rule:** keep `lagom` (or `lagom.exe`) and its `lib` folder together, wherever you unpack — the binary finds its bundled runtime next to itself.
+
+**Requirements:** none to run `check`, `fmt`, `play`, `test`, and `run --trace` (the interpreter needs no toolchain). The first native `lagom run` / `lagom build` rebuilds the bundled runtime once, which needs any Rust toolchain; after that one-time rebuild, no toolchain is needed. macOS packages are Apple Silicon; on an Intel Mac, [build from source](https://github.com/Srihan-Yeleswarapu/lagom#from-source-any-os).
+
+**New in __VERSION__ (M2 — intelligence and tooling):** diagnostics that explain *why* a fix works, tasks and channels, generic types, a REPL, doc comments that turn into checked examples, packages, and a profiler. Details at the bottom.
 
 ---
 
@@ -102,8 +106,7 @@ lagom run
 ```
 (On Windows before PATH is set: `..\lagom.exe run`.)
 
-## What works in M0
-
+## What works
 - Output & input: `say "…"`, `ask "…"`
 - Variables: `make x equal to 5`, mutable `make changing score equal to 0` + `set score to 10`
 - Arithmetic, words and symbols: `6 times 7`, `20 divided by 4`, `remainder of 17 and 5`, `10 modulo 3`
@@ -112,7 +115,15 @@ lagom run
 - Functions: `takes … called …` / `returns …` / `gives back …`
 - Errors as values: `can fail`, `fail with`, `attempt … if it fails then … otherwise …`
 - Structs, `test` blocks with `check that`, `use math for square root`
-- Commands: `lagom run | build | test | check | fmt | new | explain | words`
+- Kinds and `match` with patterns; the full option/result model; closures with `map` / `keep` / `combine`; files and JSON (M1)
+- **Tasks & channels (M2):** `start a task` / `wait for all tasks`, `a channel of number`, `send 5 to c`, `receive from c`, `keep going`
+- **Generic types (M2):** `anything` type parameters, `some type that does comparable`
+- **Causal diagnostics (M2):** every fix explains *why* it works; `lagom explain <code>` has a teaching page for every error code
+- **REPL (M2):** `lagom play` — line-by-line with types shown, `#history` / `#replay`
+- **Doc comments (M2):** `lagom doc` renders `##` comments to markdown; `lagom doc --check` runs `## >>>` examples against `## =` expected output
+- **Packages (M2):** `lagom add <name> <path>` vendoring into `packages/`, recorded in `Lagom.toml`
+- **Profiler (M2):** `lagom profile` — per-function call counts and the compile-time breakdown
+- Commands: `lagom run | build | test | check | fmt | new | explain | words | play | doc | add | remove | profile | uninstall`
 
 The full tour — every form with copy-paste commands and outputs — is [`demo.md`](https://github.com/Srihan-Yeleswarapu/lagom/blob/main/demo.md) in the repo.
 

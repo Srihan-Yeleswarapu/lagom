@@ -266,14 +266,14 @@ dependencies = [
 
 [[package]]
 name = "lagom_ast"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "lagom_diagnostics",
 ]
 
 [[package]]
 name = "lagom_cli"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "lagom_ast",
  "lagom_diagnostics",
@@ -284,7 +284,7 @@ dependencies = [
 
 [[package]]
 name = "lagom_codegen"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "cranelift",
  "cranelift-module",
@@ -303,7 +303,7 @@ dependencies = [
 
 [[package]]
 name = "lagom_diagnostics"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "lagom_parser",
  "lagom_sema",
@@ -311,7 +311,7 @@ dependencies = [
 
 [[package]]
 name = "lagom_driver"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "lagom_codegen",
  "lagom_diagnostics",
@@ -326,7 +326,7 @@ dependencies = [
 
 [[package]]
 name = "lagom_hir"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "lagom_ast",
  "lagom_diagnostics",
@@ -335,7 +335,7 @@ dependencies = [
 
 [[package]]
 name = "lagom_interp"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "lagom_diagnostics",
  "lagom_hir",
@@ -346,14 +346,14 @@ dependencies = [
 
 [[package]]
 name = "lagom_lexer"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "lagom_diagnostics",
 ]
 
 [[package]]
 name = "lagom_lir"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "lagom_diagnostics",
  "lagom_hir",
@@ -364,7 +364,7 @@ dependencies = [
 
 [[package]]
 name = "lagom_lom"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "lagom_hir",
  "lagom_mir",
@@ -374,7 +374,7 @@ dependencies = [
 
 [[package]]
 name = "lagom_mir"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "lagom_diagnostics",
  "lagom_hir",
@@ -384,7 +384,7 @@ dependencies = [
 
 [[package]]
 name = "lagom_parser"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "lagom_ast",
  "lagom_diagnostics",
@@ -393,14 +393,14 @@ dependencies = [
 
 [[package]]
 name = "lagom_rt"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "lagom_mir",
 ]
 
 [[package]]
 name = "lagom_sema"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "lagom_ast",
  "lagom_diagnostics",

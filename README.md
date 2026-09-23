@@ -53,45 +53,29 @@ Docs 01–10 are phase stubs by design: they scope what each specification must 
 
 ## Installing
 
-### macOS & Linux — one command
+Install from the [**latest release**](https://github.com/Srihan-Yeleswarapu/lagom/releases/latest): download the file for your OS below, and the release page gives you the exact steps for what to do with it — verify, unpack, run the day-one flow, and (optionally) add it to PATH. Every package is built and machine-verified by CI before the release publishes.
 
-From a clone of this repo:
+| File | For |
+|---|---|
+| `lagom-Windows.zip` | Windows 10/11 (x64) |
+| `lagom-Linux.tar.gz` | Linux (x64) |
+| `lagom-macOS.tar.gz` | macOS (Apple Silicon) |
+
+On macOS and Linux, the one-command installer does the same download-and-verify for you (from a clone of this repo):
 
 ```
 sh install.sh
 ```
 
-(or straight from the browser, once the repo is public:
-`curl -fsSL https://raw.githubusercontent.com/Srihan-Yeleswarapu/lagom/main/install.sh | sh`)
+It picks the package for your OS **and CPU architecture**, verifies its sha256, installs to `~/.lagom`, and adds one PATH line to your shell config — idempotently. `sh install.sh --uninstall` reverses it; `sh install.sh --version vX.Y.Z` pins a release.
 
-The script picks the package for your OS **and CPU architecture**, verifies its sha256, sanity-checks the binary, installs to `~/.lagom`, and adds one PATH line to your shell config — idempotently, so re-running is safe. Options:
-
-```
-sh install.sh --version v0.1.1   # pin a release instead of the latest
-sh install.sh --dir ~/.lagom     # install somewhere specific (default: ~/.lagom)
-sh install.sh --uninstall        # remove everything again (folder + PATH line)
-```
-
-**Requirements:** none to run `check`, `fmt`, `play`, `test`, and `run --trace` (the interpreter needs no toolchain). The first native `lagom run`/`lagom build` rebuilds the bundled runtime once, which needs any Rust toolchain (`brew install rust`, or [rustup](https://rustup.rs)); after that one-time rebuild, no toolchain is needed. macOS builds are Apple Silicon; on an Intel Mac, build from source (below).
-
-### Windows
-
-1. Download `lagom-Windows.zip` (plus `sha256sums.txt`) from the [latest release](https://github.com/Srihan-Yeleswarapu/lagom/releases/latest) and verify: `sha256sum -c sha256sums.txt` (in the download folder).
-2. Unpack somewhere stable, e.g. `C:\Users\you\lagom` (keep `lagom.exe` and its `lib` folder together):
-   ```powershell
-   Expand-Archive lagom-Windows.zip -DestinationPath ~\lagom
-   ```
-3. To type plain `lagom` from anywhere, add that folder to PATH **with the GUI** (Win → "edit environment variables for your account" → *Path* → Edit → New → paste → OK), then reopen the terminal. Skip guides that say `setx` — it can truncate your PATH.
-
-If Windows flags the download: File Properties → **Unblock** → OK (normal for unsigned tools).
-
-### From a checkout (any OS)
+### From source (any OS)
 
 ```
 cargo install --path crates/lagom_cli
 ```
 
-This builds the compiler and puts `lagom` on your PATH (removal: `cargo uninstall lagom`).
+This builds the compiler from this checkout and puts `lagom` on your PATH (removal: `cargo uninstall lagom`).
 
 ### After installing — day one
 
