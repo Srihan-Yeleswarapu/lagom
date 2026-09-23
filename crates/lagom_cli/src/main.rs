@@ -23,6 +23,7 @@ mod profile;
 mod run;
 mod template;
 mod test;
+mod uninstall;
 mod words;
 
 use std::process::ExitCode;
@@ -71,6 +72,7 @@ fn dispatch(args: &[String]) -> Result<(), CliError> {
         "fmt" => fmt_cmd::cmd_fmt(rest),
         "new" => new::cmd_new(rest),
         "words" => words::cmd_words(rest),
+        "uninstall" => uninstall::cmd_uninstall(rest),
         "explain" => explain_cmd::cmd_explain(rest),
         "version" | "--version" | "-V" => help::cmd_version(),
         "help" | "--help" | "-h" => help::cmd_help(),
