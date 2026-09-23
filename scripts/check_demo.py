@@ -109,6 +109,12 @@ def extract(section):
     return pairs
 
 ensure_fresh_binary()
+# Warm-up, deliberately untimed: the FIRST execution of a freshly linked
+# binary pays OS-level costs (Defender/SmartScan on Windows, page-in) that
+# can run tens of seconds — one CI run of this gate timed out on its very
+# first demo command because of it. Every timed command below then sees a
+# warm process, so the per-command timeout measures the program, not the OS.
+subprocess.run([L, "version"], capture_output=True, timeout=600)
 
 ok = fail = err = 0
 failures = []
