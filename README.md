@@ -51,19 +51,49 @@ The surface syntax is word-based and reads like structured English, but it is a 
 
 Docs 01–10 are phase stubs by design: they scope what each specification must contain, bind the decisions already made in 00, and record open questions with decision dates. They fill in as each phase matures.
 
-## Getting the command
+## Installing
 
-**From a checkout** (requires a Rust toolchain — the compiler's implementation detail, not yours):
+### macOS & Linux — one command
+
+From a clone of this repo:
+
+```
+sh install.sh
+```
+
+(or straight from the browser, once the repo is public:
+`curl -fsSL https://raw.githubusercontent.com/Srihan-Yeleswarapu/lagom/main/install.sh | sh`)
+
+The script picks the package for your OS **and CPU architecture**, verifies its sha256, sanity-checks the binary, installs to `~/.lagom`, and adds one PATH line to your shell config — idempotently, so re-running is safe. Options:
+
+```
+sh install.sh --version v0.1.1   # pin a release instead of the latest
+sh install.sh --dir ~/.lagom     # install somewhere specific (default: ~/.lagom)
+sh install.sh --uninstall        # remove everything again (folder + PATH line)
+```
+
+**Requirements:** none to run `check`, `fmt`, `play`, `test`, and `run --trace` (the interpreter needs no toolchain). The first native `lagom run`/`lagom build` rebuilds the bundled runtime once, which needs any Rust toolchain (`brew install rust`, or [rustup](https://rustup.rs)); after that one-time rebuild, no toolchain is needed. macOS builds are Apple Silicon; on an Intel Mac, build from source (below).
+
+### Windows
+
+1. Download `lagom-Windows.zip` (plus `sha256sums.txt`) from the [latest release](https://github.com/Srihan-Yeleswarapu/lagom/releases/latest) and verify: `sha256sum -c sha256sums.txt` (in the download folder).
+2. Unpack somewhere stable, e.g. `C:\Users\you\lagom` (keep `lagom.exe` and its `lib` folder together):
+   ```powershell
+   Expand-Archive lagom-Windows.zip -DestinationPath ~\lagom
+   ```
+3. To type plain `lagom` from anywhere, add that folder to PATH **with the GUI** (Win → "edit environment variables for your account" → *Path* → Edit → New → paste → OK), then reopen the terminal. Skip guides that say `setx` — it can truncate your PATH.
+
+If Windows flags the download: File Properties → **Unblock** → OK (normal for unsigned tools).
+
+### From a checkout (any OS)
 
 ```
 cargo install --path crates/lagom_cli
 ```
 
-This installs `lagom` onto your PATH. It works from any directory.
+This builds the compiler and puts `lagom` on your PATH (removal: `cargo uninstall lagom`).
 
-**From a release artifact** (once the CI release story lands): download the artifact for your platform from a release workflow run, unpack it, and put its `lagom` binary on your PATH.
-
-## First program
+### After installing — day one
 
 ```
 lagom new hello
@@ -91,6 +121,16 @@ lagom run
 | `lagom profile [file]` | run with per-function call counts and the compile-time breakdown |
 
 Everything works from any directory on a single `.lagom` file — no project manifest needed. In a folder with a `Lagom.toml`, `run`/`build`/`test` also compile every vendored package in `packages/`, and `lagom add`/`remove` manage them.
+
+## Uninstalling
+
+| Installed how | Uninstall with |
+|---|---|
+| `sh install.sh` (macOS/Linux) | `sh install.sh --uninstall` — or `lagom uninstall --rc --yes` |
+| the release zip (any OS) | `lagom uninstall --yes` (add `--rc` on macOS/Linux to clean the PATH line); on Windows the running exe cannot delete itself, so the command removes everything else and names that one file to delete afterwards |
+| `cargo install --path crates/lagom_cli` | `cargo uninstall lagom` |
+
+Both uninstall paths are safe: they refuse folders holding `Cargo.toml` (source checkouts) and cargo build caches, and they touch nothing outside the install folder and the shell rc files. Open a new terminal afterwards.
 
 ## Status
 

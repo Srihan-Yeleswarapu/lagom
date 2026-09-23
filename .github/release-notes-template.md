@@ -6,7 +6,7 @@ One binary plus a bundled runtime. **No Rust toolchain, no source checkout** —
 |---|---|
 | `lagom-Windows.zip` | Windows 10/11 (x64) |
 | `lagom-Linux.tar.gz` | Linux (x64) |
-| `lagom-macOS.tar.gz` | macOS |
+| `lagom-macOS.tar.gz` | macOS (Apple Silicon) |
 
 `sha256sums.txt` lets you verify what you downloaded (see below).
 
@@ -38,7 +38,11 @@ Type your name when it asks: `Who is it? Hello, you!` (Once PATH is set, plain `
 
 ## Install — macOS
 
-1. Unpack anywhere, e.g. `~/lagom`.
+**The easy way** (from a clone of the repo): `sh install.sh` — it downloads the right package for your CPU, verifies the checksum, installs to `~/.lagom`, and adds the PATH line, all idempotently. `sh install.sh --uninstall` reverses it.
+
+Manual steps, if you prefer:
+
+1. Unpack anywhere, e.g. `~/lagom` (the binary is built for Apple Silicon; on an Intel Mac, build from source with `cargo install --path crates/lagom_cli`).
 2. If macOS refuses to open it ("cannot verify the developer" / "damaged"), run once:
    ```
    xattr -cr ~/lagom
@@ -51,6 +55,10 @@ Type your name when it asks: `Who is it? Hello, you!` (Once PATH is set, plain `
    ```
 
 ## Install — Linux
+
+**The easy way** (from a clone of the repo): `sh install.sh` — same deal: verify, install to `~/.lagom`, PATH line, idempotent; `sh install.sh --uninstall` reverses it.
+
+Manual steps, if you prefer:
 
 1. Unpack anywhere, e.g. `~/lagom`.
 2. Add to PATH:

@@ -314,13 +314,91 @@ jobs:
             ! grep -qi lagom ~/.zshrc
           fi
 
+  installer-test:
+    name: install.sh (${{ matrix.os }})
+    # The one-command installer (install.sh), run on the real OSes it
+    # serves: install the latest published release, day-one flow, then
+    # uninstall both ways (the CLI's `lagom uninstall --rc --yes` and the
+    # script's `--uninstall`), asserting at every step. This is the
+    # end-to-end Mac test — a runner is the closest thing to the user's
+    # machine the project has.
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the latest published release
+        shell: bash
+        run: |
+          V="$(gh api repos/${{ github.repository }}/releases/latest --jq .tag_name)"
+          echo "installing $V"
+          sh install.sh --version "$V"
+          test -x "$HOME/.lagom/lagom"
+          "$HOME/.lagom/lagom" version
+
+      - name: PATH line landed exactly once
+        shell: bash
+        run: |
+          case "${{ matrix.os }}" in
+            macos-latest) RC="$HOME/.zshrc" ;;
+            *)            RC="$HOME/.bashrc" ;;
+          esac
+          grep -F "$HOME/.lagom" "$RC"
+          [ "$(grep -cF "$HOME/.lagom" "$RC")" = "1" ]
+
+      - name: Day one (new → run), toolchain-free on the interpreter
+        shell: bash
+        run: |
+          cd "$(mktemp -d)"
+          "$HOME/.lagom/lagom" new hello
+          cd hello
+          echo you | "$HOME/.lagom/lagom" run --trace | grep "Hello, you!"
+          if command -v rustc >/dev/null 2>&1; then
+            # Native path: the snapshot rebuild makes any rustc work.
+            echo you | "$HOME/.lagom/lagom" run | grep "Hello, you!"
+          else
+            echo "no rustc on this runner — the native-run check is covered by install-test"
+          fi
+
+      - name: Uninstall via the CLI (folder and PATH line gone)
+        shell: bash
+        run: |
+          case "${{ matrix.os }}" in
+            macos-latest) RC="$HOME/.zshrc" ;;
+            *)            RC="$HOME/.bashrc" ;;
+          esac
+          "$HOME/.lagom/lagom" uninstall --rc --yes | grep "lagom is uninstalled"
+          test ! -e "$HOME/.lagom"
+          test -f "$RC"
+          ! grep -qF "$HOME/.lagom" "$RC"
+
+      - name: Reinstall, then uninstall via the script
+        shell: bash
+        run: |
+          V="$(gh api repos/${{ github.repository }}/releases/latest --jq .tag_name)"
+          sh install.sh --version "$V" >/dev/null
+          sh install.sh --uninstall
+          test ! -e "$HOME/.lagom"
+          case "${{ matrix.os }}" in
+            macos-latest) RC="$HOME/.zshrc" ;;
+            *)            RC="$HOME/.bashrc" ;;
+          esac
+          ! grep -qF "$HOME/.lagom" "$RC"
+          echo "install.sh: install → run → uninstall verified end to end"
+
   publish:
     name: publish (GitHub Release)
     # Only a tag publishes. Every package was already machine-validated by
     # the build job's "Validate the staged artifact" step, and install-test
     # has executed the release page's instructions end to end on all three
     # OSes — so what lands on the page is proven to work exactly as printed.
-    needs: [build, install-test]
+    needs: [build, install-test, installer-test]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
