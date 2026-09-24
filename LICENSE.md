@@ -2,7 +2,7 @@
 
 **Version 1.0 — September 24, 2026**
 
-Copyright (c) 2026 **Srihan Yeleswarapu** ("the Author"). All rights reserved.
+Copyright (c) 2026 Srihan Yeleswarapu ("the Author"). All rights reserved.
 
 This repository — the Lagom compiler, runtime, tooling, and documentation — is
 **source-available** software, not open-source. You may look at it and use it,
