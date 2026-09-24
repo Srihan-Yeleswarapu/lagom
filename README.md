@@ -49,6 +49,15 @@ The surface syntax is word-based and reads like structured English, but it is a 
 | [11 — Design review](docs/11-design-review.md) | Adversarial architecture review: 24 issue cards, stress tests, contradiction matrix, KEEP/MODIFY/INVESTIGATE/REJECT verdicts — **approved fixes applied** (grammar unified with additive-level args, method calls without dots, equality/send/locking semantics, text↔number, comptime staging, the Lagom Observability Model; decisions D-30…D-39) |
 | [12 — Consistency pass](docs/12-consistency-pass.md) | Post-fix re-review of the changed areas: checklist results, every applied change classified (contradiction fix / clarification / wording), zero new design decisions — **architecture frozen for M0** |
 
+## License
+
+Lagom is **source-available**, not open-source — see [LICENSE.md](LICENSE.md).
+
+- **You may:** view the source, use the compiler and tools to build and run your own Lagom programs (your `.lagom` files are entirely yours), and keep private backups.
+- **You may not, without written permission:** modify the compiler or its tooling, redistribute it (source or binary, including public forks with changes), or present it as your own work.
+
+Copyright © 2026 Srihan Yeleswarapu. Permission requests: srihan.yeleswarapu@gmail.com.
+
 Docs 01–10 are phase stubs by design: they scope what each specification must contain, bind the decisions already made in 00, and record open questions with decision dates. They fill in as each phase matures.
 
 ## Installing

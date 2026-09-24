@@ -20,7 +20,8 @@ members = [
 [workspace.package]
 version = "0.2.0"
 edition = "2021"
-license = "MIT OR Apache-2.0"
+license = "LicenseRef-Lagom-1.0"
+license-file = "LICENSE.md"
 
 [workspace.dependencies]
 lagom_diagnostics = { path = "crates/lagom_diagnostics" }
