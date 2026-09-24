@@ -1,0 +1,4 @@
+# Shell scripts must stay LF everywhere — a CRLF install.sh breaks `sh` on
+# macOS/Linux, and install.sh ships as a release asset (uploaded straight
+# from a checkout on any OS).
+*.sh text eol=lf

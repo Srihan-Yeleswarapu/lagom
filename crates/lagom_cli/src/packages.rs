@@ -14,7 +14,10 @@
 //! ```
 //! `lagom add <name> <path|version>` records the dependency; a *path*
 //! dependency (`lagom add helpers ../helpers`) vendors that directory's
-//! `.lagom` sources. A bare version records a registry dependency whose
+//! `.lagom` sources. A path source must be an existing directory with a
+//! `Lagom.toml` (bad invocations are rejected before anything is written);
+//! the one-arg path form (`lagom add ../helpers`) takes the dependency's
+//! name from that manifest. A bare version records a registry dependency whose
 //! sources are expected under `.lagom/<name>-<version>/` (fetched by the
 //! M3 registry tooling; `lagom add` verifies and records either way).
 
@@ -60,13 +63,66 @@ pub fn read_dependencies(dir: &Path) -> Vec<Dependency> {
     deps
 }
 
-/// Read (or synthesize) the manifest and add one dependency. A `path` that
-/// exists is recorded verbatim; otherwise the value is treated as a version.
+/// Read (or synthesize) the manifest and add one dependency.
+///
+/// Arguments are validated before anything is written, so a bad invocation
+/// never creates or touches a manifest: flags are rejected (recorded as-is
+/// they would become a dependency no build could vendor), a path source must
+/// be an existing package directory (one with a `Lagom.toml` — the manifest's
+/// `[package] name` is the key every build merges under), and the one-arg
+/// path form names the dependency from that manifest instead of trusting the
+/// raw argument. A non-path first argument keeps the bare registry-version
+/// reading.
 pub fn cmd_add(rest: &[String]) -> CliResult {
-    let Some(name) = rest.first() else {
+    if let Some(flag) = rest.iter().find(|a| a.starts_with('-')) {
+        return Err(CliError::Message(format!(
+            "`lagom add` takes no flags — `{flag}` would be recorded as a dependency named `{flag}`, which no build could ever vendor.\n\
+             Command-level flags belong before the command: try `lagom --help` (or `lagom help`).\n\
+             To record a dependency: `lagom add <name> <path|version>`."
+        )));
+    }
+    let Some(name_arg) = rest.first() else {
         return Err(CliError::Message("usage: lagom add <package> [path | version]".into()));
     };
-    let source = rest.get(1).cloned().unwrap_or_else(|| "0.1.0".to_string());
+    if rest.len() > 2 {
+        return Err(CliError::Message(format!(
+            "too many arguments: `lagom add` records one dependency as `<name> <path|version>` — got {}.\n\
+             Add the dependencies one at a time."
+        , rest.len())));
+    }
+    // Decide what was meant. A first argument that is a directory is the
+    // one-arg path form: the package's own manifest names the dependency.
+    // Anything else is `<name> <path|version>` or a bare registry version.
+    let (name, source) = if rest.len() == 1 && Path::new(name_arg).is_dir() {
+        let dir = Path::new(name_arg);
+        let pkg = manifest_name(dir).ok_or_else(|| missing_manifest(dir))?;
+        (pkg, name_arg.clone())
+    } else {
+        let name = name_arg.clone();
+        let source = rest.get(1).cloned().unwrap_or_else(|| "0.1.0".to_string());
+        // A source that names something on disk must be a vendorable package
+        // directory — recording anything else would merge to nothing. A
+        // source with a path separator that names nothing is a typo'd path,
+        // not a version; a separator-less source keeps the registry-version
+        // reading (`add mathutils 0.1.0`).
+        let dir = Path::new(&source);
+        if dir.exists() {
+            if !dir.is_dir() {
+                return Err(CliError::Message(format!(
+                    "`{}` is a file, not a package directory — a path dependency vendors a directory of `.lagom` sources.\n\
+                     Pass the directory that holds them: `lagom add {name} <dir>`.",
+                    source
+                )));
+            }
+            manifest_name(dir).ok_or_else(|| missing_manifest(dir))?;
+        } else if source.contains('/') || source.contains('\\') {
+            return Err(CliError::Message(format!(
+                "no such directory: `{source}` — a path dependency must name a directory that exists, or every build would merge from nothing.\n\
+                 If `{name}` is a registry package, record its version instead: `lagom add {name} 0.1.0`."
+            )));
+        }
+        (name, source)
+    };
     upsert_manifest()?;
     let mut deps = read_dependencies(Path::new("."));
     if deps.iter().any(|d| d.name == *name) {
@@ -77,6 +133,55 @@ pub fn cmd_add(rest: &[String]) -> CliResult {
     println!("added {name} ({source}) to {MANIFEST}");
     write_lock(&deps)?;
     Ok(())
+}
+
+/// The `[package] name` of the manifest in `dir`, if there is a declared one.
+fn manifest_name(dir: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(dir.join(MANIFEST)).ok()?;
+    let mut in_pkg = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line == "[package]" {
+            in_pkg = true;
+            continue;
+        }
+        if line.starts_with('[') {
+            in_pkg = false;
+            continue;
+        }
+        if in_pkg {
+            if let Some((key, value)) = line.split_once('=') {
+                if key.trim() == "name" {
+                    let value = value.trim().trim_matches('"').trim();
+                    if !value.is_empty() {
+                        return Some(value.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// A directory cannot be vendored: it has no manifest, so no declared name
+/// exists to record the dependency under. The fix creates one.
+fn missing_manifest(dir: &Path) -> CliError {
+    let name = dir
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "package".to_string());
+    CliError::Message(format!(
+        "`{}` has no {MANIFEST} manifest, so the package declares no name — vendoring it would merge sources under a key nobody declared.\n\
+         Create the manifest in that directory first:\n\
+         \n\
+             [package]\n\
+             name = \"{name}\"\n\
+         \n\
+             [dependencies]\n\
+         \n\
+         then re-run this command.",
+        dir.display()
+    ))
 }
 
 /// Remove one dependency from the manifest (and the lock).
@@ -128,11 +233,16 @@ fn write_dependencies(deps: &[Dependency]) -> CliResult {
             written = true;
             continue;
         }
-        if in_deps && (trimmed.is_empty() || trimmed.starts_with('[') || trimmed.contains('=')) {
+        // A new table header ends the dependencies table; dep lines and
+        // blank lines inside the table are replaced wholesale by the new
+        // set (consuming only the first line here used to re-append every
+        // later dep line, duplicating keys on the second `add`).
+        if in_deps && trimmed.starts_with('[') {
             in_deps = false;
-            if trimmed.starts_with('[') {
-                out.push(line.to_string());
-            }
+            out.push(line.to_string());
+            continue;
+        }
+        if in_deps && (trimmed.is_empty() || trimmed.contains('=')) {
             continue;
         }
         out.push(line.to_string());

@@ -1,12 +1,13 @@
 # Lagom __VERSION__
 
-One binary plus a bundled runtime. **No Rust toolchain, no source checkout** — download the file for your OS, unpack, run.
+One binary plus a bundled runtime. **No Rust toolchain, no source checkout** — download the file for your OS (macOS/Linux: just `install.sh` below), unpack, run.
 
 | File | For |
 |---|---|
 | `lagom-Windows.zip` | Windows 10/11 (x64) |
 | `lagom-Linux.tar.gz` | Linux (x64) |
 | `lagom-macOS.tar.gz` | macOS (Apple Silicon) |
+| `install.sh` | macOS & Linux — the one-file installer ("The easy way" below) |
 
 `sha256sums.txt` lets you verify what you downloaded (see below).
 
@@ -42,7 +43,15 @@ Type your name when it asks: `Who is it? Hello, you!` (Once PATH is set, plain `
 
 ## Install — macOS
 
-**The easy way** (from a clone of the repo): `sh install.sh` — it downloads the right package for your CPU, verifies the checksum, installs to `~/.lagom`, and adds the PATH line, all idempotently. `sh install.sh --uninstall` reverses it.
+**The easy way — no clone, no account:**
+
+1. Scroll down this page to **Assets** (the file list below the notes) and click **`install.sh`**. It downloads to your **Downloads** folder.
+2. Open **Terminal**: press **⌘ + Space**, type `Terminal`, press **Enter**.
+3. Type `sh ` (with a space after it) — **don't press Enter yet** — then drag `install.sh` from Downloads into the Terminal window and press **Enter**.
+4. You should see `==> sha256 OK` and then `==> installed to ~/.lagom (lagom …)`.
+5. Close Terminal, open it again, and try `lagom version`.
+
+It picks the right package for your Mac's chip, verifies the checksum, installs to `~/.lagom`, and adds the PATH line — all idempotently. `sh install.sh --uninstall` reverses it.
 
 Manual steps, if you prefer:
 
@@ -60,7 +69,7 @@ Manual steps, if you prefer:
 
 ## Install — Linux
 
-**The easy way** (from a clone of the repo): `sh install.sh` — same deal: verify, install to `~/.lagom`, PATH line, idempotent; `sh install.sh --uninstall` reverses it.
+**The easy way** — same as macOS: download **`install.sh`** from this page's **Assets**, open a Terminal (**Ctrl + Alt + T**), type `sh `, drag the file in, press Enter. `sh install.sh --uninstall` reverses it.
 
 Manual steps, if you prefer:
 

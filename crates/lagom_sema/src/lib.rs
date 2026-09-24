@@ -3866,7 +3866,13 @@ impl<'a> Checker<'a> {
                                 format!("This {sname} is missing its `{n}` field."),
                                 span,
                             )
-                            .with_fix(format!("a {sname} with {n} …")),
+                            .with_fix(format!("a {sname} with {n} …"))
+                            // Same invariant as the class-construction site:
+                            // the construction is only whole when every field
+                            // gets its value.
+                            .with_fix_why(
+                                "every field needs a value before anything can read the object — naming the missing field in the construction is what gives it that value",
+                            )
                         );
                     } else if count > 1 {
                         self.diags.push(

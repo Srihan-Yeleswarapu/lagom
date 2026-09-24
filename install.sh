@@ -8,8 +8,9 @@
 #   sh install.sh --dir ~/.lagom           install somewhere specific
 #   sh install.sh --uninstall              remove it again (folder + PATH line)
 #
-# One line from the release page does the same as this file (when the repo
-# is public):  curl -fsSL <raw install.sh URL> | sh
+# This script ships as a release asset: download install.sh from any
+# release page's Assets section and run `sh install.sh` — no clone.
+# (When the repo is public, curl -fsSL <raw install.sh URL> | sh works too.)
 #
 # What it does: pick the package for your OS, verify its sha256, unpack to
 # ~/.lagom, sanity-check the binary (mach-O/ELF header, `lagom version`),
@@ -85,9 +86,17 @@ case "$ARCH" in
 esac
 
 # ------------------------------------------------------------- get a release
+# Resolve "latest" once, up front: gh takes a TAG, not the word "latest"
+# (which would fail with "release not found"), and the API works authed
+# even on a private repo. curl-only users resolve inside fetch instead.
+if [ -z "$VERSION" ] && command -v gh >/dev/null 2>&1; then
+    VERSION="$(gh api "repos/$REPO/releases/latest" --jq .tag_name 2>/dev/null)" || VERSION=""
+fi
+
 fetch() { # fetch <remote-url> <local-path>  via gh (private repos) or curl
     if command -v gh >/dev/null 2>&1 \
-       && gh release download "${VERSION:-latest}" -R "$REPO" -p "$1" -O "$2" --clobber 2>/dev/null; then
+       && [ -n "$VERSION" ] \
+       && gh release download "$VERSION" -R "$REPO" -p "$1" -O "$2" --clobber 2>/dev/null; then
         return 0
     fi
     if command -v curl >/dev/null 2>&1; then

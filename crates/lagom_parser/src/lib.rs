@@ -1179,7 +1179,13 @@ impl<'src> Parser<'src> {
                     span,
                 )
                 .with_note("the call's name and its first argument read as one name — the comma arrived too late to split them")
-                .with_fix("wrap the call in parentheses: say (greet who), \"!\""),
+                // The why: parens close the greedy name-run where the call
+                // should end, so the comma separates two arguments again.
+                .with_fix_why("parentheses close the name-run where the call should end — after `say (greet who)` the comma separates two real arguments, instead of arriving after one name that swallowed the first")
+                .with_fix("wrap the call in parentheses: say (greet who), \"!\"")
+                // The why: parens close the greedy name-run where the call
+                // should end, so the comma separates two arguments again.
+                .with_fix_why("parentheses close the name-run where the call should end — `say (greet who)`, `\"!\"` is then two arguments the comma can separate, instead of one name that swallowed the first"),
             );
             Err(())
         } else {
@@ -1427,6 +1433,12 @@ impl<'src> Parser<'src> {
                     )
                     .with_fix(
                         "Write one of: repeat 10 times using i | repeat while <condition> | repeat for each item in <list>",
+                    )
+                    // The why: the three forms are the only loop shapes the
+                    // language defines — the header must pick one, or the
+                    // body has nothing to count, check, or walk.
+                    .with_fix_why(
+                        "the header must say which loop shape runs the body — how many times, until when, or over what — otherwise there is nothing to count, check, or walk",
                     )
                     .with_note(format!("found: {}", item_text(item))),
                 );

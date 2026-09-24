@@ -53,7 +53,7 @@ Docs 01–10 are phase stubs by design: they scope what each specification must 
 
 ## Installing
 
-Install from the [**latest release**](https://github.com/Srihan-Yeleswarapu/lagom/releases/latest): download the file for your OS below, and the release page gives you the exact steps for what to do with it — verify, unpack, run the day-one flow, and (optionally) add it to PATH. Every package is built and machine-verified by CI before the release publishes.
+Install from the [**latest release**](https://github.com/Srihan-Yeleswarapu/lagom/releases/latest): Windows grabs the zip below; macOS and Linux grab one file — **`install.sh`** — from the same page's **Assets** and run it. The release page gives you the exact steps for each OS — verify, unpack, run the day-one flow, and (optionally) add it to PATH. Everything is built and machine-verified by CI before the release publishes.
 
 | File | For |
 |---|---|
@@ -61,13 +61,15 @@ Install from the [**latest release**](https://github.com/Srihan-Yeleswarapu/lago
 | `lagom-Linux.tar.gz` | Linux (x64) |
 | `lagom-macOS.tar.gz` | macOS (Apple Silicon) |
 
-On macOS and Linux, the one-command installer does the same download-and-verify for you (from a clone of this repo):
+On macOS and Linux, this is the whole install:
 
-```
-sh install.sh
-```
+1. On the release page, scroll down to the **Assets** file list (just below the release notes) and click **`install.sh`** — it downloads to your **Downloads** folder.
+2. Open the **Terminal** app: on macOS press **⌘ + Space**, type `Terminal`, press Enter (on Linux: **Ctrl + Alt + T**).
+3. Type `sh ` (with a space after it), **don't press Enter yet**, then drag `install.sh` from Downloads into the Terminal window — its path appears by itself — and press Enter.
+4. You should see `==> sha256 OK`, then `==> installed to ~/.lagom (lagom …)`.
+5. Close Terminal, open it again, and try `lagom version`.
 
-It picks the package for your OS **and CPU architecture**, verifies its sha256, installs to `~/.lagom`, and adds one PATH line to your shell config — idempotently. `sh install.sh --uninstall` reverses it; `sh install.sh --version vX.Y.Z` pins a release.
+No clone, no Rust, no account needed — the script picks the right package for your CPU, verifies its checksum, installs to `~/.lagom`, and adds one PATH line to your shell config, idempotently. `sh install.sh --uninstall` reverses it; `sh install.sh --version vX.Y.Z` pins a release; `--dir` chooses another folder.
 
 ### From source (any OS)
 

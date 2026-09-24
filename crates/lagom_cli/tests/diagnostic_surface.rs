@@ -58,7 +58,11 @@ fn comma_form_send_is_rejected_with_the_page_fix() {
     assert!(text.contains("send <value> to <channel>"), "{text}");
     let (_, page) = lagom(&["explain", "E0391"]);
     assert!(page.contains("send <value> to <channel>"), "{page}");
-    // Same rule for `receive`.
+    // The page covers BOTH sides of the guard: the receive side once only
+    // had a live diagnostic, with no page proof (the audit's unexercised
+    // half of E0391).
+    assert!(page.contains("receive from <channel>"), "{page}");
+    // Same rule for `receive`: rejected at check time, same page.
     let (code, text) = check("make m equal to a channel of text\nsay receive(m)\n");
     assert_eq!(code, 1, "comma-form receive must not pass check:\n{text}");
     assert!(text.contains("missing the `from`"), "{text}");

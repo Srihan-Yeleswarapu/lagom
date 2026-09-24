@@ -2,7 +2,7 @@ name: release
 
 # Build the `lagom` CLI release artifacts: full matrix on every push to
 # main, tags, and manual dispatch. On a `v*` tag the publish job attaches
-# the three validated packages plus sha256 checksums to a GitHub Release
+# the three validated packages, sha256 checksums, and install.sh (the macOS/Linux one-file installer) to a GitHub Release
 # (doc 09's tooling story).
 #
 # install-test then plays the user: nothing but the downloaded package (no
@@ -386,6 +386,43 @@ jobs:
           ! grep -qF "$HOME/.lagom" "$RC"
           echo "install.sh: install → run → uninstall verified end to end"
 
+  installer-test-noclone:
+    name: install.sh downloaded from the release (ubuntu-latest)
+    # The macOS/Linux promise, played exactly as the README tells it: one
+    # file from the release page's Assets (install.sh), then `sh install.sh`
+    # — no clone, no checkout. Runs after publish so it downloads the
+    # install.sh asset off the release this tag just created; `gh` is used
+    # here because the repo is private (curl would 404 without auth).
+    needs: publish
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download install.sh from the release page (Assets)
+        shell: bash
+        run: |
+          mkdir -p "$HOME/Downloads" && cd "$HOME/Downloads"
+          gh release download "${{ github.ref_name }}" -R "${{ github.repository }}" -p install.sh -O install.sh --clobber
+          test -f install.sh
+
+      - name: sh install.sh (the whole flow)
+        shell: bash
+        run: |
+          cd "$HOME/Downloads"
+          sh install.sh
+          test -x "$HOME/.lagom/lagom"
+          "$HOME/.lagom/lagom" version
+
+      - name: Day one, then uninstall
+        shell: bash
+        run: |
+          cd "$(mktemp -d)"
+          "$HOME/.lagom/lagom" new hello
+          cd hello
+          echo you | "$HOME/.lagom/lagom" run --trace | grep "Hello, you!"
+          sh "$HOME/Downloads/install.sh" --uninstall
+          test ! -e "$HOME/.lagom"
+
   publish:
     name: publish (GitHub Release)
     # Only a tag publishes. Every package was already machine-validated by
@@ -419,17 +456,28 @@ jobs:
           sed 's/__VERSION__/'"$GITHUB_REF_NAME"'/g' \
             .github/release-notes-template.md > release-notes.md
 
+      - name: Verify install.sh is intact in the checkout
+        # install.sh itself ships as a release asset (the macOS/Linux
+        # one-file installer), so a corrupted or CRLF-mangled copy would
+        # poison every future install. Check the invariants before upload.
+        shell: bash
+        run: |
+          test -f install.sh
+          ! grep -q $'\r' install.sh
+          test "$(git check-attr eol -- install.sh | sed 's/.*eol: //')" = "lf"
+          sh -n install.sh
+
       - name: Create the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           # Explicit assets: the per-OS *.sha256 files stay out of the page
           # (the combined sha256sums.txt is the one checksum file users see).
-          gh release create "$GITHUB_REF_NAME" \
-            dist/lagom-Windows.zip dist/lagom-Linux.tar.gz dist/lagom-macOS.tar.gz dist/sha256sums.txt \
+          gh release create "$GITHUB_REF_NAME" install.sh \
+            dist/lagom-Windows.zip dist/lagom-Linux.tar.gz dist/lagom-macOS.tar.gz dist/sha256sums.txt install.sh \
             --repo "$GITHUB_REPOSITORY" \
             --title "Lagom $GITHUB_REF_NAME" \
             --notes-file release-notes.md \
             || gh release upload "$GITHUB_REF_NAME" \
-              dist/lagom-Windows.zip dist/lagom-Linux.tar.gz dist/lagom-macOS.tar.gz dist/sha256sums.txt \
-              --clobber --repo "$GITHUB_REPOSITORY"
+              dist/lagom-Windows.zip dist/lagom-Linux.tar.gz dist/lagom-macOS.tar.gz dist/sha256sums.txt install.sh \
+              install.sh --clobber --repo "$GITHUB_REPOSITORY"
