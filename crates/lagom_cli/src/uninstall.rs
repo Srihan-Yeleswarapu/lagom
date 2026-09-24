@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! `lagom uninstall` — remove an installed copy of the compiler (doc 09,
 //! the tooling story: an install story owes its users the reverse steps).
 //!

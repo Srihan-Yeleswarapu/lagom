@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! The canonical formatter (00 §26.3): 4-space indentation, zero-config,
 //! lossless in meaning (the AST round-trips through parse → format → parse
 //! to the same AST modulo spans). Idempotent by construction: the output is

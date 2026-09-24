@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! The fix-why sweep (M2's causal guarantee, whole-surface): every code the
 //! compiler actually emits is triggered by an intentionally broken program
 //! (probed against the real binary), rendered through the real student

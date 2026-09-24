@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! `lagom explain` — the teaching write-up for an error or lesson code.
 
 use super::args::{CliError, CliResult};

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! The shared front end (doc 08's stage discipline): source → parse →
 //! check → HIR → MIR → (verify). One module owns the pipeline so the stages
 //! are composed exactly once, and every backend — native, interpreter,

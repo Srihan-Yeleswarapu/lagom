@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! The native back end: source → object → executable. Owns everything about
 //! producing a binary — codegen, the runtime rlib search order (including
 //! the rustc-version stamp that keeps shipped rlibs honest), the rustc link

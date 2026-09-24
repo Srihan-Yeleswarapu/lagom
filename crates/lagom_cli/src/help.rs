@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! The help and version arms (`lagom help`, `lagom version`, and the bare
 //! invocation): the top-level usage text and the identity line (26.1 — the
 //! package version plus the build profile, stamped from the crate itself,
@@ -37,18 +40,35 @@ commands:
   profile [file]            run with the teaching profiler (call counts)
   words                     print the reserved words
   explain <code>            the teaching write-up for an error code
+  license                   print the license terms (the Lagom License)
 "
     .to_string()
 }
 
-/// `lagom version` / `--version` / `-V`.
+/// `lagom version` / `--version` / `-V`. The identity line plus the
+/// copyright line: every invocation of every copy of the compiler —
+/// official or redistributed — prints the Author's attribution, so no
+/// matter where a binary ends up, the name travels with it.
 pub fn cmd_version() -> CliResult {
     println!("{VERSION_LINE}");
+    if env!("LAGOM_BUILD_COMMIT").is_empty() {
+        println!("built from a local checkout (no commit stamped)");
+    } else {
+        println!(
+            "built from commit {} (source: https://github.com/Srihan-Yeleswarapu/lagom)",
+            env!("LAGOM_BUILD_COMMIT")
+        );
+    }
+    println!(
+        "Copyright (c) 2026 Srihan Yeleswarapu — source available under the Lagom License."
+    );
+    println!("run `lagom license` for the full terms.");
     Ok(())
 }
 
 /// `lagom help` / `--help` / `-h`.
 pub fn cmd_help() -> CliResult {
     print!("{}", usage());
+    print!("\nCopyright (c) 2026 Srihan Yeleswarapu — the Lagom License (`lagom license`).\n");
     Ok(())
 }

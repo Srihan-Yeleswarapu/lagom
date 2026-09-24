@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! The Lagom lexer.
 //!
 //! Spec anchor: 00 §7.0 (lexical rules), §7.15 (phrase-tokens), doc 02 §2, docs/13 §1–2.

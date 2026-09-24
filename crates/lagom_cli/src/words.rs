@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! The reserved words (7.0.3: "user names may not collide with them") —
 //! printed by `lagom words`. Kept in step with the lexer's keyword table
 //! (docs/13's M0 grammar plus the frozen phrase-tokens of 7.15).

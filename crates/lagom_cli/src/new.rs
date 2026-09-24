@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! `lagom new` — start a new Lagom project directory.
 
 use std::path::Path;

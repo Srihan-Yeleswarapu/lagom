@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! The interpreter back end (tests; LOM failure reports): run the program's
 //! script body or its `test` blocks on the MIR, in dev mode — the LOM probes
 //! are live and the failure report is produced on unhandled failure. Shares

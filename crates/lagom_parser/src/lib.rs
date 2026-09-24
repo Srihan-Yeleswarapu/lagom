@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! The Lagom parser (M0 subset).
 //!
 //! Spec anchor: 00 §7.15 (normative grammar), docs/13 §1–2 (M0 extract).

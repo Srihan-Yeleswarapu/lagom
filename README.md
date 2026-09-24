@@ -108,6 +108,7 @@ lagom run
 | `lagom check [file]` | parse and check; show diagnostics |
 | `lagom fmt [file] [--write]` | canonically format (print, or rewrite with `--write`) |
 | `lagom explain <code>` | the teaching write-up for an error code |
+| `lagom license` | print the license terms (the Lagom License) |
 | `lagom words` | the reserved words |
 | `lagom play` | the REPL — evaluate line by line, teaching mode shows each new binding with its type |
 | `lagom doc [file]` | render `##` doc comments to markdown; `--check` verifies `>>>` examples |

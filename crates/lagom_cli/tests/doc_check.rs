@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! `lagom doc --check` regression tests (doc 09, decision D-40): every
 //! example form the docs use must check, and every unsupported or wrong pin
 //! must fail loudly — never a false pass. The contract lives in doc 09

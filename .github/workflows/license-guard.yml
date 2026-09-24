@@ -1,0 +1,84 @@
+name: license-guard
+
+# The attribution tripwire. Fails any change that strips the copyright
+# from a source file, deletes LICENSE.md, or removes attribution from
+# install.sh — so nobody (including a future contributor) can quietly
+# detach the Author's name from the project through this repository
+# (LICENSE.md §2 forbids removing the notices; this enforces it
+# mechanically). Binary-level attribution is asserted separately by
+# release.yml's smoke-test step on every push to main.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: attribution intact
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: LICENSE.md exists and carries the copyright
+        shell: bash
+        run: |
+          test -f LICENSE.md || { echo "::error::LICENSE.md is missing"; exit 1; }
+          grep -q "Copyright (c) 2026 Srihan Yeleswarapu" LICENSE.md \
+            || { echo "::error::LICENSE.md lost the copyright notice"; exit 1; }
+
+      - name: Every Rust source file carries the header
+        shell: bash
+        run: |
+          missing=0
+          while IFS= read -r f; do
+            if ! head -n 3 "$f" | grep -q "Copyright (c) 2026 Srihan Yeleswarapu"; then
+              echo "::error file=$f::missing the copyright header"
+              missing=1
+            fi
+          done < <(find crates -name '*.rs')
+          exit "$missing"
+
+      - name: install.sh carries the notice
+        shell: bash
+        run: |
+          head -n 5 install.sh | grep -q "Copyright (c) 2026 Srihan Yeleswarapu" \
+            || { echo "::error file=install.sh::the copyright notice was removed"; exit 1; }
+
+      - name: The version output keeps its copyright line
+        shell: bash
+        run: |
+          grep -q "Copyright (c) 2026 Srihan Yeleswarapu" crates/lagom_cli/src/help.rs \
+            || { echo "::error file=crates/lagom_cli/src/help.rs::the version output lost the copyright line"; exit 1; }
+          grep -q "LAGOM_BUILD_COMMIT" crates/lagom_cli/src/help.rs \
+            || { echo "::error file=crates/lagom_cli/src/help.rs::the provenance line was removed"; exit 1; }
+
+      - name: The `lagom license` command stays wired
+        shell: bash
+        run: |
+          test -f crates/lagom_cli/src/license.rs \
+            || { echo "::error::crates/lagom_cli/src/license.rs was deleted"; exit 1; }
+          grep -q 'include_str!("../../../LICENSE.md")' crates/lagom_cli/src/license.rs \
+            || { echo "::error file=crates/lagom_cli/src/license.rs::the embedded license was unwound"; exit 1; }
+          grep -q '"license" => license::cmd_license()' crates/lagom_cli/src/main.rs \
+            || { echo "::error file=crates/lagom_cli/src/main.rs::the license command was unhooked"; exit 1; }
+
+      - name: Nothing removed a header in this change
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+          if git diff "$BASE" "$HEAD" -- crates install.sh LICENSE.md \
+             | grep -q '^-// Copyright (c) 2026 Srihan Yeleswarapu'; then
+            echo "::error::this change removes a copyright line — forbidden by LICENSE.md §2"
+            exit 1
+          fi
+          if git diff "$BASE" "$HEAD" --stat -- LICENSE.md | grep -q .; then
+            echo "note: LICENSE.md changed in this PR — review that the copyright and §2 remain intact"
+          fi

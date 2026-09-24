@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! `lagom uninstall` behavior, tested against the real binary (doc 09's
 //! install story: the uninstall is part of the product, so it is gated like
 //! one). Plan-only default, `--yes` execution, the refusals (source

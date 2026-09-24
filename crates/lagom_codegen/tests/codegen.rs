@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! Code-generation tests (22.3, one-IR-many-backends): every M0 language
 //! area must lower through LIR into a Cranelift object without error, in
 //! both dev and release modes.

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! The Lagom semantic analyzer (M0 subset).
 //!
 //! Spec anchors: 00 §7.0.3 (greedy multi-word names), §7.9 (R-4 call grammar),

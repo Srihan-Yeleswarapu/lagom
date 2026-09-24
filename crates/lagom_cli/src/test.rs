@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! `lagom test` — run the file's `test` blocks on the interpreter.
 
 use super::args::{read_source, render_failure, source_path, CliError, CliResult};

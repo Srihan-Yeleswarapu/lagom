@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! The diagnostic surface must be coherent: a live error's page exists
 //! (E0390 once had its prose under the wrong key, so `lagom explain E0390`
 //! said "no write-up yet"), a program that cannot run is rejected rather

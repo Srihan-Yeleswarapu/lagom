@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! The renderer's fix-why footer must be a cause, never a tautology: the
 //! fallback (when a diagnostic carries no explicit fix-why) prints the rule
 //! only when it is not a word-for-word restatement of the error line.

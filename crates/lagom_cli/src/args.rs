@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! Shared CLI infrastructure: the error type every command returns, the
 //! source-file argument convention, flag reading, stdin capture, and the
 //! one place a front-end failure becomes user output.

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! `lagom fmt` — canonically format; print, or rewrite with `--write`.
 
 use super::args::{has_flag, read_source, source_path, CliError, CliResult};

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! Diagnostic core: spans, diagnostics, error codes, student-mode rendering.
 //!
 //! Spec anchor: 00 §21.4 (diagnostics pipeline), §26.2 (teaching diagnostics).

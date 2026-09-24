@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! `lagom play` — the REPL (00 §26.4, doc 09 §18): incremental evaluation on
 //! the interpreter backend, teaching mode showing each new binding with its
 //! type and value, and `#replay` to re-run the accepted history

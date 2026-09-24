@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! The `lagom` CLI (M0) — the Go single-binary model (00 §26.1).
 //!
 //! `main.rs` is dispatch only: arg parsing, the command table, and the
@@ -16,6 +19,7 @@ mod explain_cmd;
 mod fmt;
 mod fmt_cmd;
 mod help;
+mod license;
 mod new;
 mod packages;
 mod play;
@@ -75,6 +79,7 @@ fn dispatch(args: &[String]) -> Result<(), CliError> {
         "uninstall" => uninstall::cmd_uninstall(rest),
         "explain" => explain_cmd::cmd_explain(rest),
         "version" | "--version" | "-V" => help::cmd_version(),
+        "license" => license::cmd_license(),
         "help" | "--help" | "-h" => help::cmd_help(),
         other => Err(CliError::Message(format!(
             "unknown command `{other}`.\n\n{}",
