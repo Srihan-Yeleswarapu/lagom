@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! The Lagom HIR (desugared, still high-level) — M0 subset.
 //!
 //! Spec anchor: 00 §22.1, §21.1 (pipeline stage 5), doc 08 §2 (the HIR

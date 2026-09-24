@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! The Lagom Observability Model (§26.5) — the M0 public surface.
 //!
 //! Spec anchor: 00 §26.5 (the event ring, provenance records, and the

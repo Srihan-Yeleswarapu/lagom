@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! `lagom run` and `lagom build`: the two native-backend commands. They
 //! share one helper for the source → (stem, dev) → executable plumbing.
 

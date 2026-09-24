@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! The Lagom interpreter (M0) — the reference executor over MIR.
 //!
 //! Spec anchor: doc 08 (the interpreter is the M0 execution backend),

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! The Lagom driver (M0) — pipeline orchestration (doc 08 §5, 21.5).
 //!
 //! Three modules, one concern each:

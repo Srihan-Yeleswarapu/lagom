@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! The Lagom runtime (M0 surface) — linked into every native executable.
 //!
 //! Spec anchors: 21.1 (the `lagom_rt` row: "format, text/list boxing, i64

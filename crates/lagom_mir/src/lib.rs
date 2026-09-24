@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! The Lagom MIR (semantic core) — M0 subset.
 //!
 //! Spec anchor: 00 §22.2 (the semantic core), §22.4 (verifier; debug/release

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! M2 diagnostic acceptance tests: intentionally broken programs, each
 //! asserting that the explanation names the *actual root cause* — and that
 //! the suggested fix addresses it (the fix-why footer makes the causal

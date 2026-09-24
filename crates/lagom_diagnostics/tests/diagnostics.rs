@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! Diagnostics tests (26.2, the differentiator): the five-part student
 //! diagnostic — what, where (line + quoted source), why, fix, concept — and
 //! the expert mode. Every diagnostic the compiler emits must render

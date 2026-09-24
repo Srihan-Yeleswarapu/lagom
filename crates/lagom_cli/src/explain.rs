@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! `lagom explain <code>` — the teaching write-ups (00 §26.1/§26.2: docs in
 //! the compiler, so explanations ship with the version that emits them).
 //! M0 covers the concepts every diagnostic links to; the code index below is

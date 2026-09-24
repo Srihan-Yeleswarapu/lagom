@@ -29,6 +29,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      # Provenance: every release binary records the exact commit it was
+      # built from, printed by `lagom version` — a redistributed copy
+      # carries its origin and the copyright line with it.
+      LAGOM_BUILD_COMMIT: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
 
@@ -58,6 +63,10 @@ jobs:
           "$LAGOM" version
           "$LAGOM" check validation/smoke.lagom
           "$LAGOM" fmt validation/smoke.lagom
+          # Attribution invariants: the binary carries the provenance and
+          # the copyright line, and the license travels inside it.
+          "$LAGOM" version | grep -q "Copyright (c) 2026 Srihan Yeleswarapu"
+          "$LAGOM" license | grep -q "Copyright (c) 2026 Srihan Yeleswarapu"
 
       - name: Stage the artifact (Windows)
         # Bash staging (pwsh silently skipped the stamp write once), but
@@ -78,6 +87,7 @@ jobs:
             mkdir -p stage/lib/lagom/src/$c
             cp crates/$c/src/lib.rs stage/lib/lagom/src/$c/lib.rs
           done
+          cp LICENSE.md stage/
       - name: Zip the staged artifact (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -96,6 +106,7 @@ jobs:
             mkdir -p stage/lib/lagom/src/$c
             cp crates/$c/src/lib.rs stage/lib/lagom/src/$c/lib.rs
           done
+          cp LICENSE.md stage/
           tar czf lagom-${{ runner.os }}.tar.gz -C stage .
 
       - name: Checksum the package (sha256)
@@ -434,6 +445,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -449,6 +461,19 @@ jobs:
           sha256sum lagom-Windows.zip lagom-Linux.tar.gz lagom-macOS.tar.gz > sha256sums.txt
           cat sha256sums.txt
 
+      - name: Sign the packages (build provenance attestation)
+        # Cryptographic provenance anyone can verify offline:
+        # `gh attestation verify <file> -R Srihan-Yeleswarapu/lagom`
+        # proves a package was built by this workflow from this commit.
+        # A tampered or re-packaged copy fails verification — that failure
+        # is the evidence a takedown needs.
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/lagom-Windows.zip
+            dist/lagom-Linux.tar.gz
+            dist/lagom-macOS.tar.gz
+
       - name: Build the release notes
         # Stamp the template with the tag name (the template's __VERSION__
         # marker) so every release ships the same install guide.
@@ -463,6 +488,8 @@ jobs:
         shell: bash
         run: |
           test -f install.sh
+          test -f LICENSE.md
+          grep -q "Copyright (c) 2026 Srihan Yeleswarapu" LICENSE.md
           ! grep -q $'\r' install.sh
           test "$(git check-attr eol -- install.sh | sed 's/.*eol: //')" = "lf"
           sh -n install.sh
@@ -473,11 +500,11 @@ jobs:
         run: |
           # Explicit assets: the per-OS *.sha256 files stay out of the page
           # (the combined sha256sums.txt is the one checksum file users see).
-          gh release create "$GITHUB_REF_NAME" install.sh \
-            dist/lagom-Windows.zip dist/lagom-Linux.tar.gz dist/lagom-macOS.tar.gz dist/sha256sums.txt install.sh \
+          gh release create "$GITHUB_REF_NAME" install.sh LICENSE.md \
+            dist/lagom-Windows.zip dist/lagom-Linux.tar.gz dist/lagom-macOS.tar.gz dist/sha256sums.txt \
             --repo "$GITHUB_REPOSITORY" \
             --title "Lagom $GITHUB_REF_NAME" \
             --notes-file release-notes.md \
             || gh release upload "$GITHUB_REF_NAME" \
-              dist/lagom-Windows.zip dist/lagom-Linux.tar.gz dist/lagom-macOS.tar.gz dist/sha256sums.txt install.sh \
-              install.sh --clobber --repo "$GITHUB_REPOSITORY"
+              dist/lagom-Windows.zip dist/lagom-Linux.tar.gz dist/lagom-macOS.tar.gz dist/sha256sums.txt \
+              install.sh LICENSE.md --clobber --repo "$GITHUB_REPOSITORY"

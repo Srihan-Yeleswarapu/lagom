@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! `lagom profile` (doc 09 §6, M2 slice): run the program on the interpreter
 //! with the LOM ring live and report where the calls went — per-function
 //! call counts from the ring's function events, plus the compile-time

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! End-to-end integration tests (§33.1's "corpus green"): the full pipeline
 //! from Lagom source through the driver to a native executable, then the
 //! observed output. Only frozen-spec-guaranteed behavior is asserted.

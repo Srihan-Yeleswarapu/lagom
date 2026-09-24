@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! `lagom add` argument validation (doc 09 §8): every bad invocation fails
 //! loudly *before* anything is written — an `add` that errors must never
 //! leave a `Lagom.toml`/`Lagom.lock` behind (a stray `add --help` once

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! The starter source `lagom new` writes.
 
 pub const NEW_TEMPLATE: &str = r#"# A brand-new Lagom program.

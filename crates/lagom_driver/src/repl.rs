@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! The `lagom play` session engine (00 §26.4, doc 09 §18): incremental
 //! evaluation over the interpreter backend — the one evaluator, reused.
 //!

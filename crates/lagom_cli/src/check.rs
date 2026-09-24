@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! `lagom check` — parse and check; show diagnostics.
 
 use super::args::{read_source, render_failure, source_path, CliResult};

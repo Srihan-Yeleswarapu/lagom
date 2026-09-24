@@ -1,4 +1,7 @@
 #!/bin/sh
+# Copyright (c) 2026 Srihan Yeleswarapu.
+# The Lagom License (LICENSE.md) travels with the installer and with the
+# package it unpacks; installing Lagom does not change its terms.
 # ---install.sh-help-start--- (the `--help` output is exactly this block)
 # ---------------------------------------------------------------------------
 # Lagom installer & uninstaller (macOS + Linux; Windows uses the release zip).
@@ -165,7 +168,8 @@ if ! "$DIR/lagom" version >/dev/null 2>&1; then
     fi
     "$DIR/lagom" version >/dev/null 2>&1 || { echo "error: installed but '$DIR/lagom version' would not run — see the release page's Troubleshooting." >&2; exit 1; }
 fi
-echo "==> installed to $DIR ($("$DIR/lagom" version))" >&2
+# head -n 1: the version output now carries the copyright line; the summary stays one line.
+echo "==> installed to $DIR ($("$DIR/lagom" version | head -n 1))" >&2
 
 # -------------------------------------------------------------- PATH setup
 PATH_LINE="export PATH=\"\$PATH:$DIR\""

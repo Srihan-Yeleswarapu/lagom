@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! Stamp the cargo profile directory name so the driver finds the runtime
 //! rlib built in the *matching* profile (release CLI → release runtime).
 

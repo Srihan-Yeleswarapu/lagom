@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! The package workflow (00 §20.2's `lagom add`, doc 09 §8): a project
 //! records its dependencies in `Lagom.toml`, pins resolved versions in
 //! `Lagom.lock`, and `lagom build`/`lagom run` merge each dependency's

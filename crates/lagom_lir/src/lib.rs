@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! The Lagom LIR (backend-neutral machine shape) — M0 subset.
 //!
 //! Spec anchor: 00 §22.3 (LIR: "backend-neutral machine shape"), §23 (the

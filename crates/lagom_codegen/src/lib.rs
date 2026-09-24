@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Srihan Yeleswarapu.
+// Source available under the Lagom License (LICENSE.md).
+
 //! The Lagom Cranelift backend (M0) — LIR → machine-code object file.
 //!
 //! Spec anchors: 00 §23.1/§23.2 (Cranelift for instant builds; one IR, many
