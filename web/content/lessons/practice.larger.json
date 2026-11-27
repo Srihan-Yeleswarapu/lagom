@@ -1,0 +1,46 @@
+{
+  "id": "practice.larger",
+  "title": "Pick the larger of two numbers",
+  "objective": "Write a function that compares two numbers with if and gives back the larger one.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "A function can compare its inputs and give back the one it needs. Put the case you want first inside an if, and give back the other value after it. The first gives back that runs ends the function."
+    },
+    {
+      "type": "example",
+      "title": "The larger number",
+      "code": "function larger\n    takes number called a\n    takes number called b\n    returns a number\n    if a is greater than b\n        gives back a\n    gives back b\n\nsay larger 3 and 8\nsay larger 10 and 2\n",
+      "inputMode": "none",
+      "expected": [
+        "8",
+        "10"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "practice.larger.branch",
+      "prompt": "larger 3 and 8 prints 3 because the function never compares its inputs. Make it print 8.",
+      "starter": "function larger\n    takes number called a\n    takes number called b\n    returns a number\n    gives back a\n\nsay larger 3 and 8\n",
+      "solution": "function larger\n    takes number called a\n    takes number called b\n    returns a number\n    if a is greater than b\n        gives back a\n    gives back b\n\nsay larger 3 and 8\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints 8",
+          "kind": "output",
+          "expect": [
+            "8"
+          ]
+        }
+      ]
+    }
+  ]
+}

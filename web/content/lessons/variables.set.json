@@ -1,0 +1,66 @@
+{
+  "id": "variables.set",
+  "title": "Change a value with set",
+  "objective": "Give a changing variable a new value with set, and understand why a normal make cannot be changed.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "A variable made with make keeps its first value. To change a value later, make the variable changing, and use set to give it a new value. Write set, the name, to, and the new value. The new value replaces the old one, and it does not add to it."
+    },
+    {
+      "type": "example",
+      "title": "Replace a value",
+      "code": "make changing score equal to 0\nset score to 10\nsay score\nmake changing name equal to \"old\"\nset name to \"new\"\nsay name\nmake changing found equal to false\nset found to true\nsay found\n",
+      "inputMode": "none",
+      "expected": [
+        "10",
+        "new",
+        "true"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "The new value must be the same kind as the old one. A number stays a number, and text stays text. Setting a value of a different kind is a compile error, so the compiler stops before the program runs. Setting a name that was never made changing is also a compile error."
+    },
+    {
+      "type": "example",
+      "title": "The value can come from another variable",
+      "code": "make changing level equal to 1\nmake bumped equal to level plus 1\nset level to bumped\nsay \"Level {level}\"\n",
+      "inputMode": "none",
+      "expected": [
+        "Level 2"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "variables.set.score",
+      "prompt": "The score starts at 0 but should be 10 by the time it prints. Make it print 10.",
+      "starter": "make changing score equal to 0\nsay score\n",
+      "solution": "make changing score equal to 0\nset score to 10\nsay score\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "uses-set",
+          "description": "It uses set score to 10",
+          "kind": "source",
+          "matches": "^\\s*set score to 10\\s*$"
+        },
+        {
+          "id": "output",
+          "description": "It prints 10",
+          "kind": "output",
+          "expect": [
+            "10"
+          ]
+        }
+      ]
+    }
+  ]
+}

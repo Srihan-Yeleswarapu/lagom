@@ -1,0 +1,129 @@
+{
+  "make": {
+    "prefix": "make",
+    "body": [
+      "make ${1:name} equal to ${2:value}"
+    ],
+    "description": "Bind an immutable name"
+  },
+  "make-changing": {
+    "prefix": "make-changing",
+    "body": [
+      "make changing ${1:name} equal to ${2:value}"
+    ],
+    "description": "Bind a mutable name"
+  },
+  "function": {
+    "prefix": "function",
+    "body": [
+      "function ${1:name}",
+      "    takes ${2:type} called ${3:argument}",
+      "    returns ${4:type}",
+      "    ${0:body}"
+    ],
+    "description": "A capability-clause function"
+  },
+  "if": {
+    "prefix": "if",
+    "body": [
+      "if ${1:condition} then",
+      "    ${0:body}"
+    ],
+    "description": "A guarded block"
+  },
+  "if-otherwise": {
+    "prefix": "if-otherwise",
+    "body": [
+      "if ${1:condition} then",
+      "    ${2:body}",
+      "otherwise",
+      "    ${0:other}"
+    ],
+    "description": "A guarded block with otherwise"
+  },
+  "repeat": {
+    "prefix": "repeat",
+    "body": [
+      "repeat ${1:count} times using ${2:i}",
+      "    ${0:body}"
+    ],
+    "description": "Counted loop"
+  },
+  "repeat-each": {
+    "prefix": "repeat-each",
+    "body": [
+      "repeat for each ${1:row} in ${2:collection}",
+      "    ${0:body}"
+    ],
+    "description": "Loop over a collection"
+  },
+  "while": {
+    "prefix": "while",
+    "body": [
+      "while ${1:condition}",
+      "    ${0:body}"
+    ],
+    "description": "Conditional loop"
+  },
+  "attempt": {
+    "prefix": "attempt",
+    "body": [
+      "attempt ${1:call} if it fails then",
+      "    say \"the problem: ${2:problem}\"",
+      "otherwise",
+      "    ${0:body}"
+    ],
+    "description": "Handle a failure as a value"
+  },
+  "structure": {
+    "prefix": "structure",
+    "body": [
+      "structure ${1:name}",
+      "    has ${2:field} of type ${3:type}"
+    ],
+    "description": "A data structure with fields"
+  },
+  "kind": {
+    "prefix": "kind",
+    "body": [
+      "kind ${1:name}",
+      "    is a ${2:variant} with ${3:field} of type ${4:type}",
+      "    is a ${5:variant2}"
+    ],
+    "description": "A kind with variants for matching"
+  },
+  "match": {
+    "prefix": "match",
+    "body": [
+      "match ${1:value}",
+      "    when a ${2:variant} with ${3:field}",
+      "        ${0:body}"
+    ],
+    "description": "Pattern-match a kind"
+  },
+  "test": {
+    "prefix": "test",
+    "body": [
+      "test \"${1:name}\"",
+      "    check that ${2:condition}"
+    ],
+    "description": "A test block"
+  },
+  "class": {
+    "prefix": "class",
+    "body": [
+      "class ${1:name}",
+      "    has ${2:field} of type ${3:type}",
+      "",
+      "    can ${4:method}",
+      "        ${0:body}"
+    ],
+    "description": "A class with a field and a method"
+  },    "say": {
+    "prefix": "say",
+    "body": [
+      "say \"${0:text}\""
+    ],
+    "description": "Print a line"
+  }
+}

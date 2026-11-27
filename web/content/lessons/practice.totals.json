@@ -1,0 +1,45 @@
+{
+  "id": "practice.totals",
+  "title": "Add up a list",
+  "objective": "Keep a running total in a changing name, and add each item in a list to it inside a loop.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "Many programs keep a running total. Make the total changing, so it can grow, then add each item to it inside a repeat for each loop. The total must start at 0, because a total starts from nothing before any item is added."
+    },
+    {
+      "type": "example",
+      "title": "Total the scores",
+      "code": "make changing total equal to 0\nmake scores equal to a list of 1, 2, 3\nrepeat for each s in scores\n    increase total by s\nsay total\n",
+      "inputMode": "none",
+      "expected": [
+        "6"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "practice.totals.add",
+      "prompt": "The loop only shows each score, so the total stays 0. Make it print 15.",
+      "starter": "make changing total equal to 0\nmake scores equal to a list of 4, 5, 6\nrepeat for each s in scores\n    say s\nsay total\n",
+      "solution": "make changing total equal to 0\nmake scores equal to a list of 4, 5, 6\nrepeat for each s in scores\n    increase total by s\nsay total\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints 15",
+          "kind": "output",
+          "expect": [
+            "15"
+          ]
+        }
+      ]
+    }
+  ]
+}

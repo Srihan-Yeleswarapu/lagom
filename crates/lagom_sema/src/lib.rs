@@ -34,6 +34,17 @@ use lagom_ast::{Accessor, BinOp, CallExpr, Expr, Name, Prep, Program, Repeat, St
 use lagom_diagnostics::{Diagnostic, Diagnostics, Span};
 
 // ---------------------------------------------------------------------------
+// 11.3's built-in iteration protocol
+// ---------------------------------------------------------------------------
+
+/// The protocol name a class claims: `class countdown does iterable`.
+const ITERABLE_IFACE: &str = "iterable";
+
+/// The one requirement: a method that hands out the next value (as an
+/// option — `nothing` is the done marker) or says the walk is over.
+const ITERABLE_METHOD: &str = "give next";
+
+// ---------------------------------------------------------------------------
 // Public surface — what HIR/MIR/codegen consume
 // ---------------------------------------------------------------------------
 
@@ -56,6 +67,13 @@ pub struct CheckedProgram {
     /// constrained parameters (the 10.6 vtable). Entries are per class that
     /// claims the interface, in sorted class order.
     pub iface_dispatch: Vec<(String, Vec<(String, String)>)>,
+    /// Use span → declaration span, for the name uses the checker resolved
+    /// to a *whole-run binding* (7.0.3's common case). The editor story's
+    /// goto-def reads this: hover/goto on a multi-word name jumps to its
+    /// `make`/`takes`/loop binding. Declared at `make`, `takes`, and the
+    /// loop clause; the LSP server adds the call/callee fallback from
+    /// `callee_spans` and the item-table index itself.
+    pub resolved_uses: HashMap<Span, Span>,
 }
 
 #[derive(Debug)]
@@ -164,6 +182,10 @@ pub enum CheckedStmtKind {
         item: String,
         index: Option<String>,
         iter: TypedExpr,
+        /// 11.3: `Some(elem)` when the walk is a class-iterable poll —
+        /// the source yields one value per `give next` call and `nothing`
+        /// ends it; `None` walks a list/map by position as at M0.
+        poll_elem: Option<Type>,
         body: Vec<CheckedStmt>,
     },
     Stop,
@@ -533,6 +555,13 @@ pub struct Checker<'a> {
     /// Call spans that are flowing *reads* (`name of p`, `things at 2`) —
     /// rebuilt as ordinary calls, but classified precisely for HIR.
     read_spans: HashSet<Span>,
+    /// Use span → declaration span (the editor's goto-def edge), recorded
+    /// where the checker resolves a whole-run name to its binding.
+    resolved_uses: HashMap<Span, Span>,
+    /// Displayed name → declaration span for callables — the checker maps
+    /// a *function value* use to its declaration through this, so
+    /// `make f equal to area` jumps to `area` and rename finds its uses.
+    function_spans: HashMap<String, Span>,
     /// Checked block-lambda bodies (11.1), keyed by the lambda's span — the
     /// side table HIR reads to lower the block form into its synthetic
     /// function (§11.1: Lagom's lambda is a full function).
@@ -588,6 +617,8 @@ pub fn check(program: &Program, src: &str) -> CheckedProgram {
         callee_spans: HashMap::new(),
         read_spans: HashSet::new(),
         lambda_bodies: HashMap::new(),
+        resolved_uses: HashMap::new(),
+        function_spans: HashMap::new(),
         diags: Diagnostics::new(),
     };
     cx.install_builtins();
@@ -705,6 +736,28 @@ impl<'a> Checker<'a> {
                 },
             );
         }
+        // Network ops (M2's sockets/HTTP surface): same shape as the file
+        // ops. The can-fail set matches the dispatch below (`port` and
+        // `close` cannot fail).
+        for (name, nparams, fails) in [
+            ("open listener", 1usize, true),
+            ("open connection", 2usize, true),
+            ("expect connection", 1usize, true),
+            ("put", 2usize, true),
+            ("take", 1usize, true),
+            ("port", 1usize, false),
+            ("close", 1usize, false),
+        ] {
+            self.functions.insert(
+                name.to_string(),
+                Callable {
+                    params: vec![Type::Error; nparams],
+                    ret: Type::Error,
+                    can_fail: fails,
+                    origin: Origin::Standard,
+                },
+            );
+        }
         self.functions.insert(
             "file exists".to_string(),
             Callable {
@@ -813,12 +866,26 @@ impl<'a> Checker<'a> {
                 _ => {}
             }
         }
+        // 11.3's built-in iteration protocol: `iterable` behaves like a
+        // registered interface whose only requirement is `give next`, so a
+        // class can `does iterable` and every claim-validation path is the
+        // ordinary one. The protocol's element type comes from the class's
+        // own `give next` (checked here, before bodies). The spec's
+        // "actually a value or done" phantom stays an open question — M2's
+        // executable subset reads the option surface (`a T?`): `nothing` is
+        // the done marker.
+        self.interfaces
+            .entry(ITERABLE_IFACE.to_string())
+            .or_insert_with(|| vec![ITERABLE_METHOD.to_string()]);
         // 10.5/10.6 header validation (after all signatures exist):
         // `extends` targets exist, no inheritance cycles, and every `does`
         // claim is satisfied by the class's methods, inherited methods, or
         // the interface's own defaults. Inherited fields are prefixed into
         // the subclass's field table here (backends index positionally).
         self.validate_class_headers();
+        // 11.3: the built-in protocol's shape checks — the seeded `iterable`
+        // interface names the requirement, and these checks own the shape.
+        self.validate_iterable_protocol();
         // 12.3: the `iface <I> <m>` dispatch callables — the callee shape the
         // checker rewrites body-side method calls on constrained parameters
         // to. Signature: the interface's own declaration, but the receiver
@@ -1025,6 +1092,7 @@ impl<'a> Checker<'a> {
             read_spans: std::mem::take(&mut self.read_spans),
             lambda_bodies: std::mem::take(&mut self.lambda_bodies),
             iface_dispatch: self.iface_dispatch_tables(),
+            resolved_uses: std::mem::take(&mut self.resolved_uses),
         }
     }
 
@@ -1283,7 +1351,7 @@ impl<'a> Checker<'a> {
             return;
         }
         self.functions.insert(
-            name,
+            name.clone(),
             Callable {
                 params,
                 ret,
@@ -1291,6 +1359,9 @@ impl<'a> Checker<'a> {
                 origin: Origin::User,
             },
         );
+        // The editor's goto-def/rename edge: a name used as a *function
+        // value* (11.1's first-class form) resolves to this declaration.
+        self.function_spans.insert(name, f.name.span);
     }
 
     fn register_structure(&mut self, s: &ast::StructureDecl) {
@@ -1414,6 +1485,21 @@ impl<'a> Checker<'a> {
 
     fn register_interface(&mut self, i: &ast::InterfaceDecl) {
         let name = i.name.display();
+        // 11.3: `iterable` names the built-in protocol — a student
+        // interface with that name would collide with the seeded one, and
+        // two tables cannot both own the claims.
+        if name == ITERABLE_IFACE {
+            self.diags.push(
+                Diagnostic::error(
+                    "E0395",
+                    "`iterable` names the built-in iteration protocol — an interface cannot redeclare it.",
+                    i.name.span,
+                )
+                .with_explanation("A class `does iterable` when it has a `can give next` method that gives back an option; the protocol is built in, not declared.")
+                .with_fix("give the interface another name"),
+            );
+            return;
+        }
         if self.interfaces.contains_key(&name) || self.classes.contains_key(&name) {
             self.diags.push(Diagnostic::error(
                 "E0341",
@@ -1447,6 +1533,60 @@ impl<'a> Checker<'a> {
     /// each `does` claim names an interface the class's own methods (plus
     /// the interface's defaults, plus inherited methods) satisfy, and each
     /// `extends` names a class without a cycle.
+    /// 11.3: a class that `does iterable` must own a `give next` whose
+    /// return is an option (`a T?` — `nothing` is the done marker) and
+    /// which does not fail — the poll rides ordinary call machinery in a
+    /// place `attempt` cannot wrap. A missing `give next` is E0378's job
+    /// (the claim pass reports it); this pass owns the shape.
+    fn validate_iterable_protocol(&mut self) {
+        let claims = self.class_ifaces.clone();
+        for (cname, ifaces) in &claims {
+            let Some(ispan) = ifaces
+                .iter()
+                .find(|(i, _)| i == ITERABLE_IFACE)
+                .map(|(_, s)| *s)
+            else {
+                continue;
+            };
+            let callee = format!("method {cname} {ITERABLE_METHOD}");
+            let Some(sig) = self.functions.get(&callee).cloned() else {
+                continue;
+            };
+            if sig.can_fail {
+                self.diags.push(
+                    Diagnostic::error(
+                        "E0396",
+                        format!(
+                            "`{cname}` does iterable, but its `give next` is declared `can fail` — the loop polls it outside `attempt`."
+                        ),
+                        ispan,
+                    )
+                    .with_explanation(
+                        "`repeat for each` over an iterable calls `give next` once per pass, in a place that cannot wrap the call in `attempt`. Make the method an ordinary one and handle any failures inside it.",
+                    )
+                    .with_fix("remove the `can fail` clause from `give next`"),
+                );
+            }
+            if !matches!(sig.ret, Type::Option(_)) {
+                self.diags.push(
+                    Diagnostic::error(
+                        "E0397",
+                        format!(
+                            "`give next` must give back an option, so `{cname}`'s walk can see its own end."
+                        ),
+                        ispan,
+                    )
+                    .with_explanation(
+                        "The loop polls `give next` once per pass and stops when it gives back `nothing` — an ordinary return (a number, a text) never ends, and a plain value cannot say the walk is over. Write the method's return as an option: `gives back a number?` for numbers, `a text?` for texts."
+                    )
+                    .with_fix(format!(
+                        "give `give next` a return clause of the form `gives back a <value type>?`"
+                    )),
+                );
+            }
+        }
+    }
+
     fn validate_class_headers(&mut self) {
         let claims = self.class_ifaces.clone();
         for (cname, ifaces) in &claims {
@@ -2846,32 +2986,78 @@ impl<'a> Checker<'a> {
                 ..
             } => {
                 let it = self.check_expr(iter, None);
+                let mut poll_elem: Option<Type> = None;
                 let elem = match &it.ty {
                     Type::List(e) => (**e).clone(),
                     Type::Map(k, v) => Type::Pair(Box::new((**k).clone()), Box::new((**v).clone())),
                     Type::Error => Type::Error,
+                    // 11.3: a class that `does iterable` walks through its
+                    // `give next` polls; the element type is that method's
+                    // option's inner type. A wrong-shaped `give next` was
+                    // already reported at claim validation (E0396/E0397),
+                    // so a malformed protocol just types as unknown here.
+                    Type::Struct(cname)
+                        if self.class_ifaces.get(cname).map_or(false, |set| {
+                            set.iter().any(|(i, _)| i == ITERABLE_IFACE)
+                        }) =>
+                    {
+                        let callee = format!("method {cname} {ITERABLE_METHOD}");
+                        match self.functions.get(&callee).map(|c| c.ret.clone()) {
+                            Some(Type::Option(inner)) => {
+                                let inner = (*inner).clone();
+                                poll_elem = Some(inner.clone());
+                                inner
+                            }
+                            _ => Type::Error,
+                        }
+                    }
                     other => {
+                        let hint = if let Type::Struct(_) = other {
+                            " An ordinary class can walk too: declare `can give next` giving back an option, and claim `does iterable`."
+                        } else {
+                            ""
+                        };
                         self.diags.push(
                             Diagnostic::error(
                                 "E0338",
                                 format!(
-                                    "`for each` needs a list or a map, but this is {}.",
-                                    other.display()
+                                    "`for each` needs a list, a map, or a class that `does iterable`, but this is {}.{hint}",
+                                    other.display(),
                                 ),
                                 it.span(),
                             )
                             .with_explanation(
-                                "`repeat for each item in <list>` walks through the list's items.",
+                                "`repeat for each item in <list>` walks through the list's items; a class that `does iterable` walks through its `give next` polls.",
                             ),
                         );
                         Type::Error
                     }
                 };
+                // The streamed walk has no positions — the comma-index form
+                // exists only where a list or a map counts them.
+                if poll_elem.is_some() {
+                    if let Some(ix) = index {
+                        self.diags.push(
+                            Diagnostic::error(
+                                "E0398",
+                                format!(
+                                    "`for each` over an iterable takes no comma index — this walk polls `give next` and owns no positions."
+                                ),
+                                ix.span,
+                            )
+                            .with_explanation(
+                                "Lists and maps count their members; an iterable yields values on demand. Drop the `, name` and count inside the loop yourself if you need to.",
+                            ),
+                        );
+                    }
+                }
                 self.loop_depth += 1;
                 self.push_scope();
                 self.declare(&item.display(), elem, false, item.span);
-                if let Some(ix) = index {
-                    self.declare(&ix.display(), Type::Number, false, ix.span);
+                if poll_elem.is_none() {
+                    if let Some(ix) = index {
+                        self.declare(&ix.display(), Type::Number, false, ix.span);
+                    }
                 }
                 let out_body = self.check_stmt_list(body);
                 self.pop_scope();
@@ -2879,8 +3065,13 @@ impl<'a> Checker<'a> {
                 CheckedStmt {
                     kind: CheckedStmtKind::RepeatForEach {
                         item: item.display(),
-                        index: index.as_ref().map(|i| i.display()),
+                        index: if poll_elem.is_none() {
+                            index.as_ref().map(|i| i.display())
+                        } else {
+                            None
+                        },
                         iter: it,
+                        poll_elem,
                         body: out_body,
                     },
                     span,
@@ -3151,7 +3342,14 @@ impl<'a> Checker<'a> {
             }
         }
         let base_binding = match self.lookup(&base_name) {
-            Some(b) => Some(b),
+            Some(b) => {
+                // The editor's use→decl edge for mutation statements:
+                // `set`/`increase`/`decrease` reach the binding here, not
+                // through `check_name_expr`, so this edge otherwise never
+                // lands and rename/references would miss the mutation.
+                self.resolved_uses.insert(target.base.span, b.span);
+                Some(b)
+            }
             None => {
                 self.diags
                     .push(self.unknown_name(&base_name, target.base.span));
@@ -3321,6 +3519,25 @@ impl<'a> Checker<'a> {
                 ));
         }
         d
+    }
+
+    /// The type's own field names (structures and classes alike) — the
+    /// candidate list a missing-field suggestion is drawn from.
+    fn field_names_of(&self, tyname: &str) -> Vec<String> {
+        self.structs
+            .get(tyname)
+            .or_else(|| self.classes.get(tyname))
+            .map(|s| s.fields.iter().map(|(n, _, _)| n.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    /// A missing-field did-you-mean: the closest real field of the named
+    /// type, under the same distance bar as unknown names (a suggestion
+    /// must survive a rename of every other name — 12.2's no-guessing
+    /// rule applies to fields exactly as it does to bindings). `None`
+    /// when nothing is close enough: then the fields list teaches alone.
+    fn field_did_you_mean(&self, name: &str, tyname: &str) -> Option<String> {
+        did_you_mean(name, &self.field_names_of(tyname)).first().cloned()
     }
 
     // -----------------------------------------------------------------------
@@ -3959,14 +4176,19 @@ impl<'a> Checker<'a> {
                 }
                 None => {
                     let fields_list = self.user_type_fields(&cname);
-                    self.diags.push(
-                        Diagnostic::error(
-                            "E0348",
-                            format!("`{cname}` has no field called `{fname_s}`."),
-                            fname.span,
-                        )
-                        .with_note(format!("its fields are: {fields_list}")),
-                    );
+                    let mut d = Diagnostic::error(
+                        "E0348",
+                        format!("`{cname}` has no field called `{fname_s}`."),
+                        fname.span,
+                    )
+                    .with_note(format!("its fields are: {fields_list}"));
+                    if let Some(best) = self.field_did_you_mean(&fname_s, &cname) {
+                        d = d.with_fix(format!("did you mean `{best}`?"))
+                            .with_fix_why(format!(
+                                "`{best}` is `{cname}`'s field closest in shape to `{fname_s}` — the constructor then names a field the type owns"
+                            ));
+                    }
+                    self.diags.push(d);
                 }
             }
             given.push((fname_s, ft.ty));
@@ -4137,6 +4359,10 @@ impl<'a> Checker<'a> {
         // 1. Whole-run binding (the common case: single word).
         if let Some(b) = self.lookup(&full) {
             self.node_types.insert(span, b.ty.clone());
+            // The use→decl edge the editor's goto-def reads: this word run
+            // (possibly multi-word, 7.0.3's headline case) resolves to the
+            // binding made at `b.span`.
+            self.resolved_uses.insert(span, b.span);
             return TypedExpr {
                 expr: Expr::Name {
                     name: name.clone(),
@@ -4213,6 +4439,12 @@ impl<'a> Checker<'a> {
                 };
                 let fty = Type::Function(params, Box::new(ret));
                 self.node_types.insert(span, fty.clone());
+                // The use→decl edge for the first-class form: this name run
+                // IS the function value, so it resolves to the function's
+                // declaration (rename's edit list starts here).
+                if let Some(decl) = self.function_spans.get(&full) {
+                    self.resolved_uses.insert(span, *decl);
+                }
                 return TypedExpr {
                     expr: Expr::Name {
                         name: name.clone(),
@@ -4252,6 +4484,16 @@ impl<'a> Checker<'a> {
                 // node-type table collision-free (the call node and its arg
                 // must never share a span — HIR keys types on spans).
                 let tail_span = self.tail_words_span(span, &name.words, split);
+                // The editor's use→decl edge: the call's *name* is the head
+                // words (they occupy the start of the run in the source),
+                // and that head sub-span resolves to the function's decl —
+                // rename/references rewrite the callee words, never the
+                // argument that happens to share the run. Recorded before
+                // the callee words move into the rebuilt call.
+                let head_span = self.head_words_span(span, &name.words, split);
+                if let Some(decl) = self.function_spans.get(&head) {
+                    self.resolved_uses.insert(head_span, *decl);
+                }
                 let arg = Expr::Name {
                     name: Name {
                         words: name.words[split..].to_vec(),
@@ -4512,6 +4754,30 @@ impl<'a> Checker<'a> {
     /// as one space-separated run, so their extent is computable from the
     /// source; falls back to the whole span if the text does not match
     /// (defensive — the lexer guarantees the joined form).
+    /// The span of the run's HEAD words — the callee of a split name run
+    /// (`double` inside `double i`). Mirrors `tail_words_span`.
+    fn head_words_span(&self, span: Span, words: &[String], split: usize) -> Span {
+        let Some(text) = self.src.get(span.start..span.end) else {
+            return span;
+        };
+        let bytes = text.as_bytes();
+        let mut i = 0usize;
+        for word in &words[..split] {
+            while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+                i += 1;
+            }
+            if text[i..].starts_with(word.as_str()) {
+                i += word.len();
+            } else {
+                return span;
+            }
+        }
+        Span {
+            start: span.start,
+            end: span.start + i,
+        }
+    }
+
     fn tail_words_span(&self, span: Span, words: &[String], split: usize) -> Span {
         let Some(text) = self.src.get(span.start..span.end) else {
             return span;
@@ -4954,9 +5220,22 @@ impl<'a> Checker<'a> {
                                             reqs.join(", ")
                                         }
                                     ))
-                                    .with_fix(format!(
-                                        "call a method `{iname}` requires — or add `{head}` to `{iname}`'s `can` lines if every conforming class should have it"
-                                    ))
+                                    .with_fix(if let Some(best) =
+                                        did_you_mean(&head, &reqs).first().cloned()
+                                    {
+                                        format!(
+                                            "did you mean `{best}`? — `{iname}` requires only: {} — or add `{head}` to `{iname}`'s `can` lines if every conforming class should have it",
+                                            if reqs.is_empty() {
+                                                "nothing".to_string()
+                                            } else {
+                                                reqs.join(", ")
+                                            }
+                                        )
+                                    } else {
+                                        format!(
+                                            "call a method `{iname}` requires — or add `{head}` to `{iname}`'s `can` lines if every conforming class should have it"
+                                        )
+                                    })
                                     .with_fix_why(
                                         "the constraint guarantees exactly the interface's requirement methods — calling only those keeps the body true for every argument it will ever receive"
                                     ),
@@ -5670,6 +5949,125 @@ impl<'a> Checker<'a> {
                         };
                         (ty, false)
                     }
+                    // ----- network module (M2: the sockets/HTTP surface).
+                    // Listeners and connections are numbers (the handle
+                    // story in lagom_mir's NetOp). Five ops can fail
+                    // (13.1, the failure value the message text, S-10);
+                    // `port of …` and `close …` cannot. -----
+                    "open listener" => {
+                        if n != 1 {
+                            self.diags
+                                .push(self.bad_arity(&callee, 1, n, call.callee.span));
+                        } else {
+                            self.require_type(
+                                &checked[0],
+                                &Type::Number,
+                                "`open listener at <port>`",
+                                "the port",
+                            );
+                        }
+                        (Type::Number, true)
+                    }
+                    // Arguments read `at <port> to <host>` — the `to` prep
+                    // cannot open a flowing call (the parser reserves the
+                    // `to`-first slot for `equal to`/`set … to`), so the
+                    // port rides `at` and the host rides `to`.
+                    "open connection" => {
+                        if n != 2 {
+                            self.diags
+                                .push(self.bad_arity(&callee, 2, n, call.callee.span));
+                        } else {
+                            self.require_type(
+                                &checked[0],
+                                &Type::Number,
+                                "`open connection at <port> to <host>`",
+                                "the port",
+                            );
+                            self.require_type(
+                                &checked[1],
+                                &Type::Text,
+                                "`open connection at <port> to <host>`",
+                                "the host",
+                            );
+                        }
+                        (Type::Number, true)
+                    }
+                    "expect connection" => {
+                        if n != 1 {
+                            self.diags
+                                .push(self.bad_arity(&callee, 1, n, call.callee.span));
+                        } else {
+                            self.require_type(
+                                &checked[0],
+                                &Type::Number,
+                                "`expect connection from <listener>`",
+                                "the listener",
+                            );
+                        }
+                        (Type::Number, true)
+                    }
+                    "put" => {
+                        if n != 2 {
+                            self.diags
+                                .push(self.bad_arity(&callee, 2, n, call.callee.span));
+                        } else {
+                            self.require_type(
+                                &checked[0],
+                                &Type::Text,
+                                "`put <text> at <connection>`",
+                                "the message",
+                            );
+                            self.require_type(
+                                &checked[1],
+                                &Type::Number,
+                                "`put <text> at <connection>`",
+                                "the connection",
+                            );
+                        }
+                        (Type::Number, true)
+                    }
+                    "take" => {
+                        if n != 1 {
+                            self.diags
+                                .push(self.bad_arity(&callee, 1, n, call.callee.span));
+                        } else {
+                            self.require_type(
+                                &checked[0],
+                                &Type::Number,
+                                "`take from <connection>`",
+                                "the connection",
+                            );
+                        }
+                        (Type::Text, true)
+                    }
+                    "port" => {
+                        if n != 1 {
+                            self.diags
+                                .push(self.bad_arity(&callee, 1, n, call.callee.span));
+                        } else {
+                            self.require_type(
+                                &checked[0],
+                                &Type::Number,
+                                "`port of <listener>`",
+                                "the listener",
+                            );
+                        }
+                        (Type::Number, false)
+                    }
+                    "close" => {
+                        if n != 1 {
+                            self.diags
+                                .push(self.bad_arity(&callee, 1, n, call.callee.span));
+                        } else {
+                            self.require_type(
+                                &checked[0],
+                                &Type::Number,
+                                "`close <listener or connection>`",
+                                "the listener or connection",
+                            );
+                        }
+                        (Type::NothingLit, false)
+                    }
                     // ----- json module (§19.1). Spellings mirror D-39's
                     // conversion pattern and fit the frozen call grammar:
                     // `json from text` parses (can fail — bad input);
@@ -5845,14 +6243,19 @@ impl<'a> Checker<'a> {
                 Some(t) => t,
                 None => {
                     let fields = self.user_type_fields(sname);
-                    self.diags.push(
-                        Diagnostic::error(
-                            "E0343",
-                            format!("`{sname}` has no field called `{field}`."),
-                            span,
-                        )
-                        .with_note(format!("its fields are: {fields}")),
-                    );
+                    let mut d = Diagnostic::error(
+                        "E0343",
+                        format!("`{sname}` has no field called `{field}`."),
+                        span,
+                    )
+                    .with_note(format!("its fields are: {fields}"));
+                    if let Some(best) = self.field_did_you_mean(field, sname) {
+                        d = d.with_fix(format!("did you mean `{best}`?"))
+                            .with_fix_why(format!(
+                                "`{best}` is `{sname}`'s field closest in shape to `{field}` — the read then names a field the type owns"
+                            ));
+                    }
+                    self.diags.push(d);
                     Type::Error
                 }
             },
@@ -6610,6 +7013,12 @@ impl<'a> Checker<'a> {
             // absent case of `a T or nothing`); `nothing?`-to-`nothing?` is
             // plain equality via the fallthrough.
             (Type::Option(_), Type::NothingLit) => true,
+            // 8.5's companion rule — a bare `T` assigns into `a T or nothing`:
+            // the present case lifts implicitly. 11.3's `give next` protocol
+            // reads exactly this way (give back the element or `nothing`), and
+            // the runtime's no-wrapper convention makes the lift a no-op at
+            // the value level: the present case IS the bare value.
+            (Type::Option(inner), t) if **inner == t.clone() => true,
             // `anything` is the top type (8.2/12.1: "called T elsewhere",
             // inferred from use) — every concrete value is assignable into
             // it, and the checker unifies per call site.
@@ -7020,7 +7429,13 @@ fn did_you_mean(name: &str, candidates: &[String]) -> Vec<String> {
         // dictionary (`it` in `split`) and the suggestion misleads.
         let containment =
             (cl.contains(&lower) || lower.contains(&cl)) && lower.chars().count() >= 3;
-        if containment || d <= 2 {
+        // The distance bar carries the same length logic: an edit distance
+        // of 2 on a 2-letter name invents half the word (`it` → M2's net
+        // builtin `put`), so the distance must stay below the typo's own
+        // length — a one-letter typo is always a real typo, a two-letter
+        // name only earn a suggestion at distance 1.
+        let within_length = d < lower.chars().count();
+        if containment || (d <= 2 && within_length) {
             scored.push((d, c));
         }
     }
@@ -7270,6 +7685,57 @@ say describe f\n";
         check_err(
             "match 5\n    when something with value v\n        say v\n    otherwise\n        say \"other\"",
             "E0365",
+        );
+    }
+
+    // ----- did-you-mean for fields (12.2's bar applied to member reads) -----
+
+    /// A one-typo field read offers the closest real field — and a
+    /// faraway miss offers nothing to guess. The constructor path (E0348)
+    /// suggests through the same bar.
+    #[test]
+    fn field_typos_suggest_the_closest_real_field() {
+        let src = "class player\n    has score of type number\n    has name of type text\n\nmake p equal to a new player with score 0 and name \"bo\"\nsay scoer of p\n";
+        let diags = check_err(src, "E0343");
+        let page = diags
+            .iter()
+            .find(|d| d.code == "E0343")
+            .map(render)
+            .expect("the read diagnostic");
+        assert!(
+            page.contains("did you mean `score`?"),
+            "the one-typo read suggests the real field:\n{page}"
+        );
+        assert!(
+            page.contains("field closest in shape"),
+            "the why names the type's field table:\n{page}"
+        );
+        // A miss nothing is close to teaches with the field list alone —
+        // a made-up suggestion would guess (12.2's rule).
+        let far =
+            "class player\n    has score of type number\n\nmake p equal to a new player with score 0\nsay zzzz of p\n";
+        let diags = check_err(far, "E0343");
+        let page = diags
+            .iter()
+            .find(|d| d.code == "E0343")
+            .map(render)
+            .expect("the read diagnostic");
+        assert!(
+            !page.contains("did you mean"),
+            "no suggestion when nothing is close enough:\n{page}"
+        );
+        // The constructor path: `scoer` in a `with` clause names the
+        // closest real field too.
+        let ctor = "class player\n    has score of type number\n\nmake p equal to a new player with scoer 0\n";
+        let diags = check_err(ctor, "E0348");
+        let page = diags
+            .iter()
+            .find(|d| d.code == "E0348")
+            .map(render)
+            .expect("the constructor diagnostic");
+        assert!(
+            page.contains("did you mean `score`?"),
+            "the constructor suggests:\n{page}"
         );
     }
 

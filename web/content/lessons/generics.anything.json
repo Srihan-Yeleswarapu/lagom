@@ -1,0 +1,24 @@
+{
+  "id": "generics.anything",
+  "title": "Accept a list of any kind",
+  "objective": "Write a function that takes a list whose items can be of any kind, and use it with more than one kind of item.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "Some functions do not care what kind of item they work on. A parameter written as a list of anything takes a list of whatever items you give it. The function can loop over the items and use each one, because it uses only what every item can do, such as being said."
+    },
+    {
+      "type": "example",
+      "title": "Show every item in a list",
+      "code": "function show all\n    takes a list of anything called items\n    repeat for each item in items\n        say item\n\nshow all a list of 1, 2\nshow all a list of \"red\", \"blue\"\n",
+      "inputMode": "none",
+      "expected": [
+        "1",
+        "2",
+        "red",
+        "blue"
+      ]
+    }
+  ]
+}

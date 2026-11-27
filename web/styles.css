@@ -1,0 +1,1084 @@
+/* Learn Lagom. One stylesheet for every page.
+
+   Layout follows the W3Schools tutorial pages:
+   - a dark header with the site name and links
+   - a dark topic bar that scrolls sideways on small screens
+   - a grey lesson menu on the left (always open on wide screens, a disclosure on narrow ones)
+   - a reading column with large Previous / Next buttons above and below
+   - examples and exercises as bordered "Try it" playgrounds, with the editor and
+     the output side by side on wide screens and stacked on phones */
+
+:root {
+  --ink: #1a1a1a;
+  --muted: #5c636e;
+  --bg: #ffffff;
+  --surface: #f1f1f1;
+  --line: #ddd;
+  --accent: #04aa6d;
+  --accent-ink: #027a4e;
+  --header: #282a35;
+  --topic-bar: #3d4150;
+  --focus: #0a66c2;
+  --bad: #b42318;
+  --warn: #8a5a00;
+  --code-bg: #f6f7f9;
+  --tip-bg: #e9f8f1;
+  --note-bg: #fff8db;
+  --radius: 4px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  font: 16px/1.6 Roboto, system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+  overflow-x: hidden;
+}
+
+a {
+  color: var(--accent-ink);
+}
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+img,
+svg,
+video,
+canvas {
+  max-width: 100%;
+}
+
+/* ---------- Header ---------- */
+
+.site-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 24px;
+  padding: 0 16px;
+  min-height: 56px;
+  background: var(--header);
+  color: #fff;
+}
+
+.brand {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: #fff;
+  text-decoration: none;
+  padding: 12px 0;
+}
+
+.site-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.site-nav a {
+  display: block;
+  padding: 16px 12px;
+  color: #d8dbe2;
+  text-decoration: none;
+  border-bottom: 4px solid transparent;
+}
+
+.site-nav a:hover {
+  color: #fff;
+  background: #353846;
+}
+
+.site-nav a[aria-current="page"] {
+  color: #fff;
+  border-bottom-color: var(--accent);
+}
+
+/* ---------- GitHub link (top right of every page) ---------- */
+
+.github-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  color: #fff;
+  text-decoration: none;
+  border-radius: var(--radius);
+  white-space: nowrap;
+}
+
+.github-link:hover {
+  background: #353846;
+}
+
+.github-link span {
+  font-weight: 500;
+}
+
+/* ---------- Header search ---------- */
+
+.site-search {
+  position: relative;
+  flex: 1 1 220px;
+  max-width: 320px;
+  margin-left: auto;
+  padding: 8px 0;
+}
+
+.site-search-box {
+  position: relative;
+}
+
+#site-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border: 1px solid #5a5f70;
+  border-radius: var(--radius);
+  background: #fff;
+  color: #222;
+  font: inherit;
+  font-size: 0.95rem;
+}
+
+#site-search-input:focus {
+  outline: 3px solid #8ab4f8;
+  outline-offset: 1px;
+}
+
+.search-results {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  margin: 4px 0 0;
+  padding: 4px 0;
+  max-height: 60vh;
+  overflow-y: auto;
+  list-style: none;
+  background: #fff;
+  color: #222;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+}
+
+.search-results[hidden] {
+  display: none;
+}
+
+.search-results li {
+  margin: 0;
+}
+
+.search-results a {
+  display: block;
+  padding: 8px 12px;
+  color: #1a4f8a;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.search-results a:hover,
+.search-results a:focus {
+  background: #e8f0fb;
+}
+
+.search-topic {
+  display: block;
+  padding: 0 12px 8px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.search-empty {
+  padding: 8px 12px;
+  color: var(--muted);
+}
+
+/* ---------- Topic bar (scrolls sideways when it is too narrow) ---------- */
+
+.topic-bar {
+  background: var(--topic-bar);
+  color: #fff;
+}
+
+.topic-tabs {
+  display: flex;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-x: auto;
+  white-space: nowrap;
+  scrollbar-width: thin;
+}
+
+.topic-tab {
+  display: block;
+  padding: 12px 18px;
+  color: #e4e6ec;
+  text-decoration: none;
+  font-weight: 500;
+  border-right: 1px solid #4b5063;
+}
+
+.topic-tab:hover {
+  color: #fff;
+  background: #4a4f62;
+}
+
+.topic-tab[aria-current="page"] {
+  color: #fff;
+  background: var(--accent);
+}
+
+/* ---------- Layout: lesson menu + content ---------- */
+
+.layout {
+  display: block;
+  min-width: 0;
+}
+
+.sidebar {
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  min-width: 0;
+}
+
+.side-details {
+  min-width: 0;
+}
+
+.side-summary {
+  display: block;
+  padding: 12px 16px;
+  background: var(--header);
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+}
+
+.side-summary::-webkit-details-marker {
+  display: none;
+}
+
+.side-summary::after {
+  content: "+";
+  float: right;
+  font-weight: 400;
+}
+
+.side-details[open] > .side-summary::after {
+  content: "−";
+}
+
+.side-topic {
+  padding: 8px 0 4px;
+}
+
+.side-topic h2 {
+  margin: 0;
+  padding: 8px 16px 4px;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #111;
+}
+
+.side-lessons {
+  margin: 0;
+  padding: 0 0 8px;
+  list-style: none;
+}
+
+.side-lesson {
+  border-left: 4px solid transparent;
+}
+
+.side-lesson.lesson-completed {
+  border-left-color: var(--accent);
+}
+
+.side-lesson.lesson-attempted {
+  border-left-color: #e0a100;
+}
+
+.side-lesson.lesson-visited {
+  border-left-color: #8ab4f8;
+}
+
+.side-link {
+  display: block;
+  padding: 8px 16px 8px 14px;
+  color: #222;
+  text-decoration: none;
+  font-size: 0.95rem;
+}
+
+.side-link:hover {
+  background: #e2e3e6;
+}
+
+.side-link[aria-current="page"] {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+}
+
+main {
+  min-width: 0;
+  padding: 16px clamp(16px, 3vw, 32px) 48px;
+  overflow-wrap: anywhere;
+}
+
+main h1,
+main h2,
+main h3,
+main h4 {
+  line-height: 1.25;
+}
+
+main h1 {
+  margin: 0.2em 0 0.4em;
+  font-size: clamp(1.8rem, 4vw, 2.4rem);
+}
+
+main h2 {
+  margin: 1.6em 0 0.5em;
+  font-size: 1.4rem;
+}
+
+.crumbs {
+  margin: 0 0 4px;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.lesson-head {
+  margin-bottom: 8px;
+}
+
+.objective {
+  margin: 0 0 4px;
+  font-size: 1.15rem;
+}
+
+.lead {
+  font-size: 1.15rem;
+}
+
+.meta {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.note {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.error {
+  padding: 12px 16px;
+  border: 1px solid #f1b5ae;
+  border-left: 4px solid var(--bad);
+  background: #fdf1f0;
+  color: var(--bad);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ---------- Previous / Next (large, like W3Schools) ---------- */
+
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 20px 0;
+}
+
+.pager-link {
+  flex: 1 1 220px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 20px;
+  border-radius: var(--radius);
+  text-decoration: none;
+  background: #e7e8eb;
+  color: #111;
+}
+
+.pager-link:hover {
+  background: #d7d9dd;
+}
+
+.pager-link.next {
+  text-align: right;
+  align-items: flex-end;
+  background: var(--accent);
+  color: #fff;
+}
+
+.pager-link.next:hover {
+  background: var(--accent-ink);
+}
+
+.pager-link.pager-empty {
+  display: none;
+}
+
+.pager-dir {
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.pager-title {
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- Lesson body and examples ---------- */
+
+.lesson-body > p {
+  margin: 0 0 1em;
+}
+
+.example,
+.exercise {
+  margin: 28px 0;
+  min-width: 0;
+}
+
+.example > h2 {
+  margin: 0 0 8px;
+  font-size: 1.2rem;
+}
+
+.expected-label {
+  margin: 12px 0 4px;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.expected {
+  margin: 0;
+  padding: 10px 14px;
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font: 0.95rem/1.5 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+
+/* Exercises stand out as a bordered card with a green edge. */
+.exercise {
+  padding: 16px 20px;
+  background: #fbfcfd;
+  border: 1px solid var(--line);
+  border-left: 5px solid var(--accent);
+  border-radius: var(--radius);
+}
+
+.exercise > h2 {
+  margin-top: 0;
+}
+
+.ex-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+.ex-prompt {
+  margin: 0 0 12px;
+}
+
+.ex-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin: 12px 0;
+}
+
+.ex-summary {
+  margin: 0;
+  color: var(--muted);
+}
+
+.ex-checks {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+}
+
+.ex-checks li {
+  display: flex;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.ex-checks li:last-child {
+  border-bottom: 0;
+}
+
+.ex-mark {
+  flex: none;
+  width: 1.2em;
+  text-align: center;
+  font-weight: 700;
+}
+
+.ex-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ex-detail {
+  display: block;
+  font-size: 0.9em;
+  color: var(--muted);
+}
+
+.ex-pending {
+  color: var(--muted);
+}
+
+.ex-pass {
+  color: var(--accent-ink);
+}
+
+.ex-pass .ex-mark {
+  color: var(--accent);
+}
+
+.ex-fail {
+  color: var(--bad);
+}
+
+.ex-fail .ex-mark {
+  color: var(--bad);
+}
+
+/* ---------- Buttons ---------- */
+
+button,
+.button-like {
+  display: inline-block;
+  padding: 8px 16px;
+  font: inherit;
+  font-size: 0.95rem;
+  color: #111;
+  background: #fff;
+  border: 1px solid #b5b9c0;
+  border-radius: var(--radius);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+button:hover,
+.button-like:hover {
+  background: var(--surface);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: #fff;
+}
+
+.mark-complete,
+.ex-check {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 700;
+}
+
+.mark-complete:hover,
+.ex-check:hover {
+  background: var(--accent-ink);
+  border-color: var(--accent-ink);
+}
+
+.mark-complete:disabled {
+  background: var(--tip-bg);
+  border-color: #b8e6d2;
+  color: var(--accent-ink);
+  opacity: 1;
+}
+
+.reset-lesson {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.lesson-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 28px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.lesson-foot .note,
+.lesson-foot p {
+  flex: 1 1 100%;
+  margin: 0;
+}
+
+/* ---------- Try it playground ---------- */
+
+.playground {
+  margin: 12px 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* The dark code bar, like the W3Schools editor toolbar. The .pg-toolbar
+   prefix on each button rule beats the generic button styles. */
+.pg-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  background: #2b2e36;
+  border-bottom: 1px solid #1c1e24;
+}
+
+.pg-toolbar button {
+  background: #3c414d;
+  border-color: #5a6070;
+  color: #e8eaf0;
+}
+
+.pg-toolbar button:hover:not(:disabled) {
+  background: #4b515e;
+}
+
+.pg-toolbar button:disabled {
+  opacity: 0.5;
+}
+
+.pg-toolbar .pg-run {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  min-width: 80px;
+}
+
+.pg-toolbar .pg-run:hover:not(:disabled) {
+  background: var(--accent-ink);
+  border-color: var(--accent-ink);
+}
+
+.pg-toolbar .pg-check {
+  background: #2b7bbd;
+  border-color: #2b7bbd;
+  color: #fff;
+  font-weight: 700;
+}
+
+.pg-toolbar .pg-check:hover:not(:disabled) {
+  background: #3a8bd0;
+}
+
+.pg-toolbar .pg-stop {
+  color: #ffb9b1;
+  border-color: #8a4e48;
+}
+
+.pg-toolbar .pg-reset {
+  margin-left: auto;
+  font-size: 0.85rem;
+  background: transparent;
+  border-color: transparent;
+  color: #c9ccd6;
+}
+
+.pg-status {
+  margin: 0;
+  padding: 4px 10px;
+  font-size: 0.85rem;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+
+.pg-status:empty {
+  display: none;
+}
+
+.pg-editor {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.pg-editor .cm-editor {
+  width: 100%;
+  height: 100%;
+  font-size: 0.95rem;
+}
+
+.pg-editor .cm-scroller {
+  overflow: auto;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  line-height: 1.5;
+}
+
+.pg-editor .cm-content {
+  white-space: pre;
+}
+
+.pg-panels {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  border-top: 1px solid var(--line);
+}
+
+.pg-panels > section {
+  min-width: 0;
+  padding: 12px;
+}
+
+.pg-panels > section + section {
+  border-top: 1px solid var(--line);
+}
+
+.pg-panels h4 {
+  margin: 0 0 8px;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.pg-transcript {
+  min-height: 3.5em;
+  max-height: 16em;
+  overflow: auto;
+  padding: 8px 10px;
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font: 0.9rem/1.5 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.pg-line {
+  margin: 0;
+}
+
+.pg-line-answer {
+  color: var(--accent-ink);
+  font-weight: 700;
+}
+
+.pg-empty {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.pg-result {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-left: 4px solid #8a94a3;
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+
+.pg-result[data-kind="completed"] {
+  border-left-color: var(--accent);
+  background: var(--tip-bg);
+}
+
+.pg-result[data-kind="compile-error"],
+.pg-result[data-kind="panicked"],
+.pg-result[data-kind="failed"] {
+  border-left-color: var(--bad);
+  background: #fdf1f0;
+}
+
+.pg-message {
+  margin: 4px 0 0;
+}
+
+.pg-report {
+  margin: 6px 0 0;
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: pre;
+  font: 0.85rem/1.5 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+.pg-problems {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pg-problems li {
+  padding: 6px 10px;
+  margin-bottom: 6px;
+  border-left: 4px solid #8a94a3;
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+
+.pg-problem.pg-error {
+  border-left-color: var(--bad);
+  color: var(--bad);
+}
+
+.pg-problem.pg-warning {
+  border-left-color: #e0a100;
+  color: var(--warn);
+}
+
+.pg-ask {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.pg-ask-label {
+  font-weight: 700;
+}
+
+.pg-ask input {
+  flex: 1 1 160px;
+  min-width: 0;
+  padding: 7px 10px;
+  font: inherit;
+  border: 1px solid #b5b9c0;
+  border-radius: var(--radius);
+}
+
+.pg-send {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 700;
+}
+
+.pg-note {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  color: var(--muted);
+  background: var(--note-bg);
+  border-top: 1px solid var(--line);
+}
+
+.pg-jump {
+  font-size: 0.9rem;
+}
+
+.pg-rendered {
+  padding: 8px 0;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- Course outline (home page) ---------- */
+
+.page-head {
+  margin-bottom: 8px;
+}
+
+.progress-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.practice-link {
+  font-weight: 700;
+}
+
+.topic {
+  margin: 28px 0;
+  min-width: 0;
+}
+
+.topic h2 {
+  margin: 0 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 2px solid var(--accent);
+  font-size: 1.4rem;
+}
+
+.lessons {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lesson {
+  border-bottom: 1px solid var(--line);
+}
+
+.lesson .row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 16px;
+  padding: 10px 4px;
+}
+
+.lesson .row a {
+  font-weight: 600;
+  color: #111;
+  overflow-wrap: anywhere;
+}
+
+.lesson .state {
+  flex: none;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #eceef1;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.lesson-completed .state {
+  background: var(--tip-bg);
+  color: var(--accent-ink);
+}
+
+.lesson-attempted .state {
+  background: var(--note-bg);
+  color: var(--warn);
+}
+
+.lesson-visited .state {
+  background: #e8f0fe;
+  color: #1a4f9c;
+}
+
+/* ---------- Footer ---------- */
+
+.site-footer {
+  margin-top: 24px;
+  padding: 20px 16px;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.site-footer p {
+  margin: 0;
+  max-width: 1200px;
+  margin-inline: auto;
+}
+
+/* ---------- Wide screens: menu always visible, editor and output side by side ---------- */
+
+@media (min-width: 700px) {
+  .pg-panels {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .pg-panels > section + section {
+    border-top: 0;
+    border-left: 1px solid var(--line);
+  }
+}
+
+@media (min-width: 900px) {
+  .layout {
+    display: grid;
+    grid-template-columns: 250px minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .sidebar {
+    position: sticky;
+    top: 0;
+    max-height: 100vh;
+    overflow-y: auto;
+    border-bottom: 0;
+    border-right: 1px solid var(--line);
+  }
+
+  .side-summary {
+    display: none;
+  }
+
+  .side-details {
+    display: block;
+  }
+
+  .side-details > .side-topic {
+    display: block;
+  }
+
+  .topic-tab {
+    padding: 14px 20px;
+  }
+}
+
+@media (max-width: 480px) {
+  .site-nav a {
+    padding: 12px 8px;
+  }
+
+  .pager-link {
+    flex-basis: 100%;
+  }
+
+  .topic-tab {
+    padding: 12px 14px;
+  }
+
+  .exercise {
+    padding: 14px 14px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    scroll-behavior: auto !important;
+  }
+}

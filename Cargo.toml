@@ -15,6 +15,7 @@ members = [
     "crates/lagom_rt",
     "crates/lagom_driver",
     "crates/lagom_cli",
+    "crates/lagom_web",
 ]
 
 [workspace.package]

@@ -1,0 +1,66 @@
+{
+  "id": "variables.grouping",
+  "title": "Group with parentheses",
+  "objective": "Use parentheses to choose the order of a calculation or a condition, and read a mixed condition correctly.",
+  "minutes": 7,
+  "body": [
+    {
+      "type": "p",
+      "text": "Parentheses ( and ) group part of an expression, and the part inside them is worked out first. You can use them in a calculation, in a condition, or in both. Without them, Lagom follows its usual order: multiply and divide before add and subtract, and and before or."
+    },
+    {
+      "type": "example",
+      "title": "Parentheses in a calculation",
+      "code": "make base equal to 2\nmake bonus equal to 3\nmake multiplier equal to 4\nmake total equal to (base plus bonus) times multiplier\nsay total\nmake cost equal to 10\nmake count equal to 4\nmake average equal to cost divided by (count plus 1)\nsay average\n",
+      "inputMode": "none",
+      "expected": [
+        "20",
+        "2"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "Parentheses matter in conditions too. The first condition below asks whether the person is old enough and allowed, or is an administrator. Without the brackets, the and would bind differently and change the meaning."
+    },
+    {
+      "type": "example",
+      "title": "Parentheses in a condition",
+      "code": "make age equal to 15\nmake allowed equal to true\nmake administrator equal to false\nif (age is greater than 13 and allowed) or administrator\n    say \"allowed\"\nmake blocked equal to false\nmake banned equal to false\nmake safe equal to not (blocked or banned)\nsay safe\n",
+      "inputMode": "none",
+      "expected": [
+        "allowed",
+        "true"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "variables.grouping.total",
+      "prompt": "The program prints 14 because multiplication happens first. It should print 20 instead.",
+      "starter": "make total equal to 2 plus 3 times 4\nsay total\n",
+      "solution": "make total equal to (2 plus 3) times 4\nsay total\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "uses-parentheses",
+          "description": "The addition is inside parentheses",
+          "kind": "source",
+          "matches": "\\(2 plus 3\\)"
+        },
+        {
+          "id": "output",
+          "description": "It prints 20",
+          "kind": "output",
+          "expect": [
+            "20"
+          ]
+        }
+      ]
+    }
+  ]
+}

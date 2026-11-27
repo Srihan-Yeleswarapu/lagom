@@ -1,0 +1,45 @@
+{
+  "id": "practice.names",
+  "title": "Join a first and last name",
+  "objective": "Put two text values into one message with interpolation.",
+  "minutes": 5,
+  "body": [
+    {
+      "type": "p",
+      "text": "Interpolation puts the value of a name inside text. Write the name in braces inside the quotes, and the program fills in its value when it runs. You can use several names in the same text, and each one is replaced by its value."
+    },
+    {
+      "type": "example",
+      "title": "A full name",
+      "code": "make first name equal to \"Grace\"\nmake last name equal to \"Hopper\"\nsay \"{first name} {last name}\"\n",
+      "inputMode": "none",
+      "expected": [
+        "Grace Hopper"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "practice.names.full",
+      "prompt": "The program prints only the first name. Make it print the full name, Ada Lovelace.",
+      "starter": "make first name equal to \"Ada\"\nmake last name equal to \"Lovelace\"\nsay \"{first name}\"\n",
+      "solution": "make first name equal to \"Ada\"\nmake last name equal to \"Lovelace\"\nsay \"{first name} {last name}\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints Ada Lovelace",
+          "kind": "output",
+          "expect": [
+            "Ada Lovelace"
+          ]
+        }
+      ]
+    }
+  ]
+}

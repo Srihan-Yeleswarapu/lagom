@@ -1,0 +1,70 @@
+{
+  "id": "variables.values",
+  "title": "The kinds of value",
+  "objective": "Recognise whole numbers, decimals, text, true and false, and nothing, and write each one as a literal.",
+  "minutes": 5,
+  "body": [
+    {
+      "type": "p",
+      "text": "A value written directly in the code is a literal. Lagom has a few kinds of literal. A whole number is written without a point, such as 42. A decimal has a point, such as 3.5. Text is written inside double quotes, such as \"hello\". true and false are the two truth values. nothing means no value at all."
+    },
+    {
+      "type": "example",
+      "title": "Each kind of literal",
+      "code": "make whole equal to 42\nmake precise equal to 3.5\nmake greeting equal to \"hello\"\nmake enabled equal to true\nmake missing equal to nothing\nsay whole\nsay precise\nsay greeting\nsay enabled\nsay missing\n",
+      "inputMode": "none",
+      "expected": [
+        "42",
+        "3.5",
+        "hello",
+        "true",
+        "nothing"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "Quotes make the difference between text and a name. say \"score\" prints the word score. say score prints the value held in the variable called score. Text in quotes is never looked up as a name."
+    },
+    {
+      "type": "example",
+      "title": "Text is not a name",
+      "code": "make score equal to 10\nsay \"score\"\nsay score\n",
+      "inputMode": "none",
+      "expected": [
+        "score",
+        "10"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "variables.values.answer",
+      "prompt": "Make answer hold the whole number 42, not the text \"42\". Then say it. The program should print 42.",
+      "starter": "make answer equal to \"42\"\nsay answer\n",
+      "solution": "make answer equal to 42\nsay answer\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "whole-number",
+          "description": "answer is set to the number 42, with no quotes",
+          "kind": "source",
+          "matches": "make answer equal to 42\\s*$",
+          "flags": "m"
+        },
+        {
+          "id": "output",
+          "description": "It prints 42",
+          "kind": "output",
+          "expect": [
+            "42"
+          ]
+        }
+      ]
+    }
+  ]
+}

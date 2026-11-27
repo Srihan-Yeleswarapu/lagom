@@ -1,0 +1,25 @@
+{
+  "id": "testing.check",
+  "title": "Check that a value is what you expect",
+  "objective": "Use check that to assert a value, and see how a failed check stops the program.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "A check states what should be true at some point in the program. Write check that, then a comparison such as is equal to. When the check holds, the program keeps going and prints nothing for it. When it fails, the program stops and reports which check failed, with the values it had at that moment."
+    },
+    {
+      "type": "example",
+      "title": "A passing check",
+      "code": "function double\n    takes number called n\n    gives back n times 2\n\nmake answer equal to double 3\ncheck that answer is equal to 6\nsay \"The check passed\"\n",
+      "inputMode": "none",
+      "expected": [
+        "The check passed"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "Checks are useful next to the code they test. Change the expected value to 7 and run the program again, and it stops at the check instead of printing the last line."
+    }
+  ]
+}

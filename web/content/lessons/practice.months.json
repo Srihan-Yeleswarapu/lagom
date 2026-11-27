@@ -1,0 +1,46 @@
+{
+  "id": "practice.months",
+  "title": "Handle a bad age",
+  "objective": "Write a function that can fail for a bad input, handle the failure with attempt, and fix a wrong condition.",
+  "minutes": 7,
+  "body": [
+    {
+      "type": "p",
+      "text": "A function that can fail must be called with attempt. Check the bad input first, and use fail with to give the reason. Then the caller can print the reason or the answer. Read the condition carefully: a check that is backwards fails on the good input."
+    },
+    {
+      "type": "example",
+      "title": "Years to months",
+      "code": "function months\n    takes number called years\n    returns a number\n    can fail\n    if years is less than 0\n        fail with \"negative age\"\n    gives back years times 12\n\nattempt months 2 if it fails then\n    say problem\notherwise\n    say result\n\nattempt months -1 if it fails then\n    say problem\notherwise\n    say result\n",
+      "inputMode": "none",
+      "expected": [
+        "24",
+        "negative age"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "practice.months.check",
+      "prompt": "The check is backwards, so a good age of 2 fails. Fix the condition so the program prints 24.",
+      "starter": "function months\n    takes number called years\n    returns a number\n    can fail\n    if years is greater than 0\n        fail with \"negative age\"\n    gives back years times 12\n\nattempt months 2 if it fails then\n    say problem\notherwise\n    say result\n",
+      "solution": "function months\n    takes number called years\n    returns a number\n    can fail\n    if years is less than 0\n        fail with \"negative age\"\n    gives back years times 12\n\nattempt months 2 if it fails then\n    say problem\notherwise\n    say result\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints 24",
+          "kind": "output",
+          "expect": [
+            "24"
+          ]
+        }
+      ]
+    }
+  ]
+}

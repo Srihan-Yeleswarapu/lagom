@@ -1,0 +1,64 @@
+{
+  "id": "objects.release",
+  "title": "Run code when an object is no longer used",
+  "objective": "Write a before last reference disappears clause in a class, so the object runs a line of code when the program no longer refers to it.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "Some objects hold a resource that must be cleaned up, such as a file or a connection. Inside a class, write before last reference disappears, then indent the lines to run. Lagom runs them once no name in the program still refers to the object. In these examples the message comes after the last line that uses the object, so it prints last."
+    },
+    {
+      "type": "example",
+      "title": "A message when the object is released",
+      "code": "class document\n    before last reference disappears\n        say \"document released\"\n\nmake d equal to a new document\nsay \"created\"\nsay \"finished\"\n",
+      "inputMode": "none",
+      "expected": [
+        "created",
+        "finished",
+        "document released"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "The clause can use the object's fields, the same way a method can. Here the file handle keeps its name, and the clause uses it to say which file was released."
+    },
+    {
+      "type": "example",
+      "title": "Use a field in the clause",
+      "code": "class file handle\n    has name of type text\n    before last reference disappears\n        say \"file released\"\n\nmake f equal to a new file handle with name \"x\"\nsay \"opened\"\nsay \"done\"\n",
+      "inputMode": "none",
+      "expected": [
+        "opened",
+        "done",
+        "file released"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "objects.release.order",
+      "prompt": "The program prints created and then the release message, but the done message is missing. Make it print created, done and document released.",
+      "starter": "class document\n    before last reference disappears\n        say \"document released\"\n\nmake d equal to a new document\nsay \"created\"\n",
+      "solution": "class document\n    before last reference disappears\n        say \"document released\"\n\nmake d equal to a new document\nsay \"created\"\nsay \"done\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints created, done, then document released",
+          "kind": "output",
+          "expect": [
+            "created",
+            "done",
+            "document released"
+          ]
+        }
+      ]
+    }
+  ]
+}

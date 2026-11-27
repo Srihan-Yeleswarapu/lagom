@@ -1,0 +1,50 @@
+{
+  "id": "basics.print",
+  "title": "Print text with say",
+  "objective": "Show a line of text on the screen with say.",
+  "minutes": 5,
+  "body": [
+    {
+      "type": "p",
+      "text": "The word say prints the text that follows it on its own line. Put the text in double quotes."
+    },
+    {
+      "type": "example",
+      "title": "Two lines",
+      "code": "say \"Hello, world!\"\nsay \"Lagom is fun\"\n",
+      "inputMode": "none",
+      "expected": [
+        "Hello, world!",
+        "Lagom is fun"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "Each say starts a new line of output. Change the words between the quotes, then press Run."
+    },
+    {
+      "type": "exercise",
+      "id": "basics.print.hello",
+      "prompt": "Make the program print exactly: Hello, Lagom!",
+      "starter": "say \"Hello\"\n",
+      "solution": "say \"Hello, Lagom!\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints Hello, Lagom!",
+          "kind": "output",
+          "expect": [
+            "Hello, Lagom!"
+          ]
+        }
+      ]
+    }
+  ]
+}

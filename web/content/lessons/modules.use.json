@@ -1,0 +1,21 @@
+{
+  "id": "modules.use",
+  "title": "Use a module with use",
+  "objective": "Bring a standard module into a program with use, then call one of its functions.",
+  "minutes": 5,
+  "body": [
+    {
+      "type": "p",
+      "text": "A module is a set of related functions that you bring in with use. Write use, then the module name, on a line near the top of the program. After that its functions are available by name, the same way as functions you wrote yourself."
+    },
+    {
+      "type": "example",
+      "title": "Square root from the math module",
+      "code": "use math\n\nsay square root of 16\n",
+      "inputMode": "none",
+      "expected": [
+        "4"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,74 @@
+{
+  "id": "functions.flowing",
+  "title": "Read a call like a phrase",
+  "objective": "Write a call as a short phrase, with of, at or a math name such as bigger, so it reads like a sentence.",
+  "minutes": 7,
+  "body": [
+    {
+      "type": "p",
+      "text": "A flowing call is a call written as a phrase. It has no brackets. The function name comes first, then a preposition or a value. of is used for a single value, as in first of names. at picks one item out of a list, as in things at 0. Some built-in functions, such as square root and bigger, also read this way."
+    },
+    {
+      "type": "example",
+      "title": "of and at",
+      "code": "make names equal to a list of \"Ana\", \"Bo\", \"Cy\"\nsay first of names\nsay names at 1\n",
+      "inputMode": "none",
+      "expected": [
+        "Ana",
+        "Bo"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "Math functions come from a module. Write use math at the top of the program, and then the call reads as a phrase. bigger of a and b gives the larger of two numbers, and smaller of a and b gives the smaller one."
+    },
+    {
+      "type": "example",
+      "title": "Math phrases",
+      "code": "use math\n\nsay square root of 16\nsay bigger of 3 and 9\nsay smaller of 3 and 9\n",
+      "inputMode": "none",
+      "expected": [
+        "4",
+        "9",
+        "3"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "A flowing call can sit inside a larger one. The inner phrase is read first, so the value it gives back is passed on."
+    },
+    {
+      "type": "example",
+      "title": "A phrase inside a phrase",
+      "code": "use math\n\nsay square root of bigger of 9 and 16\n",
+      "inputMode": "none",
+      "expected": [
+        "4"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "functions.flowing.larger",
+      "prompt": "The program prints the smaller of 3 and 9. Change it so it prints the larger of the two numbers, which is 9.",
+      "starter": "use math\n\nsay smaller of 3 and 9\n",
+      "solution": "use math\n\nsay bigger of 3 and 9\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints 9",
+          "kind": "output",
+          "expect": [
+            "9"
+          ]
+        }
+      ]
+    }
+  ]
+}

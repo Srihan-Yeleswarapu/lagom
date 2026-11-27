@@ -1,0 +1,120 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Lagom",
+  "scopeName": "source.lagom",
+  "fileTypes": [
+    "lagom"
+  ],
+  "patterns": [
+    {
+      "include": "#doc-comment"
+    },
+    {
+      "include": "#comment"
+    },
+    {
+      "include": "#string"
+    },
+    {
+      "include": "#number"
+    },
+    {
+      "include": "#type"
+    },
+    {
+      "include": "#literal"
+    },
+    {
+      "include": "#builtin"
+    },
+    {
+      "include": "#keyword"
+    }
+  ],
+  "repository": {
+    "doc-comment": {
+      "comment": "A `##` doc comment line — the `lagom doc` payload.",
+      "match": "##.*$",
+      "name": "comment.line.double-number-sign.documentation.lagom"
+    },
+    "comment": {
+      "comment": "A `#` comment to end of line. Owns only positions outside strings: the string rule claims every `\"…\"` span, and comment rules on top level are only consulted where the string rule did not match.",
+      "match": "#.*$",
+      "name": "comment.line.number-sign.lagom"
+    },
+    "string": {
+      "comment": "The quoted text (7.7): `{name}` interpolates, escapes are backslash-led, newlines are content.",
+      "name": "string.quoted.double.lagom",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "include": "#escape"
+        },
+        {
+          "include": "#interpolation"
+        }
+      ]
+    },
+    "escape": {
+      "match": "\\\\.",
+      "name": "constant.character.escape.lagom"
+    },
+    "interpolation": {
+      "comment": "A `{expr}` hole inside a string — the expression inside colouring as an expression, not as string text.",
+      "name": "meta.interpolation.lagom",
+      "begin": "\\{",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.interpolation.begin.lagom"
+        }
+      },
+      "end": "\\}",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.interpolation.end.lagom"
+        }
+      },
+      "patterns": [
+        {
+          "include": "#number"
+        },
+        {
+          "include": "#type"
+        },
+        {
+          "include": "#literal"
+        },
+        {
+          "include": "#builtin"
+        },
+        {
+          "include": "#keyword"
+        }
+      ]
+    },
+    "number": {
+      "match": "(?<!\\w)\\d+(?:\\.\\d+)?(?!\\w)",
+      "name": "constant.numeric.lagom"
+    },
+    "type": {
+      "comment": "The built-in type phrases (8.4's type surface). Kept in set-parity with web/src/lagom-lexical.js by the extension test.",
+      "match": "(?:a[ \\t]+channel[ \\t]+of|a[ \\t]+map[ \\t]+from|a[ \\t]+list[ \\t]+of|a[ \\t]+pair[ \\t]+of|decimal|boolean|number|text)(?!\\w)",
+      "name": "entity.name.type.lagom"
+    },
+    "literal": {
+      "match": "(?:nothing|false|true)(?!\\w)",
+      "name": "constant.language.lagom"
+    },
+    "builtin": {
+      "comment": "The built-in procedures: `say`/`ask`, the tasks-and-channels ops, and M2's network ops. Set-parity with the web tokenizer's builtin list.",
+      "match": "(?:expect[ \\t]+connection|open[ \\t]+connection|open[ \\t]+listener|receive|close|send|take|port|say|ask|put)(?!\\w)",
+      "name": "support.function.builtin.lagom"
+    },
+    "keyword": {
+      "comment": "The frozen keyword phrases, longest first (the web tokenizer's rule: `is not equal to` must win over `is`). Set-parity with KEYWORD_PHRASES in web/src/lagom-lexical.js.",
+      "match": "(?:before[ \\t]+last[ \\t]+reference[ \\t]+disappears|and[ \\t]+pass[ \\t]+the[ \\t]+problem[ \\t]+on|something[ \\t]+with[ \\t]+value|wait[ \\t]+for[ \\t]+all[ \\t]+tasks|divided[ \\t]+evenly[ \\t]+by|is[ \\t]+not[ \\t]+equal[ \\t]+to|is[ \\t]+greater[ \\t]+than|start[ \\t]+a[ \\t]+task|is[ \\t]+less[ \\t]+than|is[ \\t]+something|not[ \\t]+equal[ \\t]+to|otherwise[ \\t]+if|greater[ \\t]+than|remainder[ \\t]+of|construction|is[ \\t]+equal[ \\t]+to|is[ \\t]+at[ \\t]+least|if[ \\t]+it[ \\t]+fails|giving[ \\t]+back|keep[ \\t]+going|is[ \\t]+at[ \\t]+most|is[ \\t]+nothing|divided[ \\t]+by|gives[ \\t]+back|or[ \\t]+nothing|check[ \\t]+that|less[ \\t]+than|fail[ \\t]+with|something|otherwise|structure|interface|equal[ \\t]+to|at[ \\t]+least|can[ \\t]+fail|for[ \\t]+each|changing|function|increase|decrease|at[ \\t]+most|of[ \\t]+type|attempt|extends|returns|taking|repeat|random|modulo|called|a[ \\t]+new|class|match|where|check|gives|while|using|times|takes|minus|is[ \\t]+a|kind|when|fail|does|stop|next|test|make|then|plus|with|from|can|set|use|for|and|not|has|it|to|by|if|as|in|or|is|of|at|an|a)(?!\\w)",
+      "name": "keyword.other.lagom"
+    }
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "id": "functions.fail",
+  "title": "Handle a failure",
+  "objective": "Write a function that can fail, and handle the failure at the place you call it.",
+  "minutes": 10,
+  "body": [
+    {
+      "type": "p",
+      "text": "Some functions cannot always give an answer. Add can fail after returns, and use fail with to say why the function could not finish. Dividing gives a decimal, so this function returns a decimal."
+    },
+    {
+      "type": "p",
+      "text": "When you call a function that can fail, you must handle the failure with attempt. The compiler stops a call that does not. The if it fails branch runs when the function fails and gets the reason as problem. The otherwise branch runs when it works, and result holds the answer."
+    },
+    {
+      "type": "example",
+      "title": "Halve a number, refusing negatives",
+      "code": "function halve\n    takes number called n\n    returns a decimal\n    can fail\n    if n is less than 0\n        fail with \"no negatives\"\n    gives back n divided by 2\n\nattempt halve 8 if it fails then\n    say problem\notherwise\n    say result\n\nattempt halve -1 if it fails then\n    say problem\notherwise\n    say result\n",
+      "inputMode": "none",
+      "expected": [
+        "4",
+        "no negatives"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "functions.fail.halve",
+      "prompt": "halve refuses positive numbers instead of negative ones, so halve 8 fails. Fix the condition so the program prints 4.",
+      "starter": "function halve\n    takes number called n\n    returns a decimal\n    can fail\n    if n is greater than 0\n        fail with \"no negatives\"\n    gives back n divided by 2\n\nattempt halve 8 if it fails then\n    say problem\notherwise\n    say result\n",
+      "solution": "function halve\n    takes number called n\n    returns a decimal\n    can fail\n    if n is less than 0\n        fail with \"no negatives\"\n    gives back n divided by 2\n\nattempt halve 8 if it fails then\n    say problem\notherwise\n    say result\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints 4",
+          "kind": "output",
+          "expect": [
+            "4"
+          ]
+        }
+      ]
+    }
+  ]
+}

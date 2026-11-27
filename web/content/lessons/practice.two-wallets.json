@@ -1,0 +1,47 @@
+{
+  "id": "practice.two-wallets",
+  "title": "Two wallets from one class",
+  "objective": "Make two objects from the same class, and see that each one keeps its own coins.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "Each new object from a class has its own fields. Two wallets made from the same class start at 0 and change separately. Adding coins to one does not change the other."
+    },
+    {
+      "type": "example",
+      "title": "Separate wallets",
+      "code": "class wallet\n    has coins of type number\n    construction\n        set coins of myself to 0\n    can add\n        takes number called amount\n        increase coins of myself by amount\n\nmake a equal to a new wallet\nmake b equal to a new wallet\nadd 4 to a\nadd 6 to b\nsay coins of a\nsay coins of b\n",
+      "inputMode": "none",
+      "expected": [
+        "4",
+        "6"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "practice.two-wallets.target",
+      "prompt": "The second coin amount goes into wallet a instead of b, so the program prints 10 and 0. Make it print 3 and 7.",
+      "starter": "class wallet\n    has coins of type number\n    construction\n        set coins of myself to 0\n    can add\n        takes number called amount\n        increase coins of myself by amount\n\nmake a equal to a new wallet\nmake b equal to a new wallet\nadd 3 to a\nadd 7 to a\nsay coins of a\nsay coins of b\n",
+      "solution": "class wallet\n    has coins of type number\n    construction\n        set coins of myself to 0\n    can add\n        takes number called amount\n        increase coins of myself by amount\n\nmake a equal to a new wallet\nmake b equal to a new wallet\nadd 3 to a\nadd 7 to b\nsay coins of a\nsay coins of b\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints 3 and then 7",
+          "kind": "output",
+          "expect": [
+            "3",
+            "7"
+          ]
+        }
+      ]
+    }
+  ]
+}

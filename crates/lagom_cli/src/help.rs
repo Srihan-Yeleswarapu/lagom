@@ -26,13 +26,14 @@ commands:
   run [file] [--release]    compile and run a Lagom program (default: main.lagom)
   build [file] [-o out]     compile to a native executable
   test [file]               run this file's `test` blocks (on the interpreter)
-  check [file]              parse and check; show diagnostics
+  check [file]              parse and check; show diagnostics (--json for editors)
+  lsp                       the editor language server (stdio JSON-RPC: hover, goto-def, diagnostics)
   fmt [file] [--write]      print the canonically formatted source (or rewrite)
   new <name>                start a new Lagom project directory
   uninstall [--rc] [--yes]  remove an installed copy (plan only, unless --yes; --rc also cleans PATH lines in shell rc files)
   play [--seed N]           the REPL: run lines now, teach types as you go
   doc [file] [--check]      render ## doc comments to markdown (verify examples)
-  add <package>             record a dependency (Lagom.toml + Lagom.lock)
+  add <package>             record a dependency (path, git+<url>, owner/repo, or version)
   remove <package>          drop a dependency
   profile [file]            run with the teaching profiler (call counts)
   words                     print the reserved words

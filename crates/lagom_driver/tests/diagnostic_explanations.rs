@@ -275,13 +275,15 @@ mod full_surface {
     // ----- expressions: collections, calls, fields (7.6–7.9) -----
 
     /// Intent: walk the scores. The root cause is the iterated value being a
-    /// number; the page teaches what `for each` walks.
+    /// number; the page teaches what `for each` walks — and 11.3's protocol
+    /// walk (`does iterable`) is now part of the honest answer.
     #[test]
     fn e0338_for_each_needs_the_collection() {
         let src = "make total equal to 5\nrepeat for each item in total\n    say item\n";
         let page = student_page(src, "E0338");
-        assert!(page.contains("needs a list or a map"), "{page}");
+        assert!(page.contains("needs a list, a map"), "{page}");
         assert!(page.contains("walks through the list's items"), "{page}");
+        assert!(page.contains("does iterable"), "{page}");
     }
 
     /// Intent: load a module that does not exist. The page lists the real

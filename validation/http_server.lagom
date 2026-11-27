@@ -1,0 +1,30 @@
+# HTTP server — an M2 validation project (docs/10-roadmap.md, M2 gate: "a
+# small HTTP client+server project passes validation").
+#
+# Serves two connections on the fixed port 8093: a real HTTP/1.1 response,
+# one request each, then closes. The paired client is http_client.lagom.
+# Networking fails as errors (13.1/S-10), so every operation rides `attempt`.
+# These two files are skipped by the differential corpus sweep (they need a
+# coordinated peer process); crates/lagom_driver/tests/net_validation.rs
+# runs them on both backends and across backends.
+
+attempt open listener at 8093 if it fails then
+    say problem
+otherwise
+    make listener equal to result
+    repeat 2 times
+        attempt expect connection from listener if it fails then
+            say problem
+        otherwise
+            make connection equal to result
+            attempt take from connection if it fails then
+                say problem
+            otherwise
+                make asked equal to result
+            attempt put "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello" at connection if it fails then
+                say problem
+            otherwise
+                make sent equal to result
+            close connection
+    close listener
+    say "served 2 connections"

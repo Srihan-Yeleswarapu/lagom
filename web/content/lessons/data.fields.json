@@ -1,0 +1,59 @@
+{
+  "id": "data.fields",
+  "title": "Use fields with any type",
+  "objective": "Declare fields of different types, including lists and maps, and read a field inside an if or a say line.",
+  "minutes": 8,
+  "body": [
+    {
+      "type": "p",
+      "text": "Each has line in a structure gives one field and its type. A field can hold any type: a text, a number, a true or false value, a list, or a map. Read a field with its name and of, as in score of player, the same way as in data.structures."
+    },
+    {
+      "type": "example",
+      "title": "Fields of several types",
+      "code": "structure scores\n    has values of type a list of number\n\nmake s equal to a scores with values a list of 1, 2\nsay first of values of s\n\nstructure directory\n    has entries of type a map from text to number\n\nmake d equal to a directory with entries a map from \"a\" to 1\nmake value equal to entries of d\nsay value at \"a\"\n",
+      "inputMode": "none",
+      "expected": [
+        "1",
+        "1"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "A field can be used in a condition too. Here the if compares the field with true, and the say runs only when it is true."
+    },
+    {
+      "type": "example",
+      "title": "A field in a condition",
+      "code": "structure switch\n    has enabled of type boolean\n\nmake s equal to a switch with enabled true\nif enabled of s is equal to true\n    say \"on\"\n",
+      "inputMode": "none",
+      "expected": [
+        "on"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "data.fields.title",
+      "prompt": "The program prints the room's description, but it should report the room's name instead. Make it print entrance.",
+      "starter": "structure room\n    has name of type text\n    has description of type text\n\nmake room equal to a room with name \"entrance\" and description \"A hall\"\nsay description of room\n",
+      "solution": "structure room\n    has name of type text\n    has description of type text\n\nmake room equal to a room with name \"entrance\" and description \"A hall\"\nsay name of room\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints entrance",
+          "kind": "output",
+          "expect": [
+            "entrance"
+          ]
+        }
+      ]
+    }
+  ]
+}

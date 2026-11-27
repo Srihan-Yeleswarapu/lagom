@@ -1,0 +1,30 @@
+{
+  "id": "basics.comments",
+  "title": "Leave notes with comments",
+  "objective": "Write notes that Lagom skips when the program runs.",
+  "minutes": 3,
+  "body": [
+    {
+      "type": "p",
+      "text": "A line that starts with # is a comment. Lagom skips comments, so you can use them to explain the code to a reader."
+    },
+    {
+      "type": "example",
+      "title": "Comments are skipped",
+      "code": "# This line is a comment. Lagom skips it.\nsay \"Comments are skipped\"\n## Two hashes (##) mark a doc comment.\nsay \"Done\"\n",
+      "inputMode": "none",
+      "expected": [
+        "Comments are skipped",
+        "Done"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "Both # and ## comments are ignored when the program runs. Use comments to explain why the code does something, not to repeat what each word says."
+    },
+    {
+      "type": "p",
+      "text": "Task: add a comment above each say line in the example, then press Run. The output should not change."
+    }
+  ]
+}

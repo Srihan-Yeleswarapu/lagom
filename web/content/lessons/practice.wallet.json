@@ -1,0 +1,45 @@
+{
+  "id": "practice.wallet",
+  "title": "Keep coins in a wallet",
+  "objective": "Use a class with a field and a method to keep a running count across several calls.",
+  "minutes": 7,
+  "body": [
+    {
+      "type": "p",
+      "text": "A class keeps its own data between calls. Here a wallet has a coins field that starts at 0, and an add method that increases it. Each call to add changes the same object, so the total builds up over the program."
+    },
+    {
+      "type": "example",
+      "title": "Add coins to a wallet",
+      "code": "class wallet\n    has coins of type number\n    construction\n        set coins of myself to 0\n    can add\n        takes number called amount\n        increase coins of myself by amount\n\nmake w equal to a new wallet\nadd 8 to w\nadd 4 to w\nsay coins of w\n",
+      "inputMode": "none",
+      "expected": [
+        "12"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "practice.wallet.more",
+      "prompt": "The wallet holds 10 coins, but it should hold 15. Make it print 15.",
+      "starter": "class wallet\n    has coins of type number\n    construction\n        set coins of myself to 0\n    can add\n        takes number called amount\n        increase coins of myself by amount\n\nmake w equal to a new wallet\nadd 10 to w\nsay coins of w\n",
+      "solution": "class wallet\n    has coins of type number\n    construction\n        set coins of myself to 0\n    can add\n        takes number called amount\n        increase coins of myself by amount\n\nmake w equal to a new wallet\nadd 10 to w\nadd 5 to w\nsay coins of w\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints 15",
+          "kind": "output",
+          "expect": [
+            "15"
+          ]
+        }
+      ]
+    }
+  ]
+}

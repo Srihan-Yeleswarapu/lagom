@@ -1,0 +1,22 @@
+{
+  "id": "tasks.start",
+  "title": "Start a task and wait for it",
+  "objective": "Start work with start a task, and wait for all started tasks with wait for all tasks before going on.",
+  "minutes": 7,
+  "body": [
+    {
+      "type": "p",
+      "text": "A task is work that runs at the same time as the rest of your program. Write start a task, then indent the lines that belong to it. The program does not wait for the task to finish before it moves on, so use wait for all tasks when a later line needs the task's work done first."
+    },
+    {
+      "type": "example",
+      "title": "Wait for a task before continuing",
+      "code": "start a task\n    say \"one\"\nwait for all tasks\nsay \"done\"\n",
+      "inputMode": "none",
+      "expected": [
+        "one",
+        "done"
+      ]
+    }
+  ]
+}

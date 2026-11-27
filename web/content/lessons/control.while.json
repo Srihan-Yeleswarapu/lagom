@@ -1,0 +1,77 @@
+{
+  "id": "control.while",
+  "title": "Loop while a condition holds",
+  "objective": "Use repeat while to run lines again for as long as a condition is true, and make sure the loop can finish.",
+  "minutes": 8,
+  "body": [
+    {
+      "type": "p",
+      "text": "repeat while checks its condition before each run of the indented lines. While the condition is true, the lines run again. As soon as it is false, the loop ends and the program continues below it. If the condition never becomes false, the program runs forever, so the lines inside must change something the condition depends on."
+    },
+    {
+      "type": "example",
+      "title": "Count a score up to 70",
+      "code": "make changing score equal to 0\nrepeat while score is less than 70\n    increase score by 10\nsay score\n",
+      "inputMode": "none",
+      "expected": [
+        "70"
+      ]
+    },
+    {
+      "type": "example",
+      "title": "A countdown",
+      "code": "make changing fuel equal to 3\nrepeat while fuel is greater than 0\n    decrease fuel by 1\n    say fuel\n",
+      "inputMode": "none",
+      "expected": [
+        "2",
+        "1",
+        "0"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "A loop can also wait for the reader. Here the loop keeps asking until the reader types quit. The condition is checked before each ask, so the loop ends after the reply that makes it false."
+    },
+    {
+      "type": "example",
+      "title": "Ask until the reader quits",
+      "code": "make changing command equal to \"look\"\nrepeat while command is not equal to \"quit\"\n    set command to ask \"command: \"\n    say command\nsay \"exited\"\n",
+      "inputMode": "ask",
+      "stdin": [
+        "north",
+        "quit"
+      ],
+      "expected": [
+        "command: ",
+        "north",
+        "command: ",
+        "quit",
+        "exited"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "control.while.score",
+      "prompt": "The score stops climbing at 50, but it should reach 100. Make the program print 100.",
+      "starter": "make changing score equal to 0\nrepeat while score is less than 50\n    increase score by 10\nsay score\n",
+      "solution": "make changing score equal to 0\nrepeat while score is less than 100\n    increase score by 10\nsay score\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints 100",
+          "kind": "output",
+          "expect": [
+            "100"
+          ]
+        }
+      ]
+    }
+  ]
+}

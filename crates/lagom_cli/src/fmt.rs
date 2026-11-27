@@ -10,8 +10,11 @@ const INDENT: &str = "    ";
 /// Re-escape text for a string literal (7.7's escape set): `"`, `\\`, and
 /// the interpolation braces are escapable, so any of them in the value must
 /// print escaped or the formatted file would not reparse to the same AST
-/// (the formatter's lossless contract). Newlines are string content (G-5's
-/// verbatim form), so they print as themselves.
+/// (the formatter's lossless contract). `\n` is string content (G-5's
+/// verbatim form), so it prints as itself. A CR prints as the `\r` escape:
+/// a raw CR is invisible line-glue next to the verbatim newline it precedes
+/// (M2's HTTP headers are written `\r\n`, and the formatted form must show
+/// where the header ends).
 fn escape_text(out: &mut String, s: &str) {
     for ch in s.chars() {
         match ch {
@@ -19,6 +22,7 @@ fn escape_text(out: &mut String, s: &str) {
                 out.push('\\');
                 out.push(ch);
             }
+            '\r' => out.push_str("\\r"),
             _ => out.push(ch),
         }
     }

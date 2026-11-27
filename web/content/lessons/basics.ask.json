@@ -1,0 +1,61 @@
+{
+  "id": "basics.ask",
+  "title": "Ask the reader a question",
+  "objective": "Use ask to get a reply that the reader types while the program runs.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "Ask shows a prompt and waits for the reader to type a reply. Store the reply with make, then use {name} inside a say line to show it."
+    },
+    {
+      "type": "example",
+      "title": "Ask for a name",
+      "code": "make name equal to ask \"What is your name? \"\nsay \"Hello, {name}!\"\n",
+      "inputMode": "ask",
+      "stdin": [
+        "Ada"
+      ],
+      "expected": [
+        "What is your name? ",
+        "Hello, Ada!"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "Run the example and type your name at the prompt. If you press No more input instead, the program stops and reports that the input ended."
+    },
+    {
+      "type": "p",
+      "text": "A program can ask several questions. Each ask waits for its own answer, in order, and the output panel keeps everything printed so far."
+    },
+    {
+      "type": "exercise",
+      "id": "basics.ask.colour",
+      "prompt": "Ask for a favourite colour, then say I like followed by the colour. The check types blue at the prompt.",
+      "starter": "make colour equal to ask \"Favourite colour? \"\nsay \"I like\"\n",
+      "solution": "make colour equal to ask \"Favourite colour? \"\nsay \"I like {colour}\"\n",
+      "runMode": "both",
+      "inputMode": "ask",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "With blue typed at the prompt, it prints the prompt and I like blue",
+          "kind": "output",
+          "stdin": [
+            "blue"
+          ],
+          "expect": [
+            "Favourite colour? ",
+            "I like blue"
+          ]
+        }
+      ]
+    }
+  ]
+}

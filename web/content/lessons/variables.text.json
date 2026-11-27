@@ -1,0 +1,79 @@
+{
+  "id": "variables.text",
+  "title": "Put values inside text",
+  "objective": "Put a variable, or a calculation, inside text with braces, and turn a number into text.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "Put a name or a calculation inside braces, { and }, in a piece of text, and Lagom puts its value in place. This is called interpolation. The braces only work inside text in double quotes."
+    },
+    {
+      "type": "example",
+      "title": "Names inside braces",
+      "code": "make name equal to \"Ada\"\nmake lives equal to 3\nmake greeting equal to \"Hello, {name}!\"\nsay greeting\nsay \"{name} has {lives} lives left.\"\n",
+      "inputMode": "none",
+      "expected": [
+        "Hello, Ada!",
+        "Ada has 3 lives left."
+      ]
+    },
+    {
+      "type": "p",
+      "text": "A calculation can go inside the braces too, so the text shows the result without a separate line for it."
+    },
+    {
+      "type": "example",
+      "title": "Calculations inside braces",
+      "code": "make left equal to 6\nmake right equal to 7\nsay \"The result of {left} plus {right} is {left plus right}.\"\n",
+      "inputMode": "none",
+      "expected": [
+        "The result of 6 plus 7 is 13."
+      ]
+    },
+    {
+      "type": "p",
+      "text": "text from turns a number into text. Use it when you need the number to be text, for example to join it with other words. The number itself does not change."
+    },
+    {
+      "type": "example",
+      "title": "Turning a number into text",
+      "code": "make items equal to 5\nmake formatted equal to text from items\nsay formatted\nsay \"You entered {text from items} items.\"\n",
+      "inputMode": "none",
+      "expected": [
+        "5",
+        "You entered 5 items."
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "variables.text.greeting",
+      "prompt": "Make the greeting use the name inside the text, so it prints Hello, Ada! Do not type Ada into the text yourself.",
+      "starter": "make name equal to \"Ada\"\nsay \"Hello, Ada!\"\n",
+      "solution": "make name equal to \"Ada\"\nsay \"Hello, {name}!\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "uses-braces",
+          "description": "The text puts name inside braces",
+          "kind": "source",
+          "matches": "\\{name\\}"
+        },
+        {
+          "id": "output",
+          "description": "It prints Hello, Ada!",
+          "kind": "output",
+          "expect": [
+            "Hello, Ada!"
+          ]
+        }
+      ]
+    }
+  ]
+}

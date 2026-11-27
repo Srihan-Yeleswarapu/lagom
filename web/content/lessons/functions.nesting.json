@@ -1,0 +1,60 @@
+{
+  "id": "functions.nesting",
+  "title": "Nest calls with parentheses",
+  "objective": "Put a call inside another call with parentheses, and know that arithmetic inside a value is worked out before the call receives it.",
+  "minutes": 9,
+  "body": [
+    {
+      "type": "p",
+      "text": "Each value in a call can be a sum or a product, such as 5 plus 1 or 2 times 3. The arithmetic is worked out first, and the result is the value. So add 4 and 5 plus 1 passes 4 and 6, and the answer is 10."
+    },
+    {
+      "type": "example",
+      "title": "Arithmetic inside a value",
+      "code": "function add\n    takes number called left\n    takes number called right\n    gives back left plus right\n\nsay add 4 and 5 plus 1\nsay add 2 times 3 and 4\n",
+      "inputMode": "none",
+      "expected": [
+        "10",
+        "10"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "A value can also be another call. Put the inner call in parentheses, so the compiler knows where its values end and which call they belong to. Without the parentheses, the values run on into the outer call and the compiler reports an error."
+    },
+    {
+      "type": "example",
+      "title": "A call inside parentheses",
+      "code": "function add\n    takes number called left\n    takes number called right\n    gives back left plus right\n\nfunction double\n    takes number called n\n    gives back n times 2\n\nsay add (double 3) and 4\nmake total equal to add 2 and 3\nsay total\n",
+      "inputMode": "none",
+      "expected": [
+        "10",
+        "5"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "functions.nesting.double",
+      "prompt": "The program does not compile: the parser cannot tell where the nested call ends. Make it print 10.",
+      "starter": "function add\n    takes number called left\n    takes number called right\n    gives back left plus right\n\nfunction double\n    takes number called n\n    gives back n times 2\n\nsay add double 3 and 4\n",
+      "solution": "function add\n    takes number called left\n    takes number called right\n    gives back left plus right\n\nfunction double\n    takes number called n\n    gives back n times 2\n\nsay add (double 3) and 4\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints 10",
+          "kind": "output",
+          "expect": [
+            "10"
+          ]
+        }
+      ]
+    }
+  ]
+}

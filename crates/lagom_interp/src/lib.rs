@@ -27,6 +27,7 @@ use lagom_diagnostics::Span;
 use lagom_sema::Type;
 use lagom_mir::{
     BinOp, BlockId, Conv, EventRing, FileOp, FormatPart, Instr, LocalId, LomConfig, LomEvent,
+    NetOp,
     MathOp, MirFunction, MirItem, MirProgram, Operand, Term, TextOp, UnOp, failure_report,
     instrument,
 };
@@ -114,6 +115,22 @@ thread_local! {
 
 /// Interp instance ids (see `Interp::id`).
 static NEXT_INTERP_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// The default random seed. `wasm32-unknown-unknown` has no clock (`SystemTime::now`
+/// panics there), so the browser build falls back to a fixed seed.
+fn clock_seed() -> u64 {
+    #[cfg(target_family = "wasm")]
+    {
+        0x2545_F491_4F6C_DD1D
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos() as u64 ^ d.as_secs())
+            .unwrap_or(0x2545_F491_4F6C_DD1D)
+    }
+}
 
 impl Value {
     /// S-9 (one formatting place, shared by `say`, interpolation, and
@@ -221,23 +238,31 @@ pub struct Host {
     /// The working directory for file operations (§19.1's `files` module).
     /// Tests point it at a temp dir; the CLI leaves it at the process cwd.
     pub workdir: std::path::PathBuf,
+    /// Supplies an answer when `stdin` has run out: called with the prompt and
+    /// the output so far, returns `None` for end of input. The browser playground
+    /// uses this to pause on each `ask` until the user types. `None` means
+    /// `ask` fails with "end of input" as soon as `stdin` is empty.
+    pub ask_hook: Option<AskHook>,
     rng: u64,
 }
 
+/// See [`Host::ask_hook`].
+pub type AskHook = Box<dyn FnMut(&str, &[String]) -> Option<String>>;
+
 impl Host {
     pub fn new(stdin: Vec<String>) -> Host {
-        Host { stdin, stdout: Vec::new(), workdir: std::env::current_dir().unwrap_or_default(), rng: 0x2545_F491_4F6C_DD1D }
+        Host { stdin, stdout: Vec::new(), workdir: std::env::current_dir().unwrap_or_default(), ask_hook: None, rng: 0x2545_F491_4F6C_DD1D }
     }
 
     /// A fixed seed, for replay-determinism tests.
     pub fn with_seed(stdin: Vec<String>, seed: u64) -> Host {
-        Host { stdin, stdout: Vec::new(), workdir: std::env::current_dir().unwrap_or_default(), rng: seed | 1 }
+        Host { stdin, stdout: Vec::new(), workdir: std::env::current_dir().unwrap_or_default(), ask_hook: None, rng: seed | 1 }
     }
 
     /// A host pinned to a working directory (file-op tests, validation
     /// projects running in a sandbox dir).
     pub fn with_workdir(stdin: Vec<String>, dir: std::path::PathBuf) -> Host {
-        Host { stdin, stdout: Vec::new(), workdir: dir, rng: 0x2545_F491_4F6C_DD1D }
+        Host { stdin, stdout: Vec::new(), workdir: dir, ask_hook: None, rng: 0x2545_F491_4F6C_DD1D }
     }
 
 
@@ -289,6 +314,10 @@ pub struct Interp {
     ring: Option<EventRing>,
     /// Whether LOM probes exist in this program (dev) — drives capture.
     dev: bool,
+    /// M2 sockets: this run's open listeners and connections (handles are
+    /// numbers; the `NetOp` arm looks them up here). One registry per run —
+    /// a REPL re-run starts fresh, like everything else the run owns.
+    net: NetRegistry,
     /// Structure field names in declaration order — `FieldGet`/`FieldSet`
     /// resolve by name against this (MIR carries field *names*; the
     /// declaration order lives in the program table).
@@ -318,6 +347,16 @@ pub struct Interp {
     /// different functions of one run share the queue — the join at the
     /// innermost region drains what that region spawned.
     tasks: Vec<(Value, bool)>,
+}
+
+/// The interpreter's net registry: open listeners and connections by
+/// handle. Mirrors the runtime's `NetTable` exactly (same default messages,
+/// same read chunking) — differential parity is a test.
+#[derive(Default)]
+struct NetRegistry {
+    next: u64,
+    listeners: HashMap<u64, (std::net::TcpListener, u16)>,
+    conns: HashMap<u64, std::net::TcpStream>,
 }
 
 impl Interp {
@@ -357,14 +396,11 @@ impl Interp {
         // Default runs vary: the seed comes from the clock (two runs of the
         // same program play differently). Replay-determinism is explicit —
         // assign a `Host::with_seed` host (26.5's fixed-seed replay).
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos() as u64 ^ d.as_secs())
-            .unwrap_or(0x2545_F491_4F6C_DD1D);
         Interp {
-            host: Host::with_seed(Vec::new(), nanos),
+            host: Host::with_seed(Vec::new(), clock_seed()),
             ring,
             dev,
+            net: NetRegistry::default(),
             struct_fields,
             entry_scope: Vec::new(),
             deinits,
@@ -806,10 +842,19 @@ impl Interp {
             }
             Instr::Ask { dest, question, span } => {
                 let q = self.read(question, locals);
-                // The prompt prints (7.1's visible question), then one stdin
-                // line is consumed.
-                self.host.stdout.push(q.format());
-                match self.host.stdin.pop_front_line() {
+                // The prompt prints (7.1's visible question), then one answer
+                // is consumed: a preset stdin line, or else the ask hook.
+                let prompt = q.format();
+                let transcript_before = if self.host.stdin.is_empty() { self.host.stdout.clone() } else { Vec::new() };
+                self.host.stdout.push(prompt.clone());
+                let answer = match self.host.stdin.pop_front_line() {
+                    Some(line) => Some(line),
+                    None => match self.host.ask_hook.as_mut() {
+                        Some(hook) => hook(&prompt, &transcript_before),
+                        None => None,
+                    },
+                };
+                match answer {
                     Some(line) => {
                         locals[dest.0] = Value::Text(line);
                         Step::Continue
@@ -1528,6 +1573,18 @@ impl Interp {
                     Err(FileOutcome::Trap(t)) => Step::Exit(Exit::Trap(t)),
                 }
             }
+            Instr::NetOp { dest, op, a, b, span } => {
+                // Same routing as the file ops: a network failure is an
+                // error value (13.1/S-10); a misuse is a trap.
+                match self.net_op(*op, *dest, a, b.as_ref(), locals, *span, pad) {
+                    Ok(()) => Step::Continue,
+                    Err(FileOutcome::Fail(msg)) => {
+                        self.record_fail(&msg);
+                        route_fail(msg, pad)
+                    }
+                    Err(FileOutcome::Trap(t)) => Step::Exit(Exit::Trap(t)),
+                }
+            }
 
             Instr::EventFunctionEntry { function, args } => {
                 if self.dev {
@@ -1623,6 +1680,214 @@ impl Interp {
                 }
             }
             CallResult::Exit(e) => Err(e),
+        }
+    }
+
+    /// One network operation (M2's sockets/HTTP surface). Handles are
+    /// numbers; every op except `Port`/`Close` can fail (13.1), and the
+    /// failure value is the message text (S-10). Message texts mirror the
+    /// runtime's `rt_net_op` exactly — differential parity is a test.
+    #[allow(clippy::too_many_arguments)]
+    fn net_op(
+        &mut self,
+        op: NetOp,
+        dest: LocalId,
+        a: &Operand,
+        b: Option<&Operand>,
+        locals: &mut Vec<Value>,
+        span: Span,
+        _pad: Option<BlockId>,
+    ) -> Result<(), FileOutcome> {
+        use std::io::{Read as _, Write};
+        let a_v = self.read(a, locals);
+        match op {
+            NetOp::Listen => {
+                // `open listener at <port>` — bind; the bound port rides the
+                // registry handle (`port of` reads it back).
+                let port = self.number_arg(&a_v, "open listener", "the port", span)? as u16;
+                match std::net::TcpListener::bind(("0.0.0.0", port)) {
+                    Ok(l) => {
+                        let bound = l.local_addr().map(|a| a.port()).unwrap_or(port);
+                        self.net.next += 1;
+                        let h = self.net.next;
+                        self.net.listeners.insert(h, (l, bound));
+                        locals[dest.0] = Value::Number(h as i64);
+                        Ok(())
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Unsupported => Err(
+                        FileOutcome::Fail(
+                            "network operations need the installed build; the browser cannot open sockets yet."
+                                .to_string(),
+                        ),
+                    ),
+                    Err(e) => Err(FileOutcome::Fail(format!(
+                        "could not listen at port {port}: {}.",
+                        e.kind()
+                    ))),
+                }
+            }
+            NetOp::Port => {
+                // `port of <listener>` — the port actually bound.
+                let h = self.number_arg(&a_v, "port of", "the listener", span)?;
+                match self.net.listeners.get(&h) {
+                    Some((_, bound)) => {
+                        locals[dest.0] = Value::Number(*bound as i64);
+                        Ok(())
+                    }
+                    None => Err(FileOutcome::Trap(Trap {
+                        message: format!("that is not an open listener: {h}."),
+                        span,
+                    })),
+                }
+            }
+            NetOp::Accept => {
+                // `expect connection from <listener>` — block until a client
+                // arrives; the connection gets the next handle.
+                let h = self.number_arg(&a_v, "expect connection from", "the listener", span)?;
+                let listener = match self.net.listeners.get(&h) {
+                    Some(l) => l.0.try_clone(),
+                    None => {
+                        return Err(FileOutcome::Trap(Trap {
+                            message: format!("that is not an open listener: {h}."),
+                            span,
+                        }));
+                    }
+                };
+                match listener.and_then(|l| l.accept()) {
+                    Ok((stream, _)) => {
+                        self.net.next += 1;
+                        let ch = self.net.next;
+                        self.net.conns.insert(ch, stream);
+                        locals[dest.0] = Value::Number(ch as i64);
+                        Ok(())
+                    }
+                    Err(e) => Err(FileOutcome::Fail(format!(
+                        "could not accept a connection on listener {h}: {}.",
+                        e.kind()
+                    ))),
+                }
+            }
+            NetOp::Connect => {
+                // `open connection at <port> to <host>` — connect out. The
+                // `at` slot is the port (a `to`-first flowing call does not
+                // parse; see the sema dispatch note).
+                let port = self.number_arg(&a_v, "open connection", "the port", span)? as u16;
+                let bv = b.map(|x| self.read(x, locals)).unwrap_or(Value::Nothing);
+                let host = match &bv {
+                    Value::Text(t) => t.clone(),
+                    other => {
+                        return Err(FileOutcome::Trap(Trap {
+                            message: format!(
+                                "open connection needs a text host, but got {}.",
+                                other.format()
+                            ),
+                            span,
+                        }));
+                    }
+                };
+                match std::net::TcpStream::connect((host.as_str(), port)) {
+                    Ok(s) => {
+                        self.net.next += 1;
+                        let h = self.net.next;
+                        self.net.conns.insert(h, s);
+                        locals[dest.0] = Value::Number(h as i64);
+                        Ok(())
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::Unsupported => Err(
+                        FileOutcome::Fail(
+                            "network operations need the installed build; the browser cannot open sockets yet."
+                                .to_string(),
+                        ),
+                    ),
+                    Err(e) => Err(FileOutcome::Fail(format!(
+                        "could not open a connection to {host}:{port}: {}.",
+                        e.kind()
+                    ))),
+                }
+            }
+            NetOp::Put => {
+                // `put <text> at <connection>` — write all the bytes; the
+                // result is the byte count.
+                let text = match &a_v {
+                    Value::Text(t) => t.clone(),
+                    other => {
+                        return Err(FileOutcome::Trap(Trap {
+                            message: format!(
+                                "put needs text to send, but got {}.",
+                                other.format()
+                            ),
+                            span,
+                        }));
+                    }
+                };
+                let bv = b.map(|x| self.read(x, locals)).unwrap_or(Value::Nothing);
+                let h = self.number_arg(&bv, "put at", "the connection", span)?;
+                let stream = match self.net.conns.get_mut(&h) {
+                    Some(s) => s.try_clone(),
+                    None => {
+                        return Err(FileOutcome::Trap(Trap {
+                            message: format!("that is not an open connection: {h}."),
+                            span,
+                        }));
+                    }
+                };
+                match stream.and_then(|mut s| {
+                    Write::write_all(&mut s, text.as_str().as_bytes()).map(|_| (s, ()))
+                }) {
+                    Ok(_) => {
+                        let n = text.as_str().as_bytes().len() as i64;
+                        locals[dest.0] = Value::Number(n);
+                        Ok(())
+                    }
+                    Err(_) => Err(FileOutcome::Fail("the connection closed.".to_string())),
+                }
+            }
+            NetOp::Take => {
+                // `take from <connection>` — one blocking read chunk (≤ 64
+                // KiB), as text. Empty read = the connection closed.
+                let h = self.number_arg(&a_v, "take from", "the connection", span)?;
+                let stream = match self.net.conns.get_mut(&h) {
+                    Some(s) => s.try_clone(),
+                    None => {
+                        return Err(FileOutcome::Trap(Trap {
+                            message: format!("that is not an open connection: {h}."),
+                            span,
+                        }));
+                    }
+                };
+                let mut buf = vec![0u8; 65536];
+                match stream.and_then(|mut s| s.read(&mut buf).map(|n| (s, n))) {
+                    Ok((_, 0)) => Err(FileOutcome::Fail("the connection closed.".to_string())),
+                    Ok((_, n)) => {
+                        locals[dest.0] =
+                            Value::Text(String::from_utf8_lossy(&buf[..n]).to_string());
+                        Ok(())
+                    }
+                    Err(_) => Err(FileOutcome::Fail("the connection closed.".to_string())),
+                }
+            }
+            NetOp::Close => {
+                // `close <listener or connection>` — stop the endpoint.
+                // Idempotent: closing twice (or a stale handle) does nothing.
+                let h = self.number_arg(&a_v, "close", "the listener or connection", span)?;
+                if self.net.listeners.remove(&h).is_none() {
+                    self.net.conns.remove(&h);
+                }
+                locals[dest.0] = Value::Nothing;
+                Ok(())
+            }
+        }
+    }
+
+    /// A handle argument — the number the net registry keys on. A non-number
+    /// is a type misuse: a trap, not an error value.
+    fn number_arg(&self, v: &Value, op: &str, what: &str, span: Span) -> Result<u64, FileOutcome> {
+        match v {
+            Value::Number(n) if *n >= 0 => Ok(*n as u64),
+            other => Err(FileOutcome::Trap(Trap {
+                message: format!("{op} needs {what}, but got {}.", other.format()),
+                span,
+            })),
         }
     }
 

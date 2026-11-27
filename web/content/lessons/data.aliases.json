@@ -1,0 +1,45 @@
+{
+  "id": "data.aliases",
+  "title": "Name a type with a type alias",
+  "objective": "Give an existing type a new name with a type alias, and use the name in a function.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "A type called gives a type a name of its own. Here score is a number, so a function can say it takes a score and returns a score. The name is only a label: a score is still a number."
+    },
+    {
+      "type": "example",
+      "title": "Add a bonus to a score",
+      "code": "a type called score is a number\n\nfunction bonus\n    takes score called s\n    returns a score\n    gives back s plus 10\n\nmake points equal to 20\nmake total equal to bonus(points)\nsay \"{total}\"\n",
+      "inputMode": "none",
+      "expected": [
+        "30"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "data.aliases.define",
+      "prompt": "The program uses a type that was never named, so it does not compile. Make it print 15.",
+      "starter": "function bonus\n    takes score called s\n    returns a score\n    gives back s plus 10\n\nmake points equal to 5\nmake total equal to bonus(points)\nsay \"{total}\"\n",
+      "solution": "a type called score is a number\n\nfunction bonus\n    takes score called s\n    returns a score\n    gives back s plus 10\n\nmake points equal to 5\nmake total equal to bonus(points)\nsay \"{total}\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints 15",
+          "kind": "output",
+          "expect": [
+            "15"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,83 @@
+{
+  "id": "variables.arithmetic",
+  "title": "Add, subtract, multiply and divide",
+  "objective": "Calculate with + - * / or with the words plus, minus, times and divided by, and see which part runs first.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "Lagom has two ways to calculate. Symbols are short: + adds, - subtracts, * multiplies and / divides. Words are longer but read like English: plus, minus, times and divided by. Both ways give the same answer, so use whichever is clearer to you. Be consistent within one program."
+    },
+    {
+      "type": "example",
+      "title": "Symbols and words",
+      "code": "make sum equal to 7 + 5\nmake difference equal to 20 minus 8\nmake product equal to 6 * 9\nmake quotient equal to 20 / 4\nsay sum\nsay difference\nsay product\nsay quotient\n",
+      "inputMode": "none",
+      "expected": [
+        "12",
+        "12",
+        "54",
+        "5"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "A calculation can have several steps. Multiplication and division happen before addition and subtraction, so 10 + 5 * 2 is 20, not 30. The same rule applies to the word forms, where times comes before plus."
+    },
+    {
+      "type": "example",
+      "title": "Multiplication first",
+      "code": "make base equal to 10\nmake bonus equal to 5\nmake multiplier equal to 2\nmake total equal to base + bonus * multiplier\nsay total\nmake age equal to 12\nsay age plus 1\nsay age times 2\n",
+      "inputMode": "none",
+      "expected": [
+        "20",
+        "13",
+        "24"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "Parentheses change the order. Work inside the brackets first, then use the answer. Compare the two lines below. The brackets make the first one add before it multiplies."
+    },
+    {
+      "type": "example",
+      "title": "Parentheses change the order",
+      "code": "make base equal to 2\nmake bonus equal to 3\nmake multiplier equal to 4\nmake total equal to (base plus bonus) times multiplier\nsay total\nmake count equal to 4\nmake average equal to 10 divided by (count plus 1)\nsay average\n",
+      "inputMode": "none",
+      "expected": [
+        "20",
+        "2"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "variables.arithmetic.total",
+      "prompt": "Make total equal to 2 + 3 * 4 using symbols. Multiplication happens first, so the program should print 14.",
+      "starter": "make total equal to 0\nsay total\n",
+      "solution": "make total equal to 2 + 3 * 4\nsay total\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "uses-symbols",
+          "description": "The total is calculated as 2 + 3 * 4",
+          "kind": "source",
+          "matches": "make total equal to 2 \\+ 3 \\* 4"
+        },
+        {
+          "id": "output",
+          "description": "It prints 14",
+          "kind": "output",
+          "expect": [
+            "14"
+          ]
+        }
+      ]
+    }
+  ]
+}

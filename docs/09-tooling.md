@@ -40,8 +40,16 @@ Rationale for the last-statement rule: the teaching docs' natural example is `ma
 ## Open questions
 
 - Default verbosity mode for *existing* projects as users mature — auto-escalation heuristic or explicit setting? (Propose: explicit; decide at M1 with user data.)
-- Does the debugger's teaching pane ship at M2 (with basic DAP) or M3? (Propose: M3; decide at M2 planning.)
+- ~~Does the debugger's teaching pane ship at M2 (with basic DAP) or M3? (Propose: M3; decide at M2 planning.)~~ **Decided (2026-10, M2 planning): M3.** The M2 gate did not name the debugger — its three criteria (HTTP project, differential testing, packaged library) are met without it — and the honest cost is large: the teaching pane needs the per-step change summaries, breakpoint/stepping semantics over tasks and channels ([doc 06](06-concurrency.md)), and a DAP server whose stepping can be differential-tested exactly like the backends. Landing a half-paned basic DAP inside M2 would be an editor artifact nobody validated with students (D-28's rule). M3's tooling scope owns the full design.
 - Playground hosting governance (cost, privacy for student code) — decide before public playground launch (M3–M4).
+
+## M2 explainer ledger (2026-10)
+
+The "no diagnostic the compiler can produce goes unexplained" property is now a test, not an intention: `every_emitted_code_has_a_page` sweeps every compiler crate's source for `"E####"` literals and asserts each resolves to a `lagom explain` page ([`crates/lagom_cli/src/explain.rs`](../crates/lagom_cli/src/explain.rs)). Indicator probes (the `E9998`/`E9999` renderer fixtures) live under `crates/*/tests/`, which the sweep excludes. What M2 added to the ledger:
+
+- **11.3's four protocol codes** explain what the walk is doing: E0395 (the built-in `iterable` name is reserved — the claim carries the protocol, not a redeclaration), E0396 (the polls ride compiler-lowered loop code, so a `can fail` `give next` would leak a failure no student line wrote), E0397 (a walk ends only when a poll returns `nothing` — the option annotation is what makes the loop honest), E0398 (class walks own no positions, so the comma-index form is refused with the list counting rule named).
+- **Stale pages are drift too:** E0338's page had predated the class walk — it now names lists, maps, and `does iterable` classes, and points a count-intent reader at `repeat N times`.
+- **Context suggestions:** unknown names offer the closest real binding by Damerau–Levenshtein single-edit distance (`did you mean \`score\`?`), with containment + length bars so short names never suggest noise (sema's `single_edit_would_touch`, `dam_levenshtein`). The bar's teaching rule: a suggestion must survive a rename of every other name — otherwise it guesses instead of teaching (G-naming).
 
 ## Cross-references
 

@@ -1,0 +1,72 @@
+{
+  "id": "functions.positional",
+  "title": "Pass arguments in order",
+  "objective": "Call a function by listing its values in the order of its takes lines, joined with and.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "A call can pass its values without naming them. The first value goes to the first takes line, the second value to the second takes line, and so on. Write the function name, then the values. When there are several values, join them with and. A call with one value needs no and."
+    },
+    {
+      "type": "example",
+      "title": "One value",
+      "code": "function shout\n    takes text called word\n    say \"{word}!\"\n\nshout \"hi\"\n",
+      "inputMode": "none",
+      "expected": [
+        "hi!"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "The order of the values matters. Each value is matched with the takes line in the same position, so swapping them changes the result."
+    },
+    {
+      "type": "example",
+      "title": "Order decides the meaning",
+      "code": "function subtract\n    takes number called left\n    takes number called right\n    gives back left minus right\n\nsay subtract 10 and 3\nsay subtract 3 and 10\n",
+      "inputMode": "none",
+      "expected": [
+        "7",
+        "-7"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "A value can also be a variable. The call uses the value the variable holds, so you can pass a name the same way you pass a number."
+    },
+    {
+      "type": "example",
+      "title": "A variable as a value",
+      "code": "function subtract\n    takes number called left\n    takes number called right\n    gives back left minus right\n\nmake start equal to 5\nsay subtract 20 and start\n",
+      "inputMode": "none",
+      "expected": [
+        "15"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "functions.positional.describe",
+      "prompt": "The values in the call are in the wrong order, so the program does not compile. Make it print Ada is 30.",
+      "starter": "function describe\n    takes text called name\n    takes number called age\n    say \"{name} is {age}\"\n\ndescribe 30 and \"Ada\"\n",
+      "solution": "function describe\n    takes text called name\n    takes number called age\n    say \"{name} is {age}\"\n\ndescribe \"Ada\" and 30\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints Ada is 30",
+          "kind": "output",
+          "expect": [
+            "Ada is 30"
+          ]
+        }
+      ]
+    }
+  ]
+}

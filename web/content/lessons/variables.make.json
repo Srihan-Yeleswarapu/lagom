@@ -1,0 +1,57 @@
+{
+  "id": "variables.make",
+  "title": "Store values with make",
+  "objective": "Keep a value in a named variable, and change it later.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "Make gives a value a name. A name can only be given a new value if it is made changing, and set then changes it."
+    },
+    {
+      "type": "example",
+      "title": "Store and change values",
+      "code": "make score equal to 10\nmake changing lives equal to 3\nset lives to 2\nsay \"Score: {score}\"\nsay \"Lives: {lives}\"\n",
+      "inputMode": "none",
+      "expected": [
+        "Score: 10",
+        "Lives: 2"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "increase adds an amount to a changing number. For example, increase score by 5 adds 5 to score. Setting a name that was not made changing is a compile error, so the compiler tells you before the program runs."
+    },
+    {
+      "type": "exercise",
+      "id": "variables.make.score",
+      "prompt": "score starts at 0 and never changes, so the program prints Score: 0. Make it print Score: 5.",
+      "starter": "make changing score equal to 0\nsay \"Score: {score}\"\n",
+      "solution": "make changing score equal to 0\nincrease score by 5\nsay \"Score: {score}\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "uses-increase",
+          "description": "It uses increase score by 5",
+          "kind": "source",
+          "matches": "^\\s*increase score by 5\\s*$",
+          "flags": "m"
+        },
+        {
+          "id": "output",
+          "description": "It prints Score: 5",
+          "kind": "output",
+          "expect": [
+            "Score: 5"
+          ]
+        }
+      ]
+    }
+  ]
+}

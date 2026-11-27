@@ -5,3 +5,6 @@ target/
 .agentsroom/handoff-summary-*.md
 .agentsroom/fork-context-*.txt
 .agents/mcp.json
+web/pkg/
+node_modules/
+.DS_Store

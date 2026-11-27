@@ -1,0 +1,60 @@
+{
+  "id": "generics.some-type",
+  "title": "Write one function for any kind with some type",
+  "objective": "Use some type in a function so it takes and returns a value of whatever kind the caller passes.",
+  "minutes": 7,
+  "body": [
+    {
+      "type": "p",
+      "text": "Sometimes a function works the same way for numbers, texts, or anything else. Write some type for a parameter whose kind you do not fix in advance. Each call decides the kind: if you pass numbers, the parameter is a number. The returns line with some type says the result has the same kind as the value the function receives."
+    },
+    {
+      "type": "example",
+      "title": "Choose one of two values",
+      "code": "function choose\n    takes some type called left\n    takes some type called right\n    returns some type\n    gives back left\n\nsay choose 1 and 2\nsay choose \"sun\" and \"moon\"\n",
+      "inputMode": "none",
+      "expected": [
+        "1",
+        "sun"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "A list can hold any kind too. Write a list of some type, and the function returns a value of the same kind as the items in the list."
+    },
+    {
+      "type": "example",
+      "title": "The first item of any list",
+      "code": "function first item\n    takes a list of some type called items\n    returns some type\n    gives back items at 0\n\nmake list equal to a list of 1, 2, 3\nsay first item list\n",
+      "inputMode": "none",
+      "expected": [
+        "1"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "generics.some-type.choose",
+      "prompt": "The program shows choose working with numbers, printing 1. Show it working with text as well, so the program also prints red.",
+      "starter": "function choose\n    takes some type called left\n    takes some type called right\n    returns some type\n    gives back left\n\nsay choose 1 and 2\n",
+      "solution": "function choose\n    takes some type called left\n    takes some type called right\n    returns some type\n    gives back left\n\nsay choose 1 and 2\nsay choose \"red\" and \"blue\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints 1, then red",
+          "kind": "output",
+          "expect": [
+            "1",
+            "red"
+          ]
+        }
+      ]
+    }
+  ]
+}

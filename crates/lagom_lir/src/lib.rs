@@ -221,6 +221,10 @@ pub enum LirInstr {
     /// File ops (§19.1; op: 0 read, 1 write, 2 append, 3 delete, 4 exists,
     /// 5 size). All but `exists` can fail.
     FileOp { dest: SlotId, op: i64, a: LirOperand, b: Option<LirOperand>, line: i64 },
+    /// Network operations (M2: the sockets/HTTP surface; handles are
+    /// numbers). `op`: 0 listen, 1 port, 2 accept, 3 connect, 4 put,
+    /// 5 take, 6 close. Same arg shape as `FileOp`.
+    NetOp { dest: SlotId, op: i64, a: LirOperand, b: Option<LirOperand>, line: i64 },
 
     // ----- LOM probes (§26.5): dev builds emit these; release builds drop
     // them in this very lowering (the release-identity boundary) -----
@@ -431,10 +435,14 @@ fn lower_instr(i: &lagom_mir::Instr, dev: bool, inr: &mut Interner, out: &mut Ve
         M::Call { dest, callee, args, span, .. } if callee.starts_with("iface ") => {
             // 12.3/10.6 vtable dispatch: split the `iface <I> <m>` callee
             // into its two names so the runtime lookup has them directly.
+            // The method keeps its full multi-word name — 11.3's `give next`
+            // and §70's `compare to` are frozen shapes, so a first-word split
+            // would truncate the row key on the native path (the interp
+            // splits with `split_once`, which already keeps the whole rest).
             let mut words = callee.split(' ');
             let _ = words.next();
             let iface = words.next().unwrap_or_default().to_string();
-            let method = words.next().unwrap_or_default().to_string();
+            let method = words.collect::<Vec<_>>().join(" ");
             out.push(LirInstr::CallIface {
                 dest: SlotId(dest.0),
                 iface,
@@ -716,6 +724,21 @@ fn lower_instr(i: &lagom_mir::Instr, dev: bool, inr: &mut Interner, out: &mut Ve
                 lagom_mir::FileOp::Delete => 3,
                 lagom_mir::FileOp::Exists => 4,
                 lagom_mir::FileOp::Size => 5,
+            },
+            a: lower_operand(a, inr),
+            b: b.as_ref().map(|x| lower_operand(x, inr)),
+            line: line_of(span),
+        }),
+        M::NetOp { dest, op, a, b, span } => out.push(LirInstr::NetOp {
+            dest: SlotId(dest.0),
+            op: match op {
+                lagom_mir::NetOp::Listen => 0,
+                lagom_mir::NetOp::Port => 1,
+                lagom_mir::NetOp::Accept => 2,
+                lagom_mir::NetOp::Connect => 3,
+                lagom_mir::NetOp::Put => 4,
+                lagom_mir::NetOp::Take => 5,
+                lagom_mir::NetOp::Close => 6,
             },
             a: lower_operand(a, inr),
             b: b.as_ref().map(|x| lower_operand(x, inr)),

@@ -1,0 +1,59 @@
+{
+  "id": "data.nothing",
+  "title": "Handle a missing value",
+  "objective": "Use a value that may be missing, check for it with is nothing or is something, and return it from a function.",
+  "minutes": 8,
+  "body": [
+    {
+      "type": "p",
+      "text": "Some answers may not exist. first of gives the first item of a list, but an empty list has no first item, so the answer is nothing. A type written as a number or nothing can hold either a number or nothing. Check which one you have with is nothing or is something."
+    },
+    {
+      "type": "example",
+      "title": "Check for a missing value",
+      "code": "make scores equal to keep a list of 3, 8 where it is greater than 9\nmake top equal to first of scores\nif top is nothing\n    say \"No score is over 9.\"\notherwise\n    say \"Top score: {top}\"\n",
+      "inputMode": "none",
+      "expected": [
+        "No score is over 9."
+      ]
+    },
+    {
+      "type": "p",
+      "text": "A function that may give back nothing says or nothing after its return type. To send a value out, use something with value. To send nothing out, use gives back nothing."
+    },
+    {
+      "type": "example",
+      "title": "Return nothing when there is no answer",
+      "code": "function half\n    takes number called n\n    returns a decimal or nothing\n    if n is less than 0\n        gives back nothing\n    gives back something with value n divided by 2\n\nmake answer equal to half -4\nif answer is nothing\n    say \"Negative numbers have no half.\"\n\nmake other equal to half 6\nif other is something\n    say \"Half of 6 is {other}\"\n",
+      "inputMode": "none",
+      "expected": [
+        "Negative numbers have no half.",
+        "Half of 6 is 3"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "data.nothing.check",
+      "prompt": "A score is in the list, but the program prints nothing at all. Make it print Top score: 3.",
+      "starter": "make scores equal to a list of 3, 8\nmake top equal to first of scores\nif top is nothing\n    say \"Top score: {top}\"\n",
+      "solution": "make scores equal to a list of 3, 8\nmake top equal to first of scores\nif top is something\n    say \"Top score: {top}\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints Top score: 3",
+          "kind": "output",
+          "expect": [
+            "Top score: 3"
+          ]
+        }
+      ]
+    }
+  ]
+}

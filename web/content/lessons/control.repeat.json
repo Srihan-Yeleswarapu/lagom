@@ -1,0 +1,65 @@
+{
+  "id": "control.repeat",
+  "title": "Repeat steps with repeat",
+  "objective": "Run the same lines again while a condition holds, or once for each item in a list.",
+  "minutes": 8,
+  "body": [
+    {
+      "type": "p",
+      "text": "Repeat while runs the indented lines again and again, for as long as its condition stays true. Change the value inside the loop, or the loop never stops. Use Stop to end a program that is running too long."
+    },
+    {
+      "type": "example",
+      "title": "Count to three",
+      "code": "make changing i equal to 1\nrepeat while i is at most 3\n    say \"i = {i}\"\n    increase i by 1\n",
+      "inputMode": "none",
+      "expected": [
+        "i = 1",
+        "i = 2",
+        "i = 3"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "repeat for each visits every item in a list, one at a time, and gives each item a name you choose. Lists are covered in the Data lesson."
+    },
+    {
+      "type": "example",
+      "title": "Visit a list",
+      "code": "make fruits equal to a list of \"apple\", \"pear\"\nrepeat for each fruit in fruits\n    say \"I like {fruit}\"\n",
+      "inputMode": "none",
+      "expected": [
+        "I like apple",
+        "I like pear"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "control.repeat.count",
+      "prompt": "The loop stops at 3, but it should count from 1 all the way to 5. Make it print 1 to 5, one per line.",
+      "starter": "make changing i equal to 1\nrepeat while i is at most 3\n    say \"{i}\"\n    increase i by 1\n",
+      "solution": "make changing i equal to 1\nrepeat while i is at most 5\n    say \"{i}\"\n    increase i by 1\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints 1 to 5",
+          "kind": "output",
+          "expect": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5"
+          ]
+        }
+      ]
+    }
+  ]
+}

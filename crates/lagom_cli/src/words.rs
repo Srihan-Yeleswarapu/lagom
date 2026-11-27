@@ -47,6 +47,10 @@ options
 
 tasks & channels
   send  receive
+
+network (M2's sockets & HTTP built-ins — numbers name listeners and
+connections; every op but `port` and `close` can fail)
+  open listener  open connection  expect connection  put  take  close  port
 ";
 
 /// `lagom words --types`: the type surface — the built-ins every program

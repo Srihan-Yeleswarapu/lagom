@@ -1,0 +1,34 @@
+{
+  "id": "functions.pass-on",
+  "title": "Pass a failure up to the caller",
+  "objective": "Let a failure from one function, or from a step inside it, be handled by whoever called it, using and pass the problem on.",
+  "minutes": 8,
+  "body": [
+    {
+      "type": "p",
+      "text": "Sometimes a function does a step that can fail, and the function does not know what to do about it. Instead of handling the failure there, it can pass it on. Write and pass the problem on after the attempt. The function then fails with the same problem, and the caller handles it with attempt, as usual."
+    },
+    {
+      "type": "example",
+      "title": "Let the caller decide",
+      "code": "function load score\n    takes text called raw\n    returns a number\n    can fail\n    attempt number from raw and pass the problem on\n    gives back result\n\nattempt load score \"x\" if it fails then\n    say \"failed\"\notherwise\n    say \"ok\"\n",
+      "inputMode": "none",
+      "expected": [
+        "failed"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "The function gives back result only when the step worked. If it failed, the line after it never runs, because the failure has already been passed on."
+    },
+    {
+      "type": "example",
+      "title": "Show the reason",
+      "code": "function parse age\n    takes text called answer\n    returns a number\n    can fail\n    attempt number from answer and pass the problem on\n    gives back result\n\nattempt parse age \"abc\" if it fails then\n    say problem\notherwise\n    say result\n",
+      "inputMode": "none",
+      "expected": [
+        "\"abc\" is not a number — a number is digits, maybe starting with a minus."
+      ]
+    }
+  ]
+}

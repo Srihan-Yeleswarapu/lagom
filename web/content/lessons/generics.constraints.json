@@ -1,0 +1,45 @@
+{
+  "id": "generics.constraints",
+  "title": "Accept only kinds that do an interface",
+  "objective": "Use some type that does an interface, so the function accepts only kinds that provide the interface's methods.",
+  "minutes": 7,
+  "body": [
+    {
+      "type": "p",
+      "text": "A generic function often needs its value to have a certain method. Write that interface first, as in the interfaces lesson. Then write some type that does the interface in the parameter. Only kinds that do the interface can be passed to the function, so the function can safely call the method."
+    },
+    {
+      "type": "example",
+      "title": "A function for anything that prints",
+      "code": "interface printable\n    can print\n        say \"checked\"\n\nclass card does printable\n    has rank of type number\n\nfunction print value\n    takes anything that does printable called value\n    print of value\n\nmake v equal to a new card with rank 7\nprint value of v\n",
+      "inputMode": "none",
+      "expected": [
+        "checked"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "generics.constraints.print",
+      "prompt": "The card satisfies the printable interface, but nothing in the program ever prints. Make it print printed.",
+      "starter": "interface printable\n    can print\n        say \"printed\"\n\nclass card does printable\n    has rank of type number\n\nfunction print value\n    takes anything that does printable called value\n    print of value\n\nmake v equal to a new card with rank 7\n",
+      "solution": "interface printable\n    can print\n        say \"printed\"\n\nclass card does printable\n    has rank of type number\n\nfunction print value\n    takes anything that does printable called value\n    print of value\n\nmake v equal to a new card with rank 7\nprint value of v\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints printed",
+          "kind": "output",
+          "expect": [
+            "printed"
+          ]
+        }
+      ]
+    }
+  ]
+}

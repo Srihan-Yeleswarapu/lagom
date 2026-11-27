@@ -1,0 +1,71 @@
+{
+  "id": "data.match",
+  "title": "Choose by kind with match",
+  "objective": "Use match with when to run different code for each kind of value, and read values out of a kind.",
+  "minutes": 8,
+  "body": [
+    {
+      "type": "p",
+      "text": "match looks at a value and runs the first when that fits. Each when names a kind from a kind declaration, and the lines under it run only for that kind. The first example has a kind called light with three choices."
+    },
+    {
+      "type": "example",
+      "title": "Match a kind",
+      "code": "kind light\n    is a red\n    is a yellow\n    is a green\n\nmake signal equal to a red\nmatch signal\n    when red\n        say \"stop\"\n    when yellow\n        say \"wait\"\n    when green\n        say \"go\"\n",
+      "inputMode": "none",
+      "expected": [
+        "stop"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "A kind can carry values. When a choice has fields, a when can name the choice and give each value its own name with with, so the lines inside can use it. Here a circle's radius is read into r."
+    },
+    {
+      "type": "example",
+      "title": "Read values in a when",
+      "code": "kind shape\n    is a circle with radius of type number\n    is a rectangle with width of type number and height of type number\n    is a blank\n\nmake s equal to a circle with radius 3\nmatch s\n    when a circle with radius r\n        say \"circle of radius {r}\"\n    when a rectangle with width w and height h\n        say \"rectangle\"\n    when blank\n        say \"empty\"\n",
+      "inputMode": "none",
+      "expected": [
+        "circle of radius 3"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "match works on an option too. A when nothing branch handles the missing case, and when something with value name gives the value a name inside the branch."
+    },
+    {
+      "type": "example",
+      "title": "Match an option",
+      "code": "make maybe name equal to nothing of type text?\nmatch maybe name\n    when nothing\n        say \"missing\"\n    when something with value name\n        say name\n",
+      "inputMode": "none",
+      "expected": [
+        "missing"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "data.match.reply",
+      "prompt": "The reply is a no, but the match has no branch for that kind, so the program does not compile. Make it print rejected.",
+      "starter": "kind answer\n    is a yes\n    is a no\n\nmake reply equal to a no\nmatch reply\n    when yes\n        say \"accepted\"\n",
+      "solution": "kind answer\n    is a yes\n    is a no\n\nmake reply equal to a no\nmatch reply\n    when yes\n        say \"accepted\"\n    when no\n        say \"rejected\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints rejected",
+          "kind": "output",
+          "expect": [
+            "rejected"
+          ]
+        }
+      ]
+    }
+  ]
+}

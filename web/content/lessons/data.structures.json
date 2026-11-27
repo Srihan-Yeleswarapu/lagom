@@ -1,0 +1,49 @@
+{
+  "id": "data.structures",
+  "title": "Group values with a structure",
+  "objective": "Define a structure with named fields, make one, read a field, and change it.",
+  "minutes": 10,
+  "body": [
+    {
+      "type": "p",
+      "text": "A structure groups related values under names. structure gives it a name, and each has line adds one named field with its type. make ... with builds one, giving every field a value after with. Read a field with its name and of, as in name of player."
+    },
+    {
+      "type": "example",
+      "title": "Make a player",
+      "code": "structure player\n    has name of type text\n    has score of type number\n\nmake changing player equal to a player with name \"Bo\" and score 0\nset score of player to 7\nsay \"{name of player} has {score of player}\"\n",
+      "inputMode": "none",
+      "expected": [
+        "Bo has 7"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "To change a field, the variable must be made changing, just like a number. If you leave a field out when you make the structure, the compiler stops and names the missing field."
+    },
+    {
+      "type": "exercise",
+      "id": "data.structures.score",
+      "prompt": "Ada starts with 0 points and then scores 10, but the program still reports 0. Make it say Ada has 10.",
+      "starter": "structure player\n    has name of type text\n    has score of type number\n\nmake changing player equal to a player with name \"Ada\" and score 0\nsay \"{name of player} has {score of player}\"\n",
+      "solution": "structure player\n    has name of type text\n    has score of type number\n\nmake changing player equal to a player with name \"Ada\" and score 0\nset score of player to 10\nsay \"{name of player} has {score of player}\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints Ada has 10",
+          "kind": "output",
+          "expect": [
+            "Ada has 10"
+          ]
+        }
+      ]
+    }
+  ]
+}

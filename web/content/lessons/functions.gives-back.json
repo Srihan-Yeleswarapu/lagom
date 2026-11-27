@@ -1,0 +1,59 @@
+{
+  "id": "functions.gives-back",
+  "title": "Give back a value with gives back",
+  "objective": "Return a value with gives back, including from inside an if, so a function can stop early.",
+  "minutes": 7,
+  "body": [
+    {
+      "type": "p",
+      "text": "gives back sends a value out of the function, and the function ends at that point. Any lines after it do not run. The value can be a number, text, or a result of a calculation or a comparison."
+    },
+    {
+      "type": "example",
+      "title": "Double a number",
+      "code": "function double\n    takes number called value\n    gives back value times 2\n\nsay double 5\n",
+      "inputMode": "none",
+      "expected": [
+        "10"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "gives back can appear inside an if. The first one that runs ends the function, so you can write the special case first and the normal answer last."
+    },
+    {
+      "type": "example",
+      "title": "Early answers",
+      "code": "function absolute\n    takes number called value\n    if value is less than 0\n        gives back -value\n    gives back value\n\nsay absolute -3\n\nfunction choose name\n    takes boolean called formal\n    if formal\n        gives back \"Doctor\"\n    gives back \"Friend\"\n\nsay choose name true\n",
+      "inputMode": "none",
+      "expected": [
+        "3",
+        "Doctor"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "functions.gives-back.formal",
+      "prompt": "This call is asking for the formal name, but the program prints Friend. Make it print Doctor.",
+      "starter": "function choose name\n    takes boolean called formal\n    if formal\n        gives back \"Doctor\"\n    gives back \"Friend\"\n\nsay choose name false\n",
+      "solution": "function choose name\n    takes boolean called formal\n    if formal\n        gives back \"Doctor\"\n    gives back \"Friend\"\n\nsay choose name true\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints Doctor",
+          "kind": "output",
+          "expect": [
+            "Doctor"
+          ]
+        }
+      ]
+    }
+  ]
+}

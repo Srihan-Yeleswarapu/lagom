@@ -266,6 +266,8 @@ struct RtFns {
     json_parse: FuncId,
     json_format: FuncId,
     file_op: FuncId,
+    // M2: the sockets/HTTP surface (handles are numbers).
+    net_op: FuncId,
     lom_set_source: FuncId,
     lom_entry: FuncId,
     lom_entry_arg: FuncId,
@@ -348,6 +350,7 @@ impl RtFns {
             json_parse: imp(module, "rt_json_parse", 4, 1),
             json_format: imp(module, "rt_json_format", 3, 1),
             file_op: imp(module, "rt_file_op", 8, 1),
+            net_op: imp(module, "rt_net_op", 8, 1),
             lom_set_source: imp(module, "rt_lom_set_source", 2, 0),
             lom_entry: imp(module, "rt_lom_entry", 2, 0),
             lom_entry_arg: imp(module, "rt_lom_entry_arg", 4, 0),
@@ -1404,6 +1407,35 @@ impl<'a> Backend<'a> {
                     st,
                     pad,
                     self.rt.file_op,
+                    &[op_v, at, ap, bt, bp, has_v, line_v],
+                    Some(*line),
+                    true,
+                );
+                self.store_pair(fb, st, *dest, (t, p));
+            }
+            LirInstr::NetOp { dest, op, a, b, line } => {
+                // Same shape as the file op: one status-returning runtime
+                // call tagged by `op` (0 listen … 6 close); the failure
+                // value is the message text (S-10).
+                let (at, ap) = self.operand(fb, st, pad, a);
+                let op_v = fb.ins().iconst(I64, *op);
+                let (bt, bp, has_v): (Value, Value, Value) = match b {
+                    Some(bop) => {
+                        let (t, p) = self.operand(fb, st, pad, bop);
+                        (t, p, fb.ins().iconst(I64, 1))
+                    }
+                    None => (
+                        fb.ins().iconst(I64, 0),
+                        fb.ins().iconst(I64, 0),
+                        fb.ins().iconst(I64, 0),
+                    ),
+                };
+                let line_v = fb.ins().iconst(I64, *line);
+                let (t, p) = self.call_out_status_mode(
+                    fb,
+                    st,
+                    pad,
+                    self.rt.net_op,
                     &[op_v, at, ap, bt, bp, has_v, line_v],
                     Some(*line),
                     true,

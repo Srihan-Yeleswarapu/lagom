@@ -1,0 +1,59 @@
+{
+  "id": "variables.numbers",
+  "title": "Numbers and decimals",
+  "objective": "Work with whole numbers and decimals, and turn text into a number.",
+  "minutes": 8,
+  "body": [
+    {
+      "type": "p",
+      "text": "A number is a whole number, such as 4. A decimal can have fractions, such as 2.5. When you do arithmetic with both, the answer is a decimal. Lagom does this for you, so you never have to convert a whole number to a decimal yourself."
+    },
+    {
+      "type": "example",
+      "title": "Multiply a decimal",
+      "code": "make price equal to 2.5\nmake total equal to price times 2\nsay \"Total: {total}\"\n",
+      "inputMode": "none",
+      "expected": [
+        "Total: 5"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "Text such as \"42\" is not a number until you convert it. number from reads the text and gives back a number. It can fail, for example on \"4x\", so the conversion goes inside an attempt. The if it fails branch runs when the text is not a number."
+    },
+    {
+      "type": "example",
+      "title": "Read a number from text",
+      "code": "attempt number from \"42\" if it fails then\n    say \"not a number\"\notherwise\n    say result\nattempt number from \"4x\" if it fails then\n    say \"not a number\"\notherwise\n    say result\n",
+      "inputMode": "none",
+      "expected": [
+        "42",
+        "not a number"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "variables.numbers.total",
+      "prompt": "answer holds the text 21. Turn it into a number, double it, and print 42. If the text is not a number, print not a number.",
+      "starter": "make answer equal to \"21\"\nsay \"21\"\n",
+      "solution": "make answer equal to \"21\"\nattempt number from answer if it fails then\n    say \"not a number\"\notherwise\n    say result times 2\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints 42",
+          "kind": "output",
+          "expect": [
+            "42"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "id": "variables.divide",
+  "title": "Divide, and find what is left over",
+  "objective": "Use divided by for an exact answer, divided evenly by for a whole number, and remainder of for what is left over.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "Divided by gives the exact answer, which can be a decimal. divided evenly by gives only the whole number of times one value fits into another. remainder of gives what is left over after that."
+    },
+    {
+      "type": "example",
+      "title": "Three ways to divide 17 by 5",
+      "code": "make exact equal to 17 divided by 5\nsay exact\nmake bags equal to 17 divided evenly by 5\nsay bags\nmake leftover equal to remainder of 17 and 5\nsay leftover\n",
+      "inputMode": "none",
+      "expected": [
+        "3.4",
+        "3",
+        "2"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "variables.divide.cookies",
+      "prompt": "Seventeen cookies do not fill bags of five. The program prints the number of bags; it should print how many are left over instead. Make it print 2.",
+      "starter": "make leftover equal to 17 divided by 5\nsay leftover\n",
+      "solution": "make leftover equal to remainder of 17 and 5\nsay leftover\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints 2",
+          "kind": "output",
+          "expect": [
+            "2"
+          ]
+        }
+      ]
+    }
+  ]
+}

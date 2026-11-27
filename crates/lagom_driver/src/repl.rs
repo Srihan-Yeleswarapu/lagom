@@ -416,6 +416,23 @@ mod tests {
         assert!(s.history().is_empty());
     }
 
+    /// A rejection in a session with history is reported on the line the
+    /// student typed. The session's source is the whole history, so a
+    /// diagnostic's line number is the session's — and a lexical error's
+    /// span must point at the offending character, not at the first line.
+    #[test]
+    fn rejection_reports_the_line_the_student_typed() {
+        let mut s = Session::with_seed(7);
+        assert!(matches!(s.submit("make x equal to 1"), StepOutcome::Accepted { .. }));
+        match s.submit("say 'hi'") {
+            StepOutcome::Rejected { rendered } => {
+                assert!(rendered.contains("ERROR on line 2"), "{rendered}");
+                assert!(rendered.contains("say 'hi'"), "{rendered}");
+            }
+            other => panic!("expected rejected, got {other:?}"),
+        }
+    }
+
     /// A rejected statement never enters the accepted source — replay and
     /// later statements behave exactly as before the attempt.
     #[test]

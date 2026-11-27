@@ -1,0 +1,65 @@
+{
+  "id": "basics.names",
+  "title": "Name things with several words",
+  "objective": "Write clear names of more than one word, and use them the same way every time.",
+  "minutes": 5,
+  "body": [
+    {
+      "type": "p",
+      "text": "A name can have several words. Put a space between the words, and Lagom reads them as one name. Names such as high score or lamp oil say what a value is, which is easier to read than a short name like h or x."
+    },
+    {
+      "type": "example",
+      "title": "Several-word names",
+      "code": "make first name equal to \"Ada\"\nmake high score equal to 100\nsay first name\nsay high score\n",
+      "inputMode": "none",
+      "expected": [
+        "Ada",
+        "100"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "Write the name the same way each time you use it. Once a value is made changing, set and increase can use the same multi-word name."
+    },
+    {
+      "type": "example",
+      "title": "Changing a several-word name",
+      "code": "make changing lamp oil equal to 10\nset lamp oil to lamp oil minus 1\nsay lamp oil\n",
+      "inputMode": "none",
+      "expected": [
+        "9"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "basics.names.high-score",
+      "prompt": "The value 100 is a high score, but the name score does not say so. Give it a name that reads like words, and the program should still print 100.",
+      "starter": "make score equal to 100\nsay score\n",
+      "solution": "make high score equal to 100\nsay high score\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "uses-high-score",
+          "description": "The variable is named high score",
+          "kind": "source",
+          "matches": "make high score equal to 100"
+        },
+        {
+          "id": "output",
+          "description": "It prints 100",
+          "kind": "output",
+          "expect": [
+            "100"
+          ]
+        }
+      ]
+    }
+  ]
+}

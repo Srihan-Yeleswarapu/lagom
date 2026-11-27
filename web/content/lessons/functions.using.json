@@ -1,0 +1,85 @@
+{
+  "id": "functions.using",
+  "title": "Pass a function to map, keep and combine",
+  "objective": "Give a function to map, keep or combine with using, so the list operation runs it on every item.",
+  "minutes": 9,
+  "body": [
+    {
+      "type": "p",
+      "text": "map, keep and combine work through a list and run a function on each item. Write using after the list, then the name of the function. map gives back a new list with each item changed. keep gives back only the items that pass the test. combine joins all the items into one value, starting from a start value."
+    },
+    {
+      "type": "example",
+      "title": "Map with a named function",
+      "code": "function double\n    takes number called n\n    gives back n times 2\n\nmake scores equal to a list of 1, 2, 3\nmake doubled equal to map scores using double\nsay first of doubled\n",
+      "inputMode": "none",
+      "expected": [
+        "2"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "Inside a using line, it stands for the current item. This lets you write a short test or change without naming a function."
+    },
+    {
+      "type": "example",
+      "title": "It stands for each item",
+      "code": "make scores equal to a list of 1, 2, 3\nmake raised equal to map scores using it plus 5\nsay first of raised\n\nmake numbers equal to a list of -1, 2, 3\nmake positive equal to keep numbers using it is greater than 0\nsay first of positive\n",
+      "inputMode": "none",
+      "expected": [
+        "6",
+        "2"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "The item can also be a structure. Write name of it to read one of its fields."
+    },
+    {
+      "type": "example",
+      "title": "Read a field from each item",
+      "code": "structure person\n    has name of type text\n\nmake people equal to a list of a person with name \"Ada\"\nmake names equal to map people using name of it\nsay first of names\n",
+      "inputMode": "none",
+      "expected": [
+        "Ada"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "combine takes a start value with start, and a function that receives the total so far and the next item. This adds up a list."
+    },
+    {
+      "type": "example",
+      "title": "Add up a list",
+      "code": "function add\n    takes number called left\n    takes number called right\n    gives back left plus right\n\nmake scores equal to a list of 1, 2, 3\nmake total equal to combine scores with start 0 using add\nsay total\n",
+      "inputMode": "none",
+      "expected": [
+        "6"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "functions.using.raise",
+      "prompt": "Each score should go up by 1, but the program adds 5, so the first score prints 6. Make it print 2.",
+      "starter": "make scores equal to a list of 1, 2, 3\nmake raised equal to map scores using it plus 5\nsay first of raised\n",
+      "solution": "make scores equal to a list of 1, 2, 3\nmake raised equal to map scores using it plus 1\nsay first of raised\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints 2",
+          "kind": "output",
+          "expect": [
+            "2"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "about": "Static course content. Each lesson is one JSON file in lessons/, named after its id. The outline lists the lessons in order. JSON is used because the site has no build step for content, the files are easy to diff and review, and the browser can fetch them without a server. Lesson ids such as basics.print double as progress keys and as URLs (/lesson/basics.print).",
+  "title": "Learn Lagom",
+  "topics": [
+    {
+      "id": "basics",
+      "title": "The basics",
+      "lessons": ["basics.print", "basics.comments", "basics.names", "basics.indent", "basics.continue", "basics.ask", "basics.docs"]
+    },
+    {
+      "id": "variables",
+      "title": "Variables",
+      "lessons": ["variables.values", "variables.make", "variables.set", "variables.numbers", "variables.arithmetic", "variables.compound", "variables.divide", "variables.grouping", "variables.text", "types.annotate"]
+    },
+    {
+      "id": "control",
+      "title": "Making decisions and repeating",
+      "lessons": ["control.if", "control.otherwise", "control.otherwise-if", "control.compare", "control.combine", "control.repeat", "control.while", "control.times", "control.each", "control.stop", "control.next"]
+    },
+    {
+      "id": "functions",
+      "title": "Functions",
+      "lessons": ["functions.define", "functions.parameters", "functions.order", "functions.positional", "functions.returns", "functions.gives-back", "functions.fail", "functions.pass-on", "functions.named-failures", "functions.labeled", "functions.prepositions", "functions.flowing", "functions.nesting", "functions.using", "functions.where", "functions.lambdas", "functions.take-giving", "functions.closures"]
+    },
+    {
+      "id": "data",
+      "title": "Data",
+      "lessons": ["data.lists", "data.first-size", "data.indexing", "data.set-at", "data.kinds", "data.nothing", "data.option-types", "data.match", "data.pairs", "data.maps", "data.structures", "data.fields", "data.aliases"]
+    },
+    {
+      "id": "objects",
+      "title": "Classes and interfaces",
+      "lessons": ["objects.classes", "objects.interfaces", "objects.extends", "objects.release"]
+    },
+    {
+      "id": "generics",
+      "title": "Generic functions",
+      "lessons": ["generics.anything", "generics.some-type", "generics.constraints"]
+    },
+    {
+      "id": "modules",
+      "title": "Modules",
+      "lessons": ["modules.use"]
+    },
+    {
+      "id": "testing",
+      "title": "Checking your program",
+      "lessons": ["testing.check"]
+    },
+    {
+      "id": "tasks",
+      "title": "Doing work at once",
+      "lessons": ["tasks.start", "tasks.channels"]
+    },
+    {
+      "id": "practice",
+      "title": "Practice programs",
+      "lessons": ["practice.totals", "practice.larger", "practice.months", "practice.scores", "practice.wallet", "practice.names", "practice.sizes", "practice.biggest", "practice.grade", "practice.two-wallets", "practice.greet-all"]
+    }
+  ]
+}

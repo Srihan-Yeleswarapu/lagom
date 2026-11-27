@@ -1,0 +1,46 @@
+{
+  "id": "practice.grade",
+  "title": "Name a grade with a function",
+  "objective": "Write a function that returns text, choosing the answer with an if.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "A function that returns text says returns text. Its if decides which words to give back. Because the function returns a value, you can use the call anywhere a text value is expected, such as in a say line."
+    },
+    {
+      "type": "example",
+      "title": "Pass or fail",
+      "code": "function grade\n    takes number called score\n    returns text\n    if score is at least 50\n        gives back \"Pass\"\n    gives back \"Fail\"\n\nsay grade 75\nsay grade 20\n",
+      "inputMode": "none",
+      "expected": [
+        "Pass",
+        "Fail"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "practice.grade.word",
+      "prompt": "A score of 75 should pass, but the program prints Fail. Make it print Pass.",
+      "starter": "function grade\n    takes number called score\n    returns text\n    if score is at least 50\n        gives back \"Fail\"\n    gives back \"Fail\"\n\nsay grade 75\n",
+      "solution": "function grade\n    takes number called score\n    returns text\n    if score is at least 50\n        gives back \"Pass\"\n    gives back \"Fail\"\n\nsay grade 75\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints Pass",
+          "kind": "output",
+          "expect": [
+            "Pass"
+          ]
+        }
+      ]
+    }
+  ]
+}

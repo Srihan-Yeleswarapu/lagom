@@ -293,6 +293,40 @@ fn build_runtime_from_source(rt_rlib: &Path) -> Result<(), ()> {
 mod tests {
     use super::*;
 
+    /// The scratch dir must separate builders launched inside one clock
+    /// tick — same label (every `main.lagom` keys the stem), same tick,
+    /// still distinct dirs. The old clock-only salt let two racing `lagom
+    /// run` processes share ONE exe path and execute each other's linked
+    /// binary (observed live: a consumer printed the other consumer's
+    /// output). The pid salt closes it.
+    #[test]
+    fn native_build_never_collides_within_one_tick() {
+        // Threads = same pid, simultaneous `new(label)` = one tick likely;
+        // collect every dir while the builds are alive.
+        let hits = std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashSet::<std::path::PathBuf>::new(),
+        ));
+        let mut joins = Vec::new();
+        for _ in 0..8 {
+            let hits = hits.clone();
+            joins.push(std::thread::spawn(move || {
+                for _ in 0..50 {
+                    let b = NativeBuild::new("main").expect("scratch dir");
+                    hits.lock().unwrap().insert(b.dir.clone());
+                    drop(b); // the Drop removes the dir; the path is pinned
+                }
+            }));
+        }
+        for j in joins {
+            j.join().expect("builder thread");
+        }
+        let count = hits.lock().unwrap().len();
+        assert_eq!(
+            count, 400,
+            "same-label builders must all get distinct scratch dirs, got {count}"
+        );
+    }
+
     /// The snapshot fallback's whole premise: the six runtime-tree crates
     /// build with plain rustc — no cargo, no registry, nothing else — and
     /// the result links against the shim exactly like a cargo-built rlib.
@@ -405,7 +439,7 @@ fn build_runtime(
         .map_err(|e| format!("could not run cargo to build the runtime: {e}"))?;
     if !output.status.success() {
         let tail = String::from_utf8_lossy(&output.stderr);
-        let tail: Vec<&str> = tail.lines().rev().take(6).collect();
+        let tail: Vec<&str> = tail.lines().rev().take(60).collect();
         let tail = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
         return Err(format!(
             "the Lagom runtime library could not be built (cargo build -p lagom_rt failed):\n{tail}"
@@ -499,7 +533,7 @@ pub fn link(build_dir: &Path, object: &[u8], out: &Path, no_pdb: bool) -> Result
         // rlib, E0460 for stale metadata); surface its last lines so the
         // CLI error alone is diagnosable.
         let tail = String::from_utf8_lossy(&output.stderr);
-        let tail: Vec<&str> = tail.lines().rev().take(6).collect();
+        let tail: Vec<&str> = tail.lines().rev().take(60).collect();
         let tail = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
         return Err(format!(
             "linking the runtime failed (rustc exited with an error):\n{tail}\
@@ -521,13 +555,26 @@ pub struct NativeBuild {
 
 impl NativeBuild {
     /// A unique scratch directory for one build (never collides).
+    /// Three salts, each closing a real hole: the **counter** keeps rapid
+    /// builds inside ONE process distinct when the clock's real tick is
+    /// coarser than the loop; the **pid** separates concurrent `lagom run`
+    /// processes that launched inside one tick (the package tests race
+    /// several per loop) — the clock-only salt once shared ONE scrub dir
+    /// and exe path between them, so they executed each other's linked
+    /// binary and printed each other's output; the nanos keep long-lived
+    /// processes from reusing names.
     pub fn new(label: &str) -> Result<NativeBuild, String> {
+        static BUILD_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let base = std::env::temp_dir();
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = base.join(format!("lagom-build-{label}-{unique}"));
+        let seq = BUILD_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = base.join(format!(
+            "lagom-build-{label}-{}-{unique}-{seq}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).map_err(|e| format!("temp dir: {e}"))?;
         Ok(NativeBuild { dir })
     }

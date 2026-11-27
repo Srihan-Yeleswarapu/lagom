@@ -1,0 +1,67 @@
+{
+  "id": "types.annotate",
+  "title": "Name the type of a value",
+  "objective": "Write of type after a value to state its type, for numbers, decimals, booleans, texts and lists.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "Lagom works out the type of most values for you. You can also write it yourself with of type after the value, as in 0 of type number. The compiler checks that the value really has that type, so a mistake is reported before the program runs."
+    },
+    {
+      "type": "example",
+      "title": "Typed values",
+      "code": "make changing attempts equal to 0 of type number\nsay attempts\n\nmake ratio equal to 0.5 of type decimal\nsay ratio\n\nmake enabled equal to true of type boolean\nsay enabled\n\nmake title equal to \"Lagom\" of type text\nsay title\n",
+      "inputMode": "none",
+      "expected": [
+        "0",
+        "0.5",
+        "true",
+        "Lagom"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "A list has its type written as a list of the item type, and a map as a map from the key type to the value type. The type goes after the value in the same way."
+    },
+    {
+      "type": "example",
+      "title": "Typed lists",
+      "code": "make names equal to a list of \"Ana\" of type a list of text\nsay first of names\n",
+      "inputMode": "none",
+      "expected": [
+        "Ana"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "types.annotate.ratio",
+      "prompt": "The program stores 0.5 without saying what kind of value it is. Give the ratio a type and the program should still print 0.5.",
+      "starter": "make ratio equal to 0.5\nsay ratio\n",
+      "solution": "make ratio equal to 0.5 of type decimal\nsay ratio\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "uses-type",
+          "description": "It writes of type decimal",
+          "kind": "source",
+          "matches": "of type decimal"
+        },
+        {
+          "id": "output",
+          "description": "It prints 0.5",
+          "kind": "output",
+          "expect": [
+            "0.5"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "id": "objects.classes",
+  "title": "Classes hold data and behavior together",
+  "objective": "Declare a class with fields, a construction clause and methods, then create and use an object.",
+  "minutes": 9,
+  "body": [
+    {
+      "type": "p",
+      "text": "A class is for an object that keeps its own state and has an identity, such as a counter, a player or a document. Write class, then the name. Each has line declares a field, and each can line declares a method. Inside a method, myself means the object the method was called on. Use set and increase on its fields the same way you do on variables."
+    },
+    {
+      "type": "example",
+      "title": "A counter with a method",
+      "code": "class counter\n    has count of type number\n    construction\n        set count of myself to 0\n    can bump\n        increase count of myself by 1\n\nmake c equal to a new counter\nbump c\nbump c\nsay count of c\n",
+      "inputMode": "none",
+      "expected": [
+        "2"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "A construction clause runs when you write a new object, and it must set every field. Its inputs are written with takes, just like a function. Pass the values after with, the same way you name arguments in a function call."
+    },
+    {
+      "type": "example",
+      "title": "Construction with an input",
+      "code": "class counter\n    has count of type number\n    has step of type number\n    construction\n        takes number called starting step\n        set count of myself to 0\n        set step of myself to starting step\n\nmake c equal to a new counter with starting step 2\nsay step of c\n",
+      "inputMode": "none",
+      "expected": [
+        "2"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "A method can take inputs too. Declare them with takes inside the can clause. Call the method by naming it, then the value, then to and the object, such as add 5 to c."
+    },
+    {
+      "type": "example",
+      "title": "A method with an argument",
+      "code": "class counter\n    has count of type number\n    construction\n        set count of myself to 0\n    can add\n        takes number called amount\n        increase count of myself by amount\n\nmake c equal to a new counter\nadd 5 to c\nsay count of c\n",
+      "inputMode": "none",
+      "expected": [
+        "5"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "objects.classes.bump",
+      "prompt": "The counter is created but never used, so it stays at 0. Make the program print 1.",
+      "starter": "class counter\n    has count of type number\n    construction\n        set count of myself to 0\n    can bump\n        increase count of myself by 1\n\nmake c equal to a new counter\nsay count of c\n",
+      "solution": "class counter\n    has count of type number\n    construction\n        set count of myself to 0\n    can bump\n        increase count of myself by 1\n\nmake c equal to a new counter\nbump c\nsay count of c\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints 1",
+          "kind": "output",
+          "expect": [
+            "1"
+          ]
+        }
+      ]
+    }
+  ]
+}

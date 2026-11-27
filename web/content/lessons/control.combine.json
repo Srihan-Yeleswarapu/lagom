@@ -1,0 +1,47 @@
+{
+  "id": "control.combine",
+  "title": "Combine conditions with and, or and not",
+  "objective": "Join two checks with and or or, and flip a check with not.",
+  "minutes": 7,
+  "body": [
+    {
+      "type": "p",
+      "text": "Sometimes one check is not enough. You can join checks with three words. The word and needs both conditions to be true. The word or needs at least one of them to be true. The word not turns a true condition into a false one, and a false one into a true one. Put a comparison in brackets after not, so it is clear which part it applies to: not (age is less than 13)."
+    },
+    {
+      "type": "example",
+      "title": "Join conditions",
+      "code": "make score equal to 90\nif score is at least 80 and score is at most 100\n    say \"Passing\"\n\nmake weekend equal to true\nmake holiday equal to false\nif weekend or holiday\n    say \"No school\"\nif not holiday\n    say \"A normal day\"\n",
+      "inputMode": "none",
+      "expected": [
+        "Passing",
+        "No school",
+        "A normal day"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "control.combine.teen",
+      "prompt": "The program calls a 30-year-old a teen, but only ages 13 to 19 should count. Make it print not a teen.",
+      "starter": "make age equal to 30\nif age is at least 13 or age is at most 19\n    say \"teen\"\notherwise\n    say \"not a teen\"\n",
+      "solution": "make age equal to 30\nif age is at least 13 and age is at most 19\n    say \"teen\"\notherwise\n    say \"not a teen\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints not a teen",
+          "kind": "output",
+          "expect": [
+            "not a teen"
+          ]
+        }
+      ]
+    }
+  ]
+}

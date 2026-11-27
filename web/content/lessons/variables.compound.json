@@ -1,0 +1,70 @@
+{
+  "id": "variables.compound",
+  "title": "Increase and decrease a number",
+  "objective": "Add to or take away from a changing number with increase and decrease, using a number or another variable.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "increase adds an amount to a changing number, and decrease takes an amount away. They are shorter than set when you only want to move a number up or down. increase score by 10 means the same as set score to score plus 10."
+    },
+    {
+      "type": "example",
+      "title": "Adding and taking away",
+      "code": "make changing score equal to 0\nincrease score by 10\nsay score\nmake changing lives equal to 3\ndecrease lives by 1\nsay lives\n",
+      "inputMode": "none",
+      "expected": [
+        "10",
+        "2"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "The amount can be a number, or the name of a variable that holds one. Both forms work for increase and decrease. This example uses a variable for the amount."
+    },
+    {
+      "type": "example",
+      "title": "The amount can be a variable",
+      "code": "make changing total equal to 100\nmake bonus equal to 20\nincrease total by bonus\nsay total\nmake changing score equal to 100\nmake penalty equal to 10\ndecrease score by penalty\nsay score\n",
+      "inputMode": "none",
+      "expected": [
+        "120",
+        "90"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "increase and decrease also work on a field of a structure, such as increase score of player by 5. The field must belong to a changing structure."
+    },
+    {
+      "type": "exercise",
+      "id": "variables.compound.lives",
+      "prompt": "The player starts with 3 lives and should end with 2, but the program never changes the count. Make it print 2.",
+      "starter": "make changing lives equal to 3\nsay lives\n",
+      "solution": "make changing lives equal to 3\ndecrease lives by 1\nsay lives\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "uses-decrease",
+          "description": "It uses decrease lives by 1",
+          "kind": "source",
+          "matches": "^\\s*decrease lives by 1\\s*$"
+        },
+        {
+          "id": "output",
+          "description": "It prints 2",
+          "kind": "output",
+          "expect": [
+            "2"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,85 @@
+{
+  "id": "functions.closures",
+  "title": "Transform lists with map, keep and combine",
+  "objective": "Use map to change every item, keep where to choose items, and combine to fold a list into one value.",
+  "minutes": 10,
+  "body": [
+    {
+      "type": "p",
+      "text": "Map, keep and combine each take a list and a rule, and run the rule on the items. map using builds a new list with the result for each item. keep where keeps only the items that pass a test. combine with start folds the whole list into one value, starting from the value you give."
+    },
+    {
+      "type": "example",
+      "title": "Double every number",
+      "code": "function double\n    takes number called x\n    returns a number\n    gives back x times 2\n\nmake numbers equal to a list of 1, 2, 3\nmake doubled equal to map numbers using double\nrepeat for each n in doubled\n    say \"{n}\"\n",
+      "inputMode": "none",
+      "expected": [
+        "2",
+        "4",
+        "6"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "A rule can also be written in the line itself, with taking and giving back. keep where tests each item with it. combine with start 0 using taking start and value adds up the list: start holds the running total, and value is the next item."
+    },
+    {
+      "type": "example",
+      "title": "Keep and add up",
+      "code": "make numbers equal to a list of 1, 2, 3, 4\nmake big equal to keep numbers where it is greater than 2\nsay \"{size of big}\"\nmake total equal to combine numbers with start 0 using taking start and value giving back start plus value\nsay \"{total}\"\n",
+      "inputMode": "none",
+      "expected": [
+        "2",
+        "10"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "functions.closures.keep",
+      "prompt": "The filter keeps nothing because the cut-off is too high. It should keep only the numbers greater than 2, so the program prints 2.",
+      "starter": "make numbers equal to a list of 1, 2, 3, 4\nmake big equal to keep numbers where it is greater than 9\nsay \"{size of big}\"\n",
+      "solution": "make numbers equal to a list of 1, 2, 3, 4\nmake big equal to keep numbers where it is greater than 2\nsay \"{size of big}\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints 2",
+          "kind": "output",
+          "expect": [
+            "2"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "functions.closures.combine",
+      "prompt": "The fold totals 11, but 1 plus 2 plus 3 plus 4 is 10. Make it print 10.",
+      "starter": "make numbers equal to a list of 1, 2, 3, 4\nmake total equal to combine numbers with start 1 using taking start and value giving back start plus value\nsay \"{total}\"\n",
+      "solution": "make numbers equal to a list of 1, 2, 3, 4\nmake total equal to combine numbers with start 0 using taking start and value giving back start plus value\nsay \"{total}\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints 10",
+          "kind": "output",
+          "expect": [
+            "10"
+          ]
+        }
+      ]
+    }
+  ]
+}

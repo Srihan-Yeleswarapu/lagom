@@ -1,0 +1,26 @@
+{
+  "id": "objects.interfaces",
+  "title": "Share a shape with an interface",
+  "objective": "Declare an interface, make classes that do it, and call the method each class provides.",
+  "minutes": 7,
+  "body": [
+    {
+      "type": "p",
+      "text": "An interface lists the methods that a kind of object must have, and nothing else. Write interface, then the name, then one can line for each method. A class says it provides the interface with does, and then it writes each method in full. Two classes can share an interface even though their fields and bodies are different."
+    },
+    {
+      "type": "example",
+      "title": "Two classes that do the same interface",
+      "code": "interface drawable\n    can draw\n\nclass circle does drawable\n    can draw\n        say \"circle\"\n\nclass square does drawable\n    can draw\n        say \"square\"\n\nmake c equal to a new circle\nmake s equal to a new square\ndraw c\ndraw s\n",
+      "inputMode": "none",
+      "expected": [
+        "circle",
+        "square"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "An interface does not hold data. If a class needs data for its methods, it declares its own fields with has, just as a class without an interface does."
+    }
+  ]
+}

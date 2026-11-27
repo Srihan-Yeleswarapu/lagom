@@ -1,0 +1,54 @@
+{
+  "id": "data.lists",
+  "title": "Work with a list",
+  "objective": "Store several values together, count them, and visit each one.",
+  "minutes": 8,
+  "body": [
+    {
+      "type": "p",
+      "text": "A list holds several values in order. make a list of creates one from comma-separated values. Positions start at 0, so nums at 0 is the first item."
+    },
+    {
+      "type": "example",
+      "title": "Visit every item",
+      "code": "make nums equal to a list of 4, 8\nrepeat for each n in nums\n    say \"{n}\"\nsay \"Count: {size of nums}\"\n",
+      "inputMode": "none",
+      "expected": [
+        "4",
+        "8",
+        "Count: 2"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "size of gives the number of items. repeat for each visits the items in order. A list can only be changed with set if it was made changing."
+    },
+    {
+      "type": "exercise",
+      "id": "data.lists.count",
+      "prompt": "The program prints each number but never says how many there are. Make it print Count: 3 after the list.",
+      "starter": "make nums equal to a list of 4, 8, 15\nrepeat for each n in nums\n    say \"{n}\"\n",
+      "solution": "make nums equal to a list of 4, 8, 15\nrepeat for each n in nums\n    say \"{n}\"\nsay \"Count: {size of nums}\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints 4, 8, 15 and then Count: 3",
+          "kind": "output",
+          "expect": [
+            "4",
+            "8",
+            "15",
+            "Count: 3"
+          ]
+        }
+      ]
+    }
+  ]
+}

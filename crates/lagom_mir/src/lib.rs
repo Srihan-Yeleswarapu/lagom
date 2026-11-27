@@ -239,6 +239,10 @@ pub enum Instr {
     /// 0 read (`open file at p`), 1 write, 2 append, 3 delete,
     /// 4 exists (never fails), 5 size.
     FileOp { dest: LocalId, op: FileOp, a: Operand, b: Option<Operand>, span: Span },
+    /// Network operations — same shape as `FileOp` (the `b` slot carries the
+    /// second argument where an op needs two; see `NetOp`'s doc for the
+    /// handle story). Both backends share one registry per run.
+    NetOp { dest: LocalId, op: NetOp, a: Operand, b: Option<Operand>, span: Span },
     /// `dest = random from lo to hi`.
     Random { dest: LocalId, lo: Operand, hi: Operand, span: Span },
     /// `dest = first of list` — the option-producing head query (S-13).
@@ -380,6 +384,29 @@ pub enum FileOp {
     Delete,
     Exists,
     Size,
+}
+
+/// The network operations (M2's sockets/HTTP surface). Listeners and
+/// connections are *number handles*: the value type stays `number`, the
+/// backend lookup transforms the detection. Hosts are text and ports are
+/// numbers. Every op except `Port`/`Close` can fail (§13.1); the failure
+/// value is the message text (S-10).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum NetOp {
+    /// `open listener at <port>` — bind TCP and store the listener.
+    Listen,
+    /// `port of <listener>` — the port actually bound (port 0 → ephemeral).
+    Port,
+    /// `expect connection from <listener>` — accept one connection.
+    Accept,
+    /// `open connection to <host> at <port>` — connect out (TCP).
+    Connect,
+    /// `put <text> at <connection>` — write all the bytes; gives back the count.
+    Put,
+    /// `take from <connection>` — read one chunk (blocking; ≤ 64 KiB), as text.
+    Take,
+    /// `close <listener-or-connection>` — stop that endpoint.
+    Close,
 }
 
 // ---------------------------------------------------------------------------
@@ -1292,6 +1319,26 @@ impl FunctionLowerer {
                 self.emit(Instr::FileOp { dest, op, a, b, span });
                 dest
             }
+            "open listener" | "port" | "expect connection" | "open connection" | "put"
+            | "take" | "close" => {
+                // Sockets (M2): handle-form names below; args are the same
+                // two-slot shape the file ops use.
+                let op = match callee.as_str() {
+                    "open listener" => NetOp::Listen,
+                    "port" => NetOp::Port,
+                    "expect connection" => NetOp::Accept,
+                    "open connection" => NetOp::Connect,
+                    "put" => NetOp::Put,
+                    "take" => NetOp::Take,
+                    _ => NetOp::Close,
+                };
+                let dest = self.new_local("%t", ty, true, span);
+                let mut it = args.into_iter();
+                let a = self.op(it.next().expect("net arity checked"));
+                let b = it.next().map(|x| self.op(x));
+                self.emit(Instr::NetOp { dest, op, a, b, span });
+                dest
+            }
             "map" | "keep" | "combine" => {
                 // The combinators are one MIR op each (§11.2) so both
                 // backends share the loop; `f` is a closure value.
@@ -1410,8 +1457,17 @@ impl FunctionLowerer {
             lagom_hir::HirStmtKind::RepeatWhile { cond, body } => {
                 self.lower_while_loop(cond, body)
             }
-            lagom_hir::HirStmtKind::RepeatForEach { item, index, iter, body } => {
-                self.lower_for_each(item, index, iter, body, span)
+            lagom_hir::HirStmtKind::RepeatForEach { item, index, iter, body, poll_elem } => {
+                match poll_elem {
+                    // 11.3 protocol iteration: call `next` on the iterator
+                    // each round (vtable dispatch already in MIR), Some →
+                    // bind, None (Nothing) → done.
+                    Some(elem_ty) => {
+                        self.lower_for_each_generic(item, index, iter, body, elem_ty, span)
+                    }
+                    // List iteration: the M0 index desugaring.
+                    None => self.lower_for_each(item, index, iter, body, span),
+                }
             }
             lagom_hir::HirStmtKind::Stop => {
                 let (join, _) = *self
@@ -1705,12 +1761,15 @@ impl FunctionLowerer {
                 let cp = self.op(*channel);
                 self.emit(Instr::SendChannel { value: vp, channel: cp, span });
             }
-            lagom_hir::HirExprKind::Call { callee, callee_span, args } => {
-                // A user call for effect (value unused). Builtins have no
-                // side effects at M0.
-                let dest = self.new_local("%ignored", Type::Error, true, span);
-                let args = args.into_iter().map(|a| self.op(a)).collect();
-                self.emit(Instr::Call { dest, callee, callee_span, args, span });
+            lagom_hir::HirExprKind::Call { callee: _, callee_span: _, args: _ } => {
+                // A call for effect — `close c`, `put t at c`, `expect
+                // connection from l` run bare in statement position, and
+                // method calls ran here before them. Route through expr():
+                // its builtin dispatch owns the op lowering (NetOp, FileOp,
+                // Convert, …), and user calls lower through the same
+                // Instr::Call the generic arm used (the value simply goes
+                // into an unused temp instead of %ignored).
+                let _ = self.expr(e);
             }
             _ => {
                 self.expr(e);
@@ -1925,6 +1984,100 @@ impl FunctionLowerer {
         self.terminate(Term::Goto(test));
 
         self.set_active(join);
+    }
+
+    // 11.3 protocol iteration — lowering for `does iterable` classes:
+    //
+    //   loop:
+    //     poll = iface iterable give next (it)  ← vtable dispatch (12.3)
+    //     if poll = nothing → done
+    //     bind item = poll; body; counter++
+    //     goto loop
+    //
+    // The `iface …` callee rides the interp's vtable dispatch (and codegen's
+    // shared registry path), so the receiver's own `give next` runs even when
+    // its concrete class is only a narrowed alias away. The explicit counter
+    // keeps `next round` (which jumps to `increment`) from repeating an index.
+    fn lower_for_each_generic(
+        &mut self,
+        item: (String, Span),
+        index: Option<(String, Span)>,
+        iter: lagom_hir::HirExpr,
+        body: Vec<lagom_hir::HirStmt>,
+        elem_ty: Type,
+        span: Span,
+    ) {
+        // 11.3: `poll` yields the next element or `nothing` at the end —
+        // S-13's `first of` convention, which both backends compare through
+        // their shared `values_equal`.
+        let it = self.expr(iter);
+        let counter = self.new_local("%i", Type::Number, true, span);
+        self.emit(Instr::Copy { dest: counter, value: Operand::Int(0), span });
+
+        let loop_head = self.reserve_block("for each poll");
+        let body_b = self.reserve_block("for each body");
+        let incr = self.reserve_block("for each increment");
+        let done = self.reserve_block("for each done");
+        self.terminate(Term::Goto(loop_head));
+
+        self.set_active(loop_head);
+        let poll = self.new_local("%poll", elem_ty.clone(), true, span);
+        self.emit(Instr::Call {
+            dest: poll,
+            callee: "iface iterable give next".to_string(),
+            callee_span: span,
+            args: vec![Operand::Local(it)],
+            span,
+        });
+        let exhausted = self.new_local("%exhausted", Type::Boolean, true, span);
+        self.emit(Instr::Binary {
+            dest: exhausted,
+            op: BinOp::Equal,
+            left: Operand::Local(poll),
+            right: Operand::Nothing,
+            span,
+        });
+        self.terminate(Term::Branch {
+            cond: Operand::Local(exhausted),
+            then: done,
+            otherwise: body_b,
+        });
+
+        self.set_active(body_b);
+        let (item_name, item_span) = item;
+        let item_local = self.new_local(&item_name, elem_ty.clone(), false, item_span);
+        self.emit(Instr::Copy { dest: item_local, value: Operand::Local(poll), span });
+        self.declare(&item_name, item_local);
+        if let Some((iname, ispan)) = index {
+            let il = self.new_local(&iname, Type::Number, false, ispan);
+            self.emit(Instr::Copy { dest: il, value: Operand::Local(counter), span });
+            self.declare(&iname, il);
+        }
+        self.scopes.push(std::collections::HashMap::new());
+        self.loop_targets.push((done, incr));
+        for s in body {
+            self.stmt(s);
+        }
+        self.loop_targets.pop();
+        self.scopes.pop();
+        self.end_with_goto(incr);
+
+        // Increment: counter = counter + 1, then back to the poll.
+        self.set_active(incr);
+        let one = self.new_local("%one", Type::Number, true, span);
+        self.emit(Instr::Copy { dest: one, value: Operand::Int(1), span });
+        let next_i = self.new_local("%next_i", Type::Number, true, span);
+        self.emit(Instr::Binary {
+            dest: next_i,
+            op: BinOp::Add,
+            left: Operand::Local(counter),
+            right: Operand::Local(one),
+            span,
+        });
+        self.emit(Instr::Copy { dest: counter, value: Operand::Local(next_i), span });
+        self.terminate(Term::Goto(loop_head));
+
+        self.set_active(done);
     }
 
     // ----- attempts (13.1) -----

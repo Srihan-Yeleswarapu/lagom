@@ -1,0 +1,57 @@
+{
+  "id": "data.option-types",
+  "title": "Write a value that may be nothing",
+  "objective": "Declare a value that may be missing, using the ? form or the or nothing form of its type.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "A value that might be missing has an option type. Write of type followed by the kind, then a question mark, such as of type text?. You can also write the same thing as of type a text or nothing. Both mean the value is either a text or nothing."
+    },
+    {
+      "type": "example",
+      "title": "Two ways to write it",
+      "code": "make name equal to nothing of type text?\nsay name\n\nmake score equal to nothing of type a number or nothing\nsay score\n\nmake scores equal to a list of 42\nmake first score equal to first of scores\nsay first score\n",
+      "inputMode": "none",
+      "expected": [
+        "nothing",
+        "nothing",
+        "42"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "Use is nothing or is something to check the value before you rely on it, as in the handle a missing value lesson."
+    },
+    {
+      "type": "exercise",
+      "id": "data.option-types.score",
+      "prompt": "The program declares score with the ? shorthand. Rewrite it the other way this lesson shows, using or nothing, and keep it printing nothing.",
+      "starter": "make score equal to nothing of type number?\nsay score\n",
+      "solution": "make score equal to nothing of type a number or nothing\nsay score\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "uses-or-nothing",
+          "description": "It uses the or nothing form",
+          "kind": "source",
+          "matches": "of type a number or nothing"
+        },
+        {
+          "id": "output",
+          "description": "It prints nothing",
+          "kind": "output",
+          "expect": [
+            "nothing"
+          ]
+        }
+      ]
+    }
+  ]
+}

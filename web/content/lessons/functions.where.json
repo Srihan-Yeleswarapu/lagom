@@ -1,0 +1,59 @@
+{
+  "id": "functions.where",
+  "title": "Filter a list with keep where",
+  "objective": "Keep only the items of a list that pass a test, using keep ... where.",
+  "minutes": 7,
+  "body": [
+    {
+      "type": "p",
+      "text": "keep ... where gives back a new list with only the items that pass a test. The test is written after where, and it uses it for the current item. The original list does not change."
+    },
+    {
+      "type": "example",
+      "title": "Keep the passing scores",
+      "code": "make scores equal to a list of 70, 90, 80\nmake passing equal to keep scores where it is at least 70\nsay first of passing\n",
+      "inputMode": "none",
+      "expected": [
+        "70"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "The test can read a field of a structure item, or use the size of a text. Use of it to reach a field of the current item."
+    },
+    {
+      "type": "example",
+      "title": "Filter structures and text",
+      "code": "structure person\n    has name of type text\n    has age of type number\n\nmake people equal to a list of a person with name \"Ada\" and age 18\nmake adults equal to keep people where age of it is at least 18\nsay first of adults\n\nmake names equal to a list of \"Ada\", \"Bobby\", \"C\"\nmake short names equal to keep names where size of it is less than 8\nsay first of short names\n",
+      "inputMode": "none",
+      "expected": [
+        "person(Ada, 18)",
+        "Ada"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "functions.where.pass",
+      "prompt": "The pass mark is 80, but the program still keeps scores of 60, so it reports 70 first. Make it report 90.",
+      "starter": "make scores equal to a list of 70, 90, 80\nmake passing equal to keep scores where it is at least 60\nsay first of passing\n",
+      "solution": "make scores equal to a list of 70, 90, 80\nmake passing equal to keep scores where it is at least 80\nsay first of passing\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints 90",
+          "kind": "output",
+          "expect": [
+            "90"
+          ]
+        }
+      ]
+    }
+  ]
+}

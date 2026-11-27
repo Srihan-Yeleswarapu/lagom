@@ -1,0 +1,58 @@
+{
+  "id": "data.kinds",
+  "title": "Choose from named options",
+  "objective": "Declare a kind with a fixed set of choices, and use match to act on whichever one a value holds.",
+  "minutes": 8,
+  "body": [
+    {
+      "type": "p",
+      "text": "A kind lists the choices a value can be. Each choice starts with is a. make picks one choice, and match runs the when block for that choice. If a when block is missing, the compiler stops and names the choice it misses."
+    },
+    {
+      "type": "example",
+      "title": "Match a traffic light",
+      "code": "kind light\n    is a red\n    is a yellow\n    is a green\n\nmake signal equal to a red\nmatch signal\n    when a red\n        say \"stop\"\n    when a yellow\n        say \"slow\"\n    when a green\n        say \"go\"\n",
+      "inputMode": "none",
+      "expected": [
+        "stop"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "A choice can also carry a value. Here success holds the text done. The when line gives the value a name, v, so the block can use it."
+    },
+    {
+      "type": "example",
+      "title": "A choice that carries a value",
+      "code": "kind result\n    is a success with value of type text\n    is a failure with message of type text\n\nmake ok equal to a success with value \"done\"\nmatch ok\n    when a success with value v\n        say v\n    when a failure with message m\n        say m\n",
+      "inputMode": "none",
+      "expected": [
+        "done"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "data.kinds.green",
+      "prompt": "The light is green, but the program prints stop. Make it print go.",
+      "starter": "kind light\n    is a red\n    is a yellow\n    is a green\n\nmake signal equal to a red\nmatch signal\n    when a red\n        say \"stop\"\n    when a yellow\n        say \"slow\"\n    when a green\n        say \"go\"\n",
+      "solution": "kind light\n    is a red\n    is a yellow\n    is a green\n\nmake signal equal to a green\nmatch signal\n    when a red\n        say \"stop\"\n    when a yellow\n        say \"slow\"\n    when a green\n        say \"go\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints go",
+          "kind": "output",
+          "expect": [
+            "go"
+          ]
+        }
+      ]
+    }
+  ]
+}

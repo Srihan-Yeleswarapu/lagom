@@ -1,0 +1,67 @@
+{
+  "id": "control.times",
+  "title": "Count with repeat times",
+  "objective": "Run lines a fixed number of times, and read the counter that repeat times using gives you.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "repeat N times using i runs the indented lines N times. The name after using is a counter that you choose. It starts at 0, so the lines see 0, then 1, and so on up to N minus 1. A loop of 5 times therefore shows the numbers 0 to 4."
+    },
+    {
+      "type": "example",
+      "title": "Count five times",
+      "code": "repeat 5 times using i\n    say i\n",
+      "inputMode": "none",
+      "expected": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "The counter has a name you choose, so you can use it in text. The loop still runs only the number of times you wrote, whatever name you give the counter."
+    },
+    {
+      "type": "example",
+      "title": "Name the turns",
+      "code": "repeat 4 times using turn\n    say \"turn {turn}\"\n",
+      "inputMode": "none",
+      "expected": [
+        "turn 0",
+        "turn 1",
+        "turn 2",
+        "turn 3"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "control.times.three",
+      "prompt": "The game only takes two turns, but it should take three. Make it print turn 0, turn 1 and turn 2.",
+      "starter": "repeat 2 times using turn\n    say \"turn {turn}\"\n",
+      "solution": "repeat 3 times using turn\n    say \"turn {turn}\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints turn 0, turn 1 and turn 2",
+          "kind": "output",
+          "expect": [
+            "turn 0",
+            "turn 1",
+            "turn 2"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -77,6 +77,14 @@ impl<'src> Parser<'src> {
         }
     }
 
+    /// The item `n` positions ahead of the cursor (0 = the current item).
+    fn peek_at(&self, n: usize) -> (&Item, Span) {
+        match self.items.get(self.pos + n) {
+            Some((item, span)) => (item, *span),
+            None => (&self.sentinel.0, self.sentinel.1),
+        }
+    }
+
     fn peek_tok(&self) -> Option<&Tok> {
         match self.peek().0 {
             Item::Tok(t) => Some(t),
@@ -616,6 +624,17 @@ impl<'src> Parser<'src> {
                         mname.words.push("to".to_string());
                         mname.span = mname.span.to(to_span);
                     }
+                    // 11.3's frozen method name `give next`: `next` is also
+                    // the `next round` keyword, so a bare header would end the
+                    // name at `give`. Like the `to` case, a trailing `next` on
+                    // the header line cannot open any clause — it joins the
+                    // name. The call-site path has matched since the protocol
+                    // landed.
+                    if self.peek_kw() == Some(Kw::Next) {
+                        let next_span = self.bump().1;
+                        mname.words.push("next".to_string());
+                        mname.span = mname.span.to(next_span);
+                    }
                     self.end_of_line("the method header")?;
                     // The body is optional: absent = requirement, present =
                     // default (same block layout as a class method's).
@@ -890,6 +909,17 @@ impl<'src> Parser<'src> {
                         let to_span = self.bump().1;
                         mname.words.push("to".to_string());
                         mname.span = mname.span.to(to_span);
+                    }
+                    // 11.3's frozen method name `give next`: `next` is also
+                    // the `next round` keyword, so a bare header would end the
+                    // name at `give`. Like the `to` case, a trailing `next` on
+                    // the header line cannot open any clause — it joins the
+                    // name. The call-site path has matched since the protocol
+                    // landed.
+                    if self.peek_kw() == Some(Kw::Next) {
+                        let next_span = self.bump().1;
+                        mname.words.push("next".to_string());
+                        mname.span = mname.span.to(next_span);
                     }
                     self.end_of_line("the method header")?;
                     // Method body with the function clause system (10.2: `can`
@@ -1272,7 +1302,42 @@ impl<'src> Parser<'src> {
     fn make_stmt(&mut self) -> PResult<Stmt> {
         let start = self.expect_kw(Kw::Make, "the word `make`")?;
         let mutable = self.eat_kw(Kw::Changing).is_some();
+        // `make a list of 1, 2, 3` — the container phrase landed in the name
+        // slot. A `make` line reads `make <name> equal to <value>`.
+        if self.peek_kw() == Some(Kw::AListOf) {
+            let (_, span) = self.peek();
+            self.errors.push(container_phrase_error(
+                "E0208",
+                span,
+                "I expected a name here (`make` must be followed by a name).",
+                "a list of",
+                "a list of 1, 2, 3",
+                "stuff",
+            ));
+            return Err(());
+        }
         let name = self.parse_name("`make` must be followed by a name")?;
+        // `make list of stuff equal to …` — the phrase's first word took the
+        // name slot and its connector follows. The phrase describes the
+        // *value*, so it belongs after `equal to`.
+        if let Some((phrase, value)) = container_phrase_misplaced(&name.words, self.peek_kw()) {
+            let (_, span) = self.peek();
+            // The name the student was reaching for is the word run right
+            // after the connector, when they wrote one.
+            let wanted = match self.peek_at(1).0 {
+                Item::Tok(Tok::WordRun(words)) => words.join(" "),
+                _ => "stuff".to_string(),
+            };
+            self.errors.push(container_phrase_error(
+                "E0201",
+                span,
+                "I expected the words `equal to` here.",
+                phrase,
+                value,
+                &wanted,
+            ));
+            return Err(());
+        }
         self.expect_kw(Kw::EqualTo, "the words `equal to`")?;
         let value = self.expr()?;
         // Optional `of type` annotation (7.10).
@@ -2209,6 +2274,24 @@ impl<'src> Parser<'src> {
         }
         // no argument tokens follow → plain name
         if !self.starts_flowcall_argument() {
+            // 11.3's frozen method name `give next`: a dangling `next` after a
+            // head that opens no argument is not a loop keyword in expression
+            // position (`next round` is a statement), so it joins the name —
+            // the same resolution finish_call's prep loop applies. Without
+            // this join, `say give next of walk` names `give` and breaks on
+            // `next`.
+            if self.peek_kw() == Some(Kw::Next) {
+                let next_span = self.peek().1;
+                self.bump();
+                return self.finish_call(Name {
+                    words: {
+                        let mut w = callee.words.clone();
+                        w.push("next".to_string());
+                        w
+                    },
+                    span: callee.span.to(next_span),
+                });
+            }
             let span = callee.span;
             return Ok(Expr::Name { name: callee, span });
         }
@@ -2580,6 +2663,19 @@ impl Parser<'_> {
                 callee.span = callee.span.to(to_span);
                 continue;
             }
+            // 11.3's frozen method name `give next`: with no argument and no
+            // prep yet open, a dangling `next` cannot start a value (`next`
+            // alone is the loop keyword, and `next round` is a statement), so
+            // it joins the head — the same resolution the `can` header took.
+            // `give next of walk` thus reads as method `give next` with
+            // prep `of walk`, not as a call to `give`.
+            if first.is_none() && preps.is_empty() && self.peek_kw() == Some(Kw::Next) {
+                let next_span = self.peek().1;
+                self.bump();
+                callee.words.push("next".to_string());
+                callee.span = callee.span.to(next_span);
+                continue;
+            }
             let e = self.additive()?;
             let span = expr_span(&e);
             preps.push((prep, Arg { expr: Box::new(e), span }));
@@ -2809,6 +2905,49 @@ impl Parser<'_> {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// The container phrase a student wrote in the *name* slot of a `make` line.
+///
+/// `make list of stuff equal to …` reads as English ("make a list of stuff")
+/// but Lagom's line shape is `make <name> equal to <value>`: the phrase
+/// `a list of` describes a value, so it belongs after `equal to`. The name
+/// slot holds the phrase's first word and the phrase's connector follows.
+///
+/// Returns the phrase and the value it should have introduced.
+fn container_phrase_misplaced(
+    name: &[String],
+    next: Option<Kw>,
+) -> Option<(&'static str, &'static str)> {
+    let word = name.first()?.as_str();
+    match (word, next) {
+        ("list", Some(Kw::Of)) => Some(("a list of", "a list of 1, 2, 3")),
+        ("pair", Some(Kw::Of)) => Some(("a pair of", "a pair of 1 and 2")),
+        ("map", Some(Kw::From)) => Some(("a map from", "a map from \"ana\" to 12")),
+        _ => None,
+    }
+}
+
+/// The teaching diagnostic for a container phrase written where a name
+/// belongs. It names the phrase, says where the phrase belongs, and hands
+/// back the whole line in its Lagom shape (the fix is rendered as source).
+fn container_phrase_error(
+    code: &'static str,
+    span: Span,
+    message: &str,
+    phrase: &str,
+    value: &str,
+    wanted_name: &str,
+) -> Diagnostic {
+    Diagnostic::error(code, message, span)
+        .with_explanation("A `make` line reads `make <name> equal to <value>` — the name comes first.")
+        .with_note(format!(
+            "the phrase `{phrase}` describes a value, not a name — it belongs after `equal to`"
+        ))
+        .with_fix(format!("make {wanted_name} equal to {value}"))
+        .with_fix_why(format!(
+            "the phrase `{phrase}` introduces the value, so with it after `equal to` the line reads `make <name> equal to <value>`"
+        ))
+}
 
 fn ty_span(t: &TypeExpr) -> Span {
     match t {
@@ -3393,6 +3532,50 @@ mod tests {
             d.message,
             d.fix
         );
+    }
+
+    /// `make list of stuff equal to …` — the container phrase landed in the
+    /// name slot. The diagnostic names the phrase and hands the line back in
+    /// its Lagom shape instead of a bare "expected `equal to`".
+    #[test]
+    fn container_phrase_in_the_name_slot_teaches_the_make_line_shape() {
+        let errs = parse_err("make list of stuff equal to a list of 1, 2, 3\n", "E0201");
+        let d = errs.iter().find(|e| e.code == "E0201").unwrap();
+        let fix = d.fix.as_deref().unwrap_or_default();
+        assert!(
+            fix.contains("make stuff equal to a list of 1, 2, 3"),
+            "the fix must show the line in its Lagom shape, got: {fix}"
+        );
+        let notes = d.notes.join(" | ");
+        assert!(notes.contains("a list of"), "the note must name the phrase: {notes}");
+        // The causal footer says why the rewrite solves it (M2's rule).
+        let fix_why = d.fix_why.as_deref().unwrap_or_default();
+        assert!(fix_why.contains("a list of"), "{fix_why}");
+    }
+
+    /// The whole phrase in the name slot (`make a list of 1, 2, 3`) is the
+    /// same mistake, reported as the missing name it really is.
+    #[test]
+    fn container_phrase_as_the_whole_name_is_a_name_error() {
+        let errs = parse_err("make a list of 1, 2, 3\n", "E0208");
+        let d = errs.iter().find(|e| e.code == "E0208").unwrap();
+        let fix = d.fix.as_deref().unwrap_or_default();
+        assert!(
+            fix.contains("make stuff equal to a list of 1, 2, 3"),
+            "the fix must show the line in its Lagom shape, got: {fix}"
+        );
+    }
+
+    /// A name that merely starts with a container word is not a phrase:
+    /// `make list of` aside, `make list equal to 5` is an ordinary binding
+    /// and must keep working.
+    #[test]
+    fn container_word_as_a_plain_name_still_binds() {
+        let p = parse_ok("make list equal to 5\n");
+        match first_stmt(&p) {
+            Stmt::Make { name, .. } => assert_eq!(name.words, vec!["list".to_string()]),
+            other => panic!("{other:?}"),
+        }
     }
 
     /// Boolean arguments need parentheses: `say flag and other` parses as the

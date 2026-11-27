@@ -1,0 +1,77 @@
+{
+  "id": "basics.continue",
+  "title": "Continue a long line",
+  "objective": "Split a long statement across lines so it stays easy to read.",
+  "minutes": 5,
+  "body": [
+    {
+      "type": "p",
+      "text": "A statement can be split across lines. If a line ends with a word that needs more to finish it, such as plus, divided by or to, Lagom reads the next line as part of the same statement. Indent the continued line four spaces so it is clear it belongs to the line above."
+    },
+    {
+      "type": "example",
+      "title": "Continue after plus",
+      "code": "make name equal to \"Ada\"\nmake greeting equal to \"Hello, \" plus\n    name\nsay greeting\n",
+      "inputMode": "none",
+      "expected": [
+        "Hello, Ada"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "A long calculation can continue again and again. Put the operator at the end of each line, so the reader sees that the expression goes on."
+    },
+    {
+      "type": "example",
+      "title": "Several continued lines",
+      "code": "make first equal to 2\nmake second equal to 2\nmake third equal to 3\nmake total equal to first plus second plus\n    third\nsay total\n",
+      "inputMode": "none",
+      "expected": [
+        "7"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "Split a line only where the statement is not finished yet. A complete line such as say total cannot be continued, so the next line starts a new statement."
+    },
+    {
+      "type": "example",
+      "title": "Continue after divided by",
+      "code": "make total equal to 20\nmake count equal to 4\nmake average equal to total divided by\n    count\nsay average\n",
+      "inputMode": "none",
+      "expected": [
+        "5"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "basics.continue.total",
+      "prompt": "The last line is too long and breaks the indentation rule, so the program stops with a problem. Break it across lines, keeping every continuation line indented four spaces, so it still prints 6.",
+      "starter": "make first equal to 1\nmake second equal to 2\nmake third equal to 3\nmake total equal to first plus second plus third\nsay total\n",
+      "solution": "make first equal to 1\nmake second equal to 2\nmake third equal to 3\nmake total equal to first plus second plus\n    third\nsay total\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "split-after-plus",
+          "description": "The line ends with plus, and third is on the next line",
+          "kind": "source",
+          "matches": "plus\\s*\\n\\s+third"
+        },
+        {
+          "id": "output",
+          "description": "It prints 6",
+          "kind": "output",
+          "expect": [
+            "6"
+          ]
+        }
+      ]
+    }
+  ]
+}

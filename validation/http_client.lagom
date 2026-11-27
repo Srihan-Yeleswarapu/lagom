@@ -1,0 +1,28 @@
+# HTTP client — the other half of the M2 validation project (docs/10-roadmap.md,
+# M2 gate: "a small HTTP client+server project passes validation").
+#
+# One GET to http_server.lagom's port (8093), then reads the response until
+# the server closes the connection (EOF), and prints it. Networking fails as
+# errors (13.1/S-10), so every operation rides `attempt`. These two files are
+# skipped by the differential corpus sweep (they need a coordinated peer
+# process); crates/lagom_driver/tests/net_validation.rs runs them on both
+# backends and across backends.
+
+attempt open connection at 8093 to "localhost" if it fails then
+    say problem
+otherwise
+    make connection equal to result
+    attempt put "GET /hello HTTP/1.1\r\nHost: localhost\r\n\r\n" at connection if it fails then
+        say problem
+    otherwise
+        make sent equal to result
+    make changing answer equal to ""
+    make changing reached end equal to false
+    repeat while reached end is equal to false
+        attempt take from connection if it fails then
+            set reached end to true
+        otherwise
+            make joined equal to "{answer}{result}"
+            set answer to joined
+    close connection
+    say answer

@@ -1,0 +1,46 @@
+{
+  "id": "practice.scores",
+  "title": "Update a score in a map",
+  "objective": "Change one value in a changing map with set, then read it back with at.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "A map keeps a value for each key. If the map was made changing, you can set the value for one key and leave the others as they are. Read the value back with the map's name, at, and the key."
+    },
+    {
+      "type": "example",
+      "title": "Set and read a score",
+      "code": "make changing scores equal to a map from \"Ana\" to 3, \"Bo\" to 5\nset scores at \"Ana\" to 7\nmake ana equal to scores at \"Ana\"\nsay \"Ana has {ana}\"\nsay size of scores\n",
+      "inputMode": "none",
+      "expected": [
+        "Ana has 7",
+        "2"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "practice.scores.bo",
+      "prompt": "The program reports Bo's score as 5, but Bo actually scored 9. Make it print 9.",
+      "starter": "make changing scores equal to a map from \"Ana\" to 3, \"Bo\" to 5\nsay scores at \"Bo\"\n",
+      "solution": "make changing scores equal to a map from \"Ana\" to 3, \"Bo\" to 5\nset scores at \"Bo\" to 9\nsay scores at \"Bo\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints 9",
+          "kind": "output",
+          "expect": [
+            "9"
+          ]
+        }
+      ]
+    }
+  ]
+}

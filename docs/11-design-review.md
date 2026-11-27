@@ -932,13 +932,13 @@ Tracing the Scratch → systems-programmer ladder for jumps larger than one conc
 | Category | Status | Path / blocker |
 |---|---|---|
 | CLI applications | **Now (M0–M1)** | Args, files, processes in stdlib |
-| Web servers | Planned M2–M3 | Tasks+channels+`can wait`+`http`; needs the R-8/R-9 specs to be sound |
+| Web servers | **Now (M2 parts) → M3 polish** | Tasks+channels+`can wait`+`http` shipped (R-8/R-9 sound); the `validation/http_server.lagom` + `http_client.lagom` pair passes in all four backend pairings |
 | Databases | Planned M4–M5 | Owning regions, FFI, atomics, monomorphized generics — all specified; the R-7 borrow contract is the one to watch for zero-copy B-tree code |
 | Game engines | Planned M4–M5 | Deterministic destruction (no GC pauses), SIMD (R-21), FFI to graphics APIs |
 | Compilers / interpreters | **Now (dogfood) → M5** | Self-hosting plan is sound; comptime staging (R-19) fits |
 | Operating-system components | M6 | Freestanding target, no-runtime mode, inline asm, linker control — specified; **blocker to verify:** the kernel stdlib subset under `no runtime` (see §6.6) |
 | Embedded software | M6 | Same as above + allocator-free mode |
-| Networking software | Planned M2–M3 | Channels/async/FFI |
+| Networking software | **Now (M2: sockets+HTTP) → M3** | Channels shipped; FFI is the M3 reach item |
 | High-performance numerical software | Planned M4–M5 | Portable vectors + intrinsics + LLVM auto-vectorization; `decimal`=f64 is the right base; R-21 adds f32 |
 | Distributed systems | Planned M3+ | Networking + comptime serialization; channels = the message-passing substrate |
 | Graphics software | Escape hatch → M4 | FFI/Vulkan bindings; stdlib window/input hooks M4 |

@@ -55,8 +55,8 @@ pub fn lookup(code: &str) -> Option<String> {
             "The error model (13.1)",
         ),
         "E0338" => (
-            "You can only repeat for each … in a list (or text).",
-            "`repeat for each item in …` walks a collection. Numbers have nothing to walk.",
+            "`repeat for each x in …` walks a list, a map, or a class that `does iterable`.",
+            "`repeat for each item in …` walks a collection. A list yields its items in order, a map yields key–value pairs, and a class whose header claims `does iterable` yields one value per `give next` poll (11.3) until that method gives back `nothing` (12.3). A number has nothing to walk — if you meant to repeat a count, the honest form is `repeat 5 times` (7.5); if you meant a collection, make one first.",
             "repeat for each item in a list of 1, 2, 3\n    say item",
             "Loops and lists (7.5, 7.6)",
         ),
@@ -194,8 +194,8 @@ pub fn lookup(code: &str) -> Option<String> {
         ),
         "E0104" => (
             "I do not recognize this character.",
-            "Lagom's character set is deliberately small: letters, digits, spaces, the operator symbols (§7.0), and quotes. Anything else (a stray bracket, a curly quote from a word processor) is refused.",
-            "delete the character or replace it with the plain form (straight quotes, no smart punctuation)",
+            "Lagom's character set is deliberately small: letters, digits, spaces, the operator symbols (§7.0), and quotes. Anything else (a stray bracket, a curly quote from a word processor) is refused. When the character comes from another language, Lagom names its own spelling: a list is `a list of 1, 2, 3`, a map is `a map from \"ana\" to 12`, text uses double quotes, and a binding is `make x equal to 1`.",
+            "make stuff equal to a list of 1, 2, 3",
             "Lexical rules (7.0)",
         ),
         "E0105" => (
@@ -475,6 +475,30 @@ send \"hello\" to messages",
             "check for a stray or unsupported character",
             "Lexical rules (7.0)",
         ),
+        "E0395" => (
+            "`iterable` is the built-in iteration protocol — an interface cannot redeclare it.",
+            "`iterable` is not an ordinary interface a file can define: it is the one the checker fills in behind `does iterable`, requiring exactly `give next` (11.3). Redeclaring it would make two protocols with one name — the compiler refuses rather than guess which one a `does iterable` claim meant. Pick a fresh name for your interface, and let `does iterable` carry the built-in one.",
+            "interface page flip\n    can flip\n        returns number\n\nclass book does iterable\n    can give next\n        returns number or nothing",
+            "Iteration protocol (11.3)",
+        ),
+        "E0396" => (
+            "The walk polls `give next` outside `attempt` — so it cannot be `can fail`.",
+            "`repeat for each x in obj` calls the class's `give next` once per turn, inside the loop the compiler lowers on your behalf. The student never sees those polls, so a failure escaping them would surface from a line nobody wrote — 13.1's rule says failure lives only where it is written. Keep the walk's `give next` mistake-free (or hand the class the done-marker honestly); if the underlying value can genuinely fail, split a failing fetcher out and reconstruct `give next` from an already-checked value.",
+            "class numbers does iterable\n    can give next\n        returns number or nothing   # not `can fail`",
+            "Iteration protocol (11.3)",
+        ),
+        "E0397" => (
+            "`give next` must give back an option — the walk reads its end from `nothing`.",
+            "`repeat for each x in obj` stops when a poll gives back `nothing` and treats every other turn as the element (11.3's contract, 8.5's option shape). A `give next` that returns a plain `T` never says where its walk ends — the loop could never honestly stop. Annotate the return `a <T> or nothing`, give back the element to keep walking, and `gives back nothing` when the walk is done.",
+            "class countdown does iterable\n    has left of type number\n    can give next\n        returns a number or nothing\n        if (left of myself) is equal to 0\n            gives back nothing\n        set left of myself to (left of myself) - 1\n        gives back (left of myself) + 1",
+            "Iteration protocol (11.3)",
+        ),
+        "E0398" => (
+            "A walk over an iterable takes no comma index — the polls own no positions.",
+            "`repeat for each x, i in list` counts positions a list honestly has: index 0 reads the first slot, and `i` is that slot's number. A class walk has no slots — each `give next` poll hands over the next value in its own order, so there is no honest number to bind for `i`. Write the walk without the comma index; if you need position numbers, count them yourself, or walk a list you built from the polls (12.3: `map` with a block lambda keeps every value, 11.2).",
+            "repeat for each turn in walk\n    say turn",
+            "Iteration protocol (11.3)",
+        ),
         _ => return None,
     };
     let (what, why, fix, concept) = body;
@@ -491,7 +515,7 @@ pub fn code_index() -> String {
     let mut out = String::new();
     out.push_str("  lexer   E0101–E0108: characters and text that cannot be read\n");
     out.push_str("  parser  E0201–E0210: lines that do not fit the grammar\n");
-    out.push_str("  sema    E0302, E0330–E0384, E0390–E0391, E0393–E0394: names, types, capabilities, structure rules, type aliases, classes, inheritance, interfaces, generic constraints, and tasks/channels\n");
+    out.push_str("  sema    E0302, E0330–E0384, E0390–E0398: names, types, capabilities, structure rules, type aliases, classes, inheritance, interfaces, generic constraints, tasks/channels, and the 11.3 iteration protocol\n");
     out.push_str("\nEvery diagnostic names its code; run `lagom explain <code>` for the full\nteaching page. A few to start with:\n\n  E0344  the name is not defined (typos, use-before-make)\n  E0302  a can-fail call must be wrapped in attempt\n  E0330  a name can only mean one thing\n  E0360  the value is not the type the annotation promised\n\nM2 runtime lessons (from failure reports):\n  R001  list indexes count from 0 and stop before the size\n  R002  text and numbers are different kinds of values\n  R003  dividing by zero has no answer\n  R004  ask reads one line per question\n  R005  number is a 64-bit integer\n");
     out
 }
@@ -566,7 +590,13 @@ mod tests {
     #[test]
     fn index_ranges_name_only_real_pages() {
         let idx = super::code_index();
-        for (lo, hi) in [(101u32, 108), (201, 210), (330, 384), (390, 391), (393, 394)] {
+        for (lo, hi) in [
+            (101u32, 108),
+            (201, 210),
+            (330, 384),
+            (390, 391),
+            (393, 398),
+        ] {
             for n in lo..=hi {
                 let code = format!("E0{n:03}");
                 assert!(
@@ -576,5 +606,88 @@ mod tests {
             }
         }
         assert!(idx.contains("E0302"), "the index highlights a real code");
+    }
+
+    /// The full coverage contract, enforced mechanically: every `"E####"`
+    /// literal in every compiler crate's source is an emitted diagnostic,
+    /// so every one must resolve to a teaching page. This is the rule the
+    /// write-ups ship with the version that emits them (doc 09) — an
+    /// emission added without its page fails this test, which means there
+    /// is no diagnostic the compiler can produce that `lagom explain`
+    /// cannot answer for.
+    #[test]
+    fn every_emitted_code_has_a_page() {
+        let crates_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("lagom_cli lives inside crates/", )
+            .to_path_buf();
+        let mut codes: Vec<String> = Vec::new();
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        let mut stack = vec![crates_dir.clone()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("crates dir").flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    // Integration-test directories use fake codes to probe
+                    // the renderer; only the crates' source emits.
+                    if path.file_name().map_or(false, |n| n == "tests") {
+                        continue;
+                    }
+                    stack.push(path);
+                } else if path.extension().map_or(false, |e| e == "rs") {
+                    files.push(path);
+                }
+            }
+        }
+        assert!(
+            files.len() > 25,
+            "the walk found {} rust files — it must sweep the real crates",
+            files.len()
+        );
+        for path in files {
+            let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                panic!("reading {}: {e}", path.display())
+            });
+            let b = text.as_bytes();
+            let mut i = 0;
+            while i + 7 <= b.len() {
+                // The emitted shape: "E####" exactly.
+                if b[i] == b'"'
+                    && b[i + 1] == b'E'
+                    && (i + 7 == b.len() || b[i + 6] == b'"')
+                    && b[i + 2..i + 6].iter().all(|c| c.is_ascii_digit())
+                {
+                    codes.push(text[i + 1..i + 6].to_string());
+                    i += 6;
+                    continue;
+                }
+                i += 1;
+            }
+        }
+        assert!(
+            codes.len() > 200,
+            "the sweep found {} code strings — it must walk the real sources",
+            codes.len()
+        );
+        codes.sort();
+        codes.dedup();
+        for code in codes {
+            assert!(
+                super::lookup(&code).is_some(),
+                "{code} is emitted by the compiler but has no teaching page — write one in lagom_cli's explain.rs before landing the emission"
+            );
+        }
+    }
+    /// The 11.3 protocol pages exist and teach the right shape (the option
+    /// contract that makes a walk endable).
+    #[test]
+    fn iterable_protocol_pages_teach_the_contract() {
+        for code in ["E0395", "E0396", "E0397", "E0398"] {
+            let page = super::lookup(code).unwrap_or_else(|| panic!("{code} has no page"));
+            assert!(page.contains("give next"), "{code}: {page}");
+        }
+        let e397 = super::lookup("E0397").unwrap();
+        assert!(e397.contains("or nothing"), "E0397 teaches the option shape");
+        assert!(e397.contains("nothing"), "E0397 names the done marker");
     }
 }

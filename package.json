@@ -1,0 +1,22 @@
+{
+  "name": "lagom-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Static Lagom tutorial site. The editor bundle is built from web/src and committed to web/vendor.",
+  "type": "module",
+  "scripts": {
+    "build:editor": "esbuild web/src/editor.js --bundle --format=esm --minify --outfile=web/vendor/editor.bundle.js --log-level=warning",
+    "test:web": "node --test web/test/",
+    "test:extension": "node --test editors/vscode/test/",
+    "smoke:web": "node scripts/smoke-web.mjs"
+  },
+  "devDependencies": {
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/language": "^6.11.0",
+    "@codemirror/lint": "^6.9.0",
+    "@codemirror/state": "^6.5.0",
+    "@codemirror/view": "^6.38.0",
+    "@lezer/highlight": "^1.2.0",
+    "esbuild": "^0.28.0"
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "lagom",
+  "displayName": "Lagom",
+  "description": "Syntax highlighting, snippets, and the compiler's teaching diagnostics for the Lagom language (word-based syntax, statically typed).",
+  "version": "0.2.0",
+  "license": "MIT",
+  "private": true,
+  "publisher": "lagom-lang",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets"
+  ],
+  "keywords": [
+    "lagom",
+    "education",
+    "beginners"
+  ],
+  "activationEvents": [
+    "onLanguage:lagom"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "lagom",
+        "aliases": [
+          "Lagom",
+          "lagom"
+        ],
+        "extensions": [
+          ".lagom"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "lagom",
+        "scopeName": "source.lagom",
+        "path": "./syntaxes/lagom.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "lagom",
+        "path": "./snippets/lagom.json"
+      }
+    ],
+    "configuration": {
+      "title": "Lagom",
+      "properties": {
+        "lagom.check.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run `lagom check --json` on .lagom files while you edit and surface the compiler's teaching diagnostics as Problems."
+        },
+        "lagom.check.path": {
+          "type": "string",
+          "default": "lagom",
+          "description": "The `lagom` binary to invoke. Use an absolute path if `lagom` is not on the editor's PATH."
+        },
+        "lagom.check.debounce": {
+          "type": "number",
+          "default": 300,
+          "description": "Milliseconds to wait after the last keystroke before checking."
+        }
+      }
+    }
+  }
+}

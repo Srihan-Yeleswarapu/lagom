@@ -1,0 +1,67 @@
+{
+  "id": "control.otherwise",
+  "title": "Handle the other case with otherwise",
+  "objective": "Add an otherwise branch that runs when no condition is true, and use one if-otherwise to choose between two paths.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "An if on its own runs its lines only when the condition is true. otherwise adds the lines that run when it is false. Use it whenever there are exactly two outcomes, such as pass and fail, or found and not found."
+    },
+    {
+      "type": "example",
+      "title": "Two outcomes",
+      "code": "make found equal to false\nif found\n    say \"found\"\notherwise\n    say \"not found\"\nmake score equal to 40\nif score is at least 50\n    say \"pass\"\notherwise\n    say \"try again\"\n",
+      "inputMode": "none",
+      "expected": [
+        "not found",
+        "try again"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "otherwise can follow an otherwise if, as the last fallback. It runs only when none of the conditions before it were true. Here, neither the first nor the second condition is true, so the fallback runs."
+    },
+    {
+      "type": "example",
+      "title": "A final fallback",
+      "code": "make answer equal to 40\nmake expected equal to 42\nmake close answer equal to 40\nif answer is equal to expected\n    say \"correct\"\notherwise if answer is equal to close answer\n    say \"nearly\"\notherwise\n    say \"not quite\"\nmake light equal to false\nif light is equal to true\n    say \"bright\"\notherwise\n    say \"dark\"\n",
+      "inputMode": "none",
+      "expected": [
+        "nearly",
+        "dark"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "control.otherwise.pass",
+      "prompt": "A score of 40 fails, but the program prints nothing at all for it. Make it print try again.",
+      "starter": "make score equal to 40\nif score is at least 50\n    say \"pass\"\n",
+      "solution": "make score equal to 40\nif score is at least 50\n    say \"pass\"\notherwise\n    say \"try again\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "uses-otherwise",
+          "description": "It has an otherwise branch",
+          "kind": "source",
+          "matches": "^otherwise\\s*$",
+          "flags": "m"
+        },
+        {
+          "id": "output",
+          "description": "It prints try again",
+          "kind": "output",
+          "expect": [
+            "try again"
+          ]
+        }
+      ]
+    }
+  ]
+}

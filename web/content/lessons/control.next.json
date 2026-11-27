@@ -1,0 +1,74 @@
+{
+  "id": "control.next",
+  "title": "Skip an item with next",
+  "objective": "Use next to skip the rest of one loop run and move on to the next item.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "next skips the rest of the lines in the current run of the loop and moves on to the next item. Unlike stop, the loop keeps going. Use it when only some items should be handled, such as skipping empty entries or negative numbers."
+    },
+    {
+      "type": "example",
+      "title": "Skip the negative numbers",
+      "code": "make numbers equal to a list of -1, 2, 3\nrepeat for each value in numbers\n    if value is less than 0\n        next\n    say value\n",
+      "inputMode": "none",
+      "expected": [
+        "2",
+        "3"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "next works the same way with repeat times. Here the number 5 is skipped, and the loop continues after it."
+    },
+    {
+      "type": "example",
+      "title": "Skip one turn",
+      "code": "repeat 10 times using i\n    if i is equal to 5\n        next\n    say i\n",
+      "inputMode": "none",
+      "expected": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "6",
+        "7",
+        "8",
+        "9"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "control.next.total",
+      "prompt": "The program totals every score, including the negative one, so it prints 25. Only the positive scores should count. Make it print 30.",
+      "starter": "make scores equal to a list of 10, -5, 20\nmake changing total equal to 0\nrepeat for each score in scores\n    increase total by score\nsay total\n",
+      "solution": "make scores equal to a list of 10, -5, 20\nmake changing total equal to 0\nrepeat for each score in scores\n    if score is at most 0\n        next\n    increase total by score\nsay total\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "uses-next",
+          "description": "It uses next inside the loop",
+          "kind": "source",
+          "matches": "^\\s*next\\s*$",
+          "flags": "m"
+        },
+        {
+          "id": "output",
+          "description": "It prints 30",
+          "kind": "output",
+          "expect": [
+            "30"
+          ]
+        }
+      ]
+    }
+  ]
+}

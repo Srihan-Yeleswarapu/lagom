@@ -1,0 +1,60 @@
+{
+  "id": "data.pairs",
+  "title": "Group two values in a pair",
+  "objective": "Make a pair of two values, take it apart with match, and return a pair from a function.",
+  "minutes": 8,
+  "body": [
+    {
+      "type": "p",
+      "text": "A pair holds two values, and the two values can have different types. a pair of builds one, and say shows it as (left, right). To take a pair apart, use match with when a pair of and then a name for each part."
+    },
+    {
+      "type": "example",
+      "title": "Build and take apart a pair",
+      "code": "make point equal to a pair of 3 and 4\nsay point\nmake entry equal to a pair of \"Ada\" and 100\nmatch entry\n    when a pair of who and points\n        say \"{who} scored {points}\"\n",
+      "inputMode": "none",
+      "expected": [
+        "(3, 4)",
+        "Ada scored 100"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "A function can give back a pair too. Write returns a pair of with the two types, and gives back a pair of with the two values."
+    },
+    {
+      "type": "example",
+      "title": "Return a pair from a function",
+      "code": "function spread\n    takes number called n\n    returns a pair of number and number\n    gives back a pair of n and n times 2\n\nmake both equal to spread 5\nmatch both\n    when a pair of low and high\n        say \"{low} to {high}\"\n",
+      "inputMode": "none",
+      "expected": [
+        "5 to 10"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "data.pairs.second",
+      "prompt": "The program prints only the x part of the pair. Make it print both parts: x is 3 and y is 4.",
+      "starter": "make point equal to a pair of 3 and 4\nmatch point\n    when a pair of x and y\n        say \"x is {x}\"\n",
+      "solution": "make point equal to a pair of 3 and 4\nmatch point\n    when a pair of x and y\n        say \"x is {x}\"\n        say \"y is {y}\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints x is 3 and then y is 4",
+          "kind": "output",
+          "expect": [
+            "x is 3",
+            "y is 4"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "id": "practice.greet-all",
+  "title": "Greet everyone in a list",
+  "objective": "Call a function with each item of a list inside a loop, and print what it returns.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "A loop and a function work well together. repeat for each gives you one item at a time, and you can pass that item to a function. The function's answer is printed each time round the loop."
+    },
+    {
+      "type": "example",
+      "title": "Greet each name",
+      "code": "function greeting\n    takes text called name\n    returns text\n    gives back \"Hello, {name}!\"\n\nmake names equal to a list of \"Kim\", \"Lee\"\nrepeat for each n in names\n    say greeting n\n",
+      "inputMode": "none",
+      "expected": [
+        "Hello, Kim!",
+        "Hello, Lee!"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "practice.greet-all.loop",
+      "prompt": "The program greets only Ada, but the list also holds Ben. Make it greet Ada and then Ben.",
+      "starter": "function greeting\n    takes text called name\n    returns text\n    gives back \"Hello, {name}!\"\n\nmake names equal to a list of \"Ada\", \"Ben\"\nsay greeting \"Ada\"\n",
+      "solution": "function greeting\n    takes text called name\n    returns text\n    gives back \"Hello, {name}!\"\n\nmake names equal to a list of \"Ada\", \"Ben\"\nrepeat for each n in names\n    say greeting n\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints Hello, Ada! and then Hello, Ben!",
+          "kind": "output",
+          "expect": [
+            "Hello, Ada!",
+            "Hello, Ben!"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "id": "objects.extends",
+  "title": "Build a class on another with extends",
+  "objective": "Make a class that extends another, so it gets the parent's fields and methods, and replace a method when the child needs different behavior.",
+  "minutes": 8,
+  "body": [
+    {
+      "type": "p",
+      "text": "A class can extend another class. Write class, the new name, extends, then the parent's name. The child class gets the parent's fields and methods without writing them again. If the child writes a can line with the same name as a parent's method, its version replaces the parent's for that child."
+    },
+    {
+      "type": "example",
+      "title": "Replace a method in the child",
+      "code": "class animal\n    can speak\n        say \"...\"\n\nclass dog extends animal\n    can speak\n        say \"Woof\"\n\nmake d equal to a new dog\nspeak d\n",
+      "inputMode": "none",
+      "expected": [
+        "Woof"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "A child that does not write a method uses the parent's. Fields and the construction clause come from the parent too, so a new child is built the same way as a new parent."
+    },
+    {
+      "type": "example",
+      "title": "Inherit a field and a method",
+      "code": "class animal\n    has name of type text\n    construction\n        takes text called who\n        set name of myself to who\n    can introduce\n        say name of myself\n\nclass dog extends animal\n    can bark\n        say \"Woof\"\n\nmake d equal to a new dog with who \"Ada\"\nintroduce d\nbark d\n",
+      "inputMode": "none",
+      "expected": [
+        "Ada",
+        "Woof"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "objects.extends.cat",
+      "prompt": "The cat has its own speak, but nothing ever speaks, so the program prints nothing. Make it print Meow.",
+      "starter": "class animal\n    can speak\n        say \"...\"\n\nclass cat extends animal\n    can speak\n        say \"Meow\"\n\nmake c equal to a new cat\n",
+      "solution": "class animal\n    can speak\n        say \"...\"\n\nclass cat extends animal\n    can speak\n        say \"Meow\"\n\nmake c equal to a new cat\nspeak c\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints Meow",
+          "kind": "output",
+          "expect": [
+            "Meow"
+          ]
+        }
+      ]
+    }
+  ]
+}

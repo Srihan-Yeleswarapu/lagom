@@ -247,7 +247,14 @@ pub fn lex(src: &str) -> LexOutput {
         }
         // tokens of the logical line
         let (line_items, line_errors) = scan_line(line);
-        errors.extend(line_errors);
+        // `scan_line` works in joined-buffer coordinates, so its error spans
+        // must be mapped back to file offsets before they are reported —
+        // otherwise a lexical error on line 5 points at line 5's first
+        // character (the buffer starts at 0 for every line).
+        for mut d in line_errors {
+            d.span = line.map(d.span);
+            errors.push(d);
+        }
         for (item, jspan) in line_items {
             let span = line.map(jspan);
             items.push((item, span));
@@ -796,6 +803,97 @@ struct LineScan {
     errors: Vec<Diagnostic>,
 }
 
+/// The Lagom spelling for punctuation that arrives from another language.
+///
+/// A student who writes `[1, 2, 3]` is not making a syntax error in the
+/// abstract — they are writing a different language's habit. The teaching
+/// rule (00 §26.2) says the diagnostic should name the Lagom way, so every
+/// common foreign character carries a hint in three parts: the *rule*
+/// (explanation), a one-statement rewrite (fix, rendered as Lagom source),
+/// and *why the rewrite solves it* (fix_why — never a restatement of the
+/// explanation, which teaches nothing).
+///
+/// Returns `None` for characters with no standard Lagom equivalent (the
+/// plain "I do not recognize this character" message then stands).
+fn foreign_punctuation_hint(
+    ch: char,
+    next: Option<char>,
+) -> Option<(&'static str, &'static str, &'static str)> {
+    Some(match (ch, next) {
+        // `[1, 2, 3]` — the list literal of a dozen other languages.
+        ('[', _) | (']', _) => (
+            "Lagom has no square brackets.",
+            "make stuff equal to a list of 1, 2, 3",
+            "Lagom writes a list as the phrase `a list of 1, 2, 3`, so the brackets had nothing to stand in for.",
+        ),
+        // `{"a": 1}` — the map/dict literal.
+        ('{', _) | ('}', _) | (':', _) => (
+            "Lagom has no curly braces.",
+            "make ages equal to a map from \"ana\" to 12",
+            "Lagom writes a map as the phrase `a map from \"ana\" to 12`, so the braces had nothing to stand in for.",
+        ),
+        // `'hi'` — single-quoted text.
+        ('\'', _) => (
+            "Text in Lagom is written with double quotes.",
+            "say \"hello\"",
+            "A text value starts and ends with a double quote, so the single quotes left the text open.",
+        ),
+        // `!=` — Python/C inequality.
+        ('!', Some('=')) => (
+            "Lagom has no `!=`.",
+            "make different equal to score is not equal to 0",
+            "Lagom writes comparison as the phrase `is not equal to`, so `!=` has no place in the grammar.",
+        ),
+        // `!flag` — Python/C negation.
+        ('!', _) => (
+            "Lagom has no `!`.",
+            "make ready equal to not done",
+            "Lagom writes negation as the word `not`, so `!` has no place in the grammar.",
+        ),
+        // `x = 1` — assignment.
+        ('=', _) => (
+            "Lagom has no `=`.",
+            "make x equal to 1",
+            "Lagom binds a name with the words `equal to`, so `=` has no place in the grammar.",
+        ),
+        // `say "hi";` — statement separator.
+        (';', _) => (
+            "Lagom has no semicolons.",
+            "say \"hello\"",
+            "One Lagom statement is one line, so the semicolon separated nothing.",
+        ),
+        // `<` / `>` — ordering.
+        ('<', _) => (
+            "Lagom has no `<`.",
+            "make small equal to score is less than 10",
+            "Lagom writes ordering as the phrase `is less than`, so `<` has no place in the grammar.",
+        ),
+        ('>', _) => (
+            "Lagom has no `>`.",
+            "make big equal to score is greater than 10",
+            "Lagom writes ordering as the phrase `is greater than`, so `>` has no place in the grammar.",
+        ),
+        // `%` — remainder.
+        ('%', _) => (
+            "Lagom has no `%`.",
+            "make rest equal to remainder of total and 2",
+            "Lagom writes the remainder as the phrase `remainder of`, so `%` has no place in the grammar.",
+        ),
+        // `&&` / `||` — logic.
+        ('&', _) => (
+            "Lagom has no `&`.",
+            "make ok equal to score is greater than 10 and count is less than 3",
+            "Lagom joins two conditions with the word `and`, so `&` has no place in the grammar.",
+        ),
+        ('|', _) => (
+            "Lagom has no `|`.",
+            "make ok equal to score is greater than 10 or count is less than 3",
+            "Lagom joins two alternatives with the word `or`, so `|` has no place in the grammar.",
+        ),
+        _ => return None,
+    })
+}
+
 fn scan_line(line: &LogicalLine) -> (Vec<(Item, Span)>, Vec<Diagnostic>) {
     let mut sc = LineScan {
         items: Vec::new(),
@@ -847,11 +945,22 @@ fn scan_line(line: &LogicalLine) -> (Vec<(Item, Span)>, Vec<Diagnostic>) {
             _ => {
                 let ch = src[pos..].chars().next().unwrap();
                 let end = pos + ch.len_utf8();
-                sc.errors.push(Diagnostic::error(
+                let next = src[end..].chars().next();
+                let mut diag = Diagnostic::error(
                     "E0104",
                     format!("I do not recognize the character `{ch}`."),
                     Span::new(pos, end),
-                ));
+                );
+                // A student arriving from another language writes that
+                // language's punctuation. Name the Lagom spelling instead of
+                // only refusing the character (the teaching rule, 00 §26.2).
+                if let Some((why, fix, fix_why)) = foreign_punctuation_hint(ch, next) {
+                    diag = diag
+                        .with_explanation(why)
+                        .with_fix(fix)
+                        .with_fix_why(fix_why);
+                }
+                sc.errors.push(diag);
                 pos = end;
             }
         }
@@ -897,6 +1006,13 @@ fn scan_string(src: &str, pos: &mut usize, sc: &mut LineScan) {
                 match esc {
                     Some(b'n') => {
                         value.push('\n');
+                        *pos += 1;
+                    }
+                    Some(b'r') => {
+                        // The CR escape (M2's sockets: HTTP headers end
+                        // CRLF — a student writing an HTTP response cannot
+                        // be told to "use the real carriage return").
+                        value.push('\r');
                         *pos += 1;
                     }
                     Some(b't') => {
@@ -1323,6 +1439,66 @@ mod tests {
         assert!(errors.iter().any(|e| e.code == "E0101"), "{errors:?}");
         let (_, errors) = toks_with_errors("make x equal to $\n");
         assert!(errors.iter().any(|e| e.code == "E0104"), "{errors:?}");
+    }
+
+    /// A lexical error on a later line points at *that* line. The scanner
+    /// works in joined-buffer coordinates (each logical line restarts at 0),
+    /// so its error spans must be mapped back to file offsets — otherwise
+    /// every error after the first line was reported on line 1, pointing at
+    /// the wrong text entirely.
+    #[test]
+    fn lexical_error_spans_point_at_their_own_line() {
+        let src = "make x equal to 1\nmake y equal to 2\nsay 'hi'\n";
+        let (_, errors) = toks_with_errors(src);
+        let e = errors
+            .iter()
+            .find(|e| e.code == "E0104")
+            .expect("expected E0104 for the single quote");
+        assert_eq!(
+            e.span.start,
+            src.find('\'').expect("a quote in the source"),
+            "the span must point at the offending quote"
+        );
+        // And the rendered page names the line the student wrote.
+        let file = lagom_diagnostics::SourceFile::new("test.lagom", src);
+        let page = lagom_diagnostics::render_student(&file, e);
+        assert!(page.contains("ERROR on line 3"), "{page}");
+        assert!(page.contains("say 'hi'"), "{page}");
+    }
+
+    /// Punctuation from another language carries the Lagom spelling: the
+    /// diagnostic says what to write instead of only refusing the character.
+    #[test]
+    fn foreign_punctuation_names_the_lagom_spelling() {
+        let (_, errors) = toks_with_errors("make xs equal to [1, 2, 3]\n");
+        let e = errors
+            .iter()
+            .find(|e| e.code == "E0104")
+            .expect("expected E0104 for the bracket");
+        let why = e.explanation.as_deref().unwrap_or_default();
+        assert!(why.contains("square brackets"), "{why}");
+        let fix = e.fix.as_deref().unwrap_or_default();
+        assert!(fix.contains("a list of"), "{fix}");
+        // The causal footer says *why* the rewrite works (M2's rule) and is
+        // not a restatement of the explanation.
+        let fix_why = e.fix_why.as_deref().unwrap_or_default();
+        assert!(fix_why.contains("a list of"), "{fix_why}");
+        assert_ne!(fix_why, why, "the footer must not repeat the explanation");
+    }
+
+    /// The single-quote hint points at the double-quoted text form.
+    #[test]
+    fn single_quote_hint_points_at_double_quotes() {
+        let (_, errors) = toks_with_errors("say 'hi'\n");
+        let e = errors
+            .iter()
+            .find(|e| e.code == "E0104")
+            .expect("expected E0104 for the quote");
+        assert!(
+            e.explanation.as_deref().unwrap_or_default().contains("double quotes"),
+            "{:?}",
+            e.explanation
+        );
     }
 
     /// Targets, field access, indexing, and struct construction lex per the grammar.

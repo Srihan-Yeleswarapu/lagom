@@ -1,0 +1,60 @@
+{
+  "id": "functions.lambdas",
+  "title": "Store a function in a name",
+  "objective": "Write a short function as a value with a function taking, store it with make, and call it like any other function.",
+  "minutes": 7,
+  "body": [
+    {
+      "type": "p",
+      "text": "A function does not have to be declared with a function line. Write a function taking followed by its parameter names, then the body on the lines below, and store it with make. The name can then be called as if it were a normal function."
+    },
+    {
+      "type": "example",
+      "title": "A function as a value",
+      "code": "make double equal to a function taking n\n    gives back n times 2\n\nsay double 5\n\nmake greet equal to a function taking name\n    gives back \"Hello, {name}!\"\n\nsay greet \"Ada\"\n",
+      "inputMode": "none",
+      "expected": [
+        "10",
+        "Hello, Ada!"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "A function value can take more than one parameter, and it can be used in a comparison. The result is an ordinary value, so it can be printed or stored."
+    },
+    {
+      "type": "example",
+      "title": "Square and check",
+      "code": "make square equal to a function taking n\n    gives back n times n\n\nsay square 5\n\nmake old enough equal to a function taking age\n    gives back age is at least 18\n\nsay old enough 7\n",
+      "inputMode": "none",
+      "expected": [
+        "25",
+        "false"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "functions.lambdas.square",
+      "prompt": "square should return n times n, but it adds n instead. Change it so square 5 prints 25.",
+      "starter": "make square equal to a function taking n\n    gives back n plus n\n\nsay square 5\n",
+      "solution": "make square equal to a function taking n\n    gives back n times n\n\nsay square 5\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "square 5 prints 25",
+          "kind": "output",
+          "expect": [
+            "25"
+          ]
+        }
+      ]
+    }
+  ]
+}

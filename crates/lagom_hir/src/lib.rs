@@ -142,6 +142,10 @@ pub enum HirStmtKind {
         item: (String, Span),
         index: Option<(String, Span)>,
         iter: HirExpr,
+        /// 11.3: `Some(elem)` — the walk polls a `does iterable` class and
+        /// ends when `give next` gives back `nothing`; `None` walks a
+        /// list/map by position. The type system lives in sema.
+        poll_elem: Option<lagom_sema::Type>,
         body: Vec<HirStmt>,
     },
     Stop,
@@ -537,7 +541,13 @@ impl<'t> Lowerer<'t> {
                 cond: self.expr(cond),
                 body: body.into_iter().map(|s| self.stmt(s)).collect(),
             },
-            CheckedStmtKind::RepeatForEach { item, index, iter, body } => {
+            CheckedStmtKind::RepeatForEach {
+                item,
+                index,
+                iter,
+                poll_elem,
+                body,
+            } => {
                 let ispan = iter.span();
                 let mut lowered = self.expr(iter);
                 lowered.span = ispan;
@@ -545,6 +555,7 @@ impl<'t> Lowerer<'t> {
                     item: (item, span),
                     index: index.map(|i| (i, span)),
                     iter: lowered,
+                    poll_elem,
                     body: body.into_iter().map(|s| self.stmt(s)).collect(),
                 }
             }

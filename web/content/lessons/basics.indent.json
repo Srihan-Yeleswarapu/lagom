@@ -1,0 +1,73 @@
+{
+  "id": "basics.indent",
+  "title": "Group lines into blocks with indentation",
+  "objective": "Use indentation to say which lines belong together.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "Lagom does not use braces, and it has no end word to close a block. Instead, a line such as if, repeat or function is followed by lines indented four spaces further in. Those indented lines belong to it. When the indentation goes back to the start of the line, the block is over."
+    },
+    {
+      "type": "example",
+      "title": "One block",
+      "code": "make ready equal to true\nif ready is equal to true\n    say \"start\"\n",
+      "inputMode": "none",
+      "expected": [
+        "start"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "Blocks can be nested. Each extra level of indentation puts a line one level deeper inside the block above it."
+    },
+    {
+      "type": "example",
+      "title": "Nested blocks",
+      "code": "make score equal to 72\nif score is greater than 50\n    if score is at most 100\n        say \"valid score\"\n    say \"checked\"\n",
+      "inputMode": "none",
+      "expected": [
+        "valid score",
+        "checked"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "Keep every line of a block at the same depth. A line at a smaller depth ends the block, and the line after it runs once the block is finished."
+    },
+    {
+      "type": "exercise",
+      "id": "basics.indent.after-loop",
+      "prompt": "The loop below counts to 3. Add a line after the loop, not inside it, that says done. The output should be 1, 2, 3 and then done.",
+      "starter": "make changing count equal to 0\nrepeat while count is less than 3\n    increase count by 1\n    say count\n",
+      "solution": "make changing count equal to 0\nrepeat while count is less than 3\n    increase count by 1\n    say count\nsay \"done\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "says-done-outside",
+          "description": "A say \"done\" line starts at the left edge, after the loop",
+          "kind": "source",
+          "matches": "^say \"done\"\\s*$",
+          "flags": "m"
+        },
+        {
+          "id": "output",
+          "description": "It prints 1, 2, 3 and then done",
+          "kind": "output",
+          "expect": [
+            "1",
+            "2",
+            "3",
+            "done"
+          ]
+        }
+      ]
+    }
+  ]
+}

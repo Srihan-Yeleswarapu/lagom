@@ -1,0 +1,44 @@
+{
+  "id": "functions.take-giving",
+  "title": "Write a small function inline",
+  "objective": "Write a short function inside a list operation with taking ... giving back, without naming it first.",
+  "minutes": 7,
+  "body": [
+    {
+      "type": "p",
+      "text": "When a function is only needed once, write it inline after using or where. Write taking, then the parameter name, then giving back and the result. The inline function works on each item in the list."
+    },
+    {
+      "type": "example",
+      "title": "Double each item inline",
+      "code": "make numbers equal to a list of 1, 2, 3\nmake doubled equal to map numbers using taking value giving back value times 2\nsay first of doubled\n",
+      "inputMode": "none",
+      "expected": [
+        "2"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "An inline function can read a field of a structure, or combine two values. For combine, the function takes the running total and the next item, and gives back the new total."
+    },
+    {
+      "type": "example",
+      "title": "Fields and totals",
+      "code": "structure person\n    has name of type text\n\nmake people equal to a list of a person with name \"Ada\"\nmake names equal to map people using taking person giving back name of person\nsay first of names\n\nmake numbers equal to a list of 1, 2, 3\nmake total equal to combine numbers with start 0 using taking start and value giving back start plus value\nsay total\n",
+      "inputMode": "none",
+      "expected": [
+        "Ada",
+        "6"
+      ]
+    },
+    {
+      "type": "example",
+      "title": "Keep the adults",
+      "code": "make ages equal to a list of 7, 18, 20\nmake adults equal to keep ages using taking age giving back age is at least 18\nsay first of adults\n",
+      "inputMode": "none",
+      "expected": [
+        "18"
+      ]
+    }
+  ]
+}

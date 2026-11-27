@@ -1,0 +1,39 @@
+# Iterator — an M2 validation project (00 §33.2, 11.3).
+#
+# A walk over a class that `does iterable`: its `give next` method is the
+# protocol the checker proves and both backends poll through the 12.3
+# vtable. The program walks it twice — once widowed to say the turns, once
+# gathered into a total — and then walks a plain list through the same
+# `repeat for each` shape, with a `next round` inside (the continue
+# statement rides every loop form). Deterministic: no stdin, no seed, no
+# files, nothing asked.
+
+class count down does iterable
+  has left of type number
+  can give next
+    returns a number or nothing
+    if (left of myself) is equal to 0
+      gives back nothing
+    set left of myself to (left of myself) - 1
+    gives back (left of myself) + 1
+
+# ----- the walk: one poll per turn, total gathered -------------------------
+
+make walk equal to a new count down with left 3
+make changing gathered equal to 0
+repeat for each turn in walk
+  say turn
+  increase gathered by turn
+say gathered
+
+# ----- the same shape over a list, with a `next round` inside --------------
+
+make parts equal to a list of 1, 2, 3, 4
+make changing seen equal to 0
+repeat for each part in parts
+  if part is equal to 2
+    next
+  say part
+  increase seen by 1
+say seen
+say "walked"

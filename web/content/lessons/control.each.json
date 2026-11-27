@@ -1,0 +1,74 @@
+{
+  "id": "control.each",
+  "title": "Visit every item with repeat for each",
+  "objective": "Use repeat for each to visit every item of a list, add up values, and read fields of each record.",
+  "minutes": 8,
+  "body": [
+    {
+      "type": "p",
+      "text": "repeat for each in visits every item of a list in order. Each time round, the name you choose holds the current item. The loop ends after the last item, so you never have to count the items yourself. Lists are covered in the Data lesson."
+    },
+    {
+      "type": "example",
+      "title": "Greet each name",
+      "code": "make names equal to a list of \"Ana\", \"Bo\", \"Cy\"\nrepeat for each name in names\n    say \"Hello, {name}!\"\n",
+      "inputMode": "none",
+      "expected": [
+        "Hello, Ana!",
+        "Hello, Bo!",
+        "Hello, Cy!"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "To combine the items, make a changing total before the loop and add to it inside. The say after the loop runs once, when every item has been added."
+    },
+    {
+      "type": "example",
+      "title": "Add up a list",
+      "code": "make scores equal to a list of 10, 20, 30\nmake changing total equal to 0\nrepeat for each score in scores\n    increase total by score\nsay total\n",
+      "inputMode": "none",
+      "expected": [
+        "60"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "The items can be records too. Read a field of the current item with its name, such as name of place. This works for any structure."
+    },
+    {
+      "type": "example",
+      "title": "Visit each room",
+      "code": "structure room\n    has name of type text\n\nmake rooms equal to a list of a room with name \"entrance\", a room with name \"library\"\nrepeat for each place in rooms\n    say name of place\n",
+      "inputMode": "none",
+      "expected": [
+        "entrance",
+        "library"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "control.each.total",
+      "prompt": "The program prints each number instead of their total. Make it print 6.",
+      "starter": "make numbers equal to a list of 1, 2, 3\nmake changing total equal to 0\nrepeat for each n in numbers\n    say n\n",
+      "solution": "make numbers equal to a list of 1, 2, 3\nmake changing total equal to 0\nrepeat for each n in numbers\n    increase total by n\nsay total\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints 6",
+          "kind": "output",
+          "expect": [
+            "6"
+          ]
+        }
+      ]
+    }
+  ]
+}

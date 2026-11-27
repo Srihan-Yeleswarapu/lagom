@@ -1843,11 +1843,17 @@ pub unsafe extern "C" fn rt_call_iface(
     }
     // The implementing function is a receiver-first user function with the
     // direct call ABI: `(out, t0, p0, t1, p1, …)` — every generated function
-    // shares it, so the registered address is transmuted to the stored
-    // arity. Extern "C" calls are arity-fixed at the call site, hence the
+    // shares it; the registered address is transmuted per stored arity.
+    // Extern "C" calls are arity-fixed at the call site, hence the
     // arity arm (method arities here are receiver + at most a few extras).
-    let f: unsafe extern "C" fn(*mut i64, ...) -> i64 =
-        std::mem::transmute::<*const (), unsafe extern "C" fn(*mut i64, ...) -> i64>(code);
+    
+    // The implementing function is a receiver-first user function with the
+    // direct call ABI: `(out, t0, p0, t1, p1, …)` — every generated function
+    // shares it. The pointer is transmuted to the EXACT fixed arity, never a
+    // variadic type: a `…`-typed indirect call sets up arguments under the
+    // variadic convention and the generated (fixed-arity) frame misreads them
+    // (observed: the receiver's tag landed as 0 while its payload survived).
+    // Failures ride the out triple, read after the call.
     let a = |i: i64| -> (i64, i64) {
         if i < argc {
             (*args.add((i * 2) as usize), *args.add((i * 2 + 1) as usize))
@@ -1860,11 +1866,48 @@ pub unsafe extern "C" fn rt_call_iface(
     let (t2, p2) = a(2);
     let (t3, p3) = a(3);
     match arity {
-        0 => f(out),
-        1 => f(out, t0, p0),
-        2 => f(out, t0, p0, t1, p1),
-        3 => f(out, t0, p0, t1, p1, t2, p2),
-        4 => f(out, t0, p0, t1, p1, t2, p2, t3, p3),
+        0 => {
+            let f: unsafe extern "C" fn(*mut i64) =
+                std::mem::transmute::<*const (), unsafe extern "C" fn(*mut i64)>(code);
+            f(out);
+        }
+        1 => {
+            let f: unsafe extern "C" fn(*mut i64, i64, i64) =
+                std::mem::transmute::<*const (), unsafe extern "C" fn(*mut i64, i64, i64)>(code);
+            f(out, t0, p0);
+        }
+        2 => {
+            let f: unsafe extern "C" fn(*mut i64, i64, i64, i64, i64) = std::mem::transmute::<
+                *const (),
+                unsafe extern "C" fn(*mut i64, i64, i64, i64, i64),
+            >(code);
+            f(out, t0, p0, t1, p1);
+        }
+        3 => {
+            let f: unsafe extern "C" fn(*mut i64, i64, i64, i64, i64, i64, i64) =
+                std::mem::transmute::<
+                    *const (),
+                    unsafe extern "C" fn(*mut i64, i64, i64, i64, i64, i64, i64),
+                >(code);
+            f(out, t0, p0, t1, p1, t2, p2);
+        }
+        4 => {
+            let f: unsafe extern "C" fn(
+                *mut i64,
+                i64,
+                i64,
+                i64,
+                i64,
+                i64,
+                i64,
+                i64,
+                i64,
+            ) = std::mem::transmute::<
+                *const (),
+                unsafe extern "C" fn(*mut i64, i64, i64, i64, i64, i64, i64, i64, i64),
+            >(code);
+            f(out, t0, p0, t1, p1, t2, p2, t3, p3);
+        }
         _ => rt_panic_at(
             &format!(
                 "internal: `iface {iface} {method}` dispatched with an arity-{arity} method; at most 4 params are supported."
@@ -2611,6 +2654,286 @@ pub unsafe extern "C" fn rt_file_op(
             }
         },
         _ => rt_panic_at("internal: unknown file operation.", line),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Network (M2: the sockets/HTTP surface). Handles are numbers; every op but
+// `port`/`close` can fail (13.1) — the failure value is the message text
+// (S-10), so an `attempt` composes over every op exactly as it does over
+// file ops. The message texts mirror the interpreter's net_op exactly
+// (differential parity is a test).
+// ---------------------------------------------------------------------------
+
+/// The process's open endpoints: one registry per Lagom run (`lagom run`
+/// = one process = one registry; the interpreter keeps the same shape in
+/// `Interp::{net}`). Vec-backed so a `static` can construct it (HashMap::new
+/// is not const on this toolchain); entries stay small (a program opens a
+/// handful of endpoints).
+struct NetTable {
+    next: u64,
+    listeners: Vec<(u64, std::net::TcpListener, u16)>,
+    conns: Vec<(u64, std::net::TcpStream)>,
+}
+
+static NET_TABLE: std::sync::Mutex<NetTable> = std::sync::Mutex::new(NetTable {
+    next: 0,
+    listeners: Vec::new(),
+    conns: Vec::new(),
+});
+
+/// `op`: 0 listen, 1 port, 2 accept, 3 connect, 4 put, 5 take, 6 close.
+/// `a` carries the port/host/text/handle; `b` the second argument where the
+/// op needs two (connect's port, put's connection handle). Status 1 = failed.
+/// # Safety
+/// `out` must point at 16 writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn rt_net_op(
+    out: *mut i64,
+    op: i64,
+    a_tag: i64,
+    a_pay: i64,
+    b_tag: i64,
+    b_pay: i64,
+    _has_b: i64,
+    line: i64,
+) -> i64 {
+    let fail = |m: String| {
+        rt_set_fail_text(m);
+    };
+    let mut table = NET_TABLE.lock().unwrap_or_else(|e| e.into_inner());
+    let av = unbox(a_tag, a_pay);
+    match op {
+        0 => {
+            // `open listener at <port>` — bind; the bound port rides the
+            // handle (`port of` reads it back).
+            let Value::Number(port) = av else {
+                rt_panic_at(
+                    &format!(
+                        "open listener needs a number port, but got {}.",
+                        format_value(&av)
+                    ),
+                    line,
+                );
+            };
+            match std::net::TcpListener::bind(("0.0.0.0", port as u16)) {
+                Ok(l) => {
+                    let bound = l.local_addr().map(|a| a.port()).unwrap_or(port as u16);
+                    table.next += 1;
+                    let h = table.next;
+                    table.listeners.push((h, l, bound));
+                    write_out(out, &Value::Number(h as i64));
+                    0
+                }
+                Err(e) => {
+                    fail(format!(
+                        "could not listen at port {port}: {}.",
+                        e.kind()
+                    ));
+                    1
+                }
+            }
+        }
+        1 => {
+            // `port of <listener>` — the port actually bound.
+            let Value::Number(h) = av else {
+                rt_panic_at(
+                    &format!(
+                        "port of needs a listener handle, but got {}.",
+                        format_value(&av)
+                    ),
+                    line,
+                );
+            };
+            match table.listeners.iter().find(|e| e.0 == h as u64) {
+                Some((_, _, bound)) => {
+                    write_out(out, &Value::Number(*bound as i64));
+                    0
+                }
+                None => rt_panic_at(
+                    &format!("that is not an open listener: {h}."),
+                    line,
+                ),
+            }
+        }
+        2 => {
+            // `expect connection from <listener>` — block until a client
+            // arrives; the connection takes the next handle.
+            let Value::Number(h) = av else {
+                rt_panic_at(
+                    &format!(
+                        "expect connection needs a listener handle, but got {}.",
+                        format_value(&av)
+                    ),
+                    line,
+                );
+            };
+            let listener = match table.listeners.iter().find(|e| e.0 == h as u64) {
+                Some((_, l, _)) => l.try_clone(),
+                None => rt_panic_at(
+                    &format!("that is not an open listener: {h}."),
+                    line,
+                ),
+            };
+            match listener.and_then(|l| l.accept()) {
+                Ok((stream, _)) => {
+                    table.next += 1;
+                    let ch = table.next;
+                    table.conns.push((ch, stream));
+                    write_out(out, &Value::Number(ch as i64));
+                    0
+                }
+                Err(e) => {
+                    fail(format!(
+                        "could not accept a connection on listener {h}: {}.",
+                        e.kind()
+                    ));
+                    1
+                }
+            }
+        }
+        3 => {
+            // `open connection at <port> to <host>` — connect out. The `at`
+            // slot is the port (a `to`-first flowing call does not parse;
+            // see the sema dispatch note).
+            let Value::Number(port) = av else {
+                rt_panic_at(
+                    &format!(
+                        "open connection needs a number port, but got {}.",
+                        format_value(&av)
+                    ),
+                    line,
+                );
+            };
+            let bv = unbox(b_tag, b_pay);
+            let Value::Text(host) = bv else {
+                rt_panic_at(
+                    &format!(
+                        "open connection needs a text host, but got {}.",
+                        format_value(&bv)
+                    ),
+                    line,
+                );
+            };
+            match std::net::TcpStream::connect((host.as_str(), port as u16)) {
+                Ok(s) => {
+                    table.next += 1;
+                    let h = table.next;
+                    table.conns.push((h, s));
+                    write_out(out, &Value::Number(h as i64));
+                    0
+                }
+                Err(e) => {
+                    fail(format!(
+                        "could not open a connection to {host}:{port}: {}.",
+                        e.kind()
+                    ));
+                    1
+                }
+            }
+        }
+        4 => {
+            // `put <text> at <connection>` — write all the bytes; the result
+            // is the byte count.
+            let Value::Text(text) = av else {
+                rt_panic_at(
+                    &format!("put needs text to send, but got {}.", format_value(&av)),
+                    line,
+                );
+            };
+            let bv = unbox(b_tag, b_pay);
+            let Value::Number(h) = bv else {
+                rt_panic_at(
+                    &format!(
+                        "put needs a connection handle, but got {}.",
+                        format_value(&bv)
+                    ),
+                    line,
+                );
+            };
+            match table.conns.iter_mut().find(|e| e.0 == h as u64) {
+                Some((_, s)) => match s.write_all(text.as_ref().as_bytes()) {
+                    Ok(()) => {
+                        let n = text.as_ref().as_bytes().len() as i64;
+                        write_out(out, &Value::Number(n));
+                        0
+                    }
+                    Err(_) => {
+                        fail("the connection closed.".to_string());
+                        1
+                    }
+                },
+                None => rt_panic_at(
+                    &format!("that is not an open connection: {h}."),
+                    line,
+                ),
+            }
+        }
+        5 => {
+            // `take from <connection>` — one blocking read chunk (≤ 64 KiB),
+            // as text. An empty read means the connection closed.
+            let Value::Number(h) = av else {
+                rt_panic_at(
+                    &format!(
+                        "take from needs a connection handle, but got {}.",
+                        format_value(&av)
+                    ),
+                    line,
+                );
+            };
+            match table.conns.iter_mut().find(|e| e.0 == h as u64) {
+                Some((_, s)) => {
+                    let mut buf = vec![0u8; 65536];
+                    use std::io::Read as _;
+                    match s.read(&mut buf) {
+                        Ok(0) => {
+                            fail("the connection closed.".to_string());
+                            1
+                        }
+                        Ok(n) => {
+                            let text = String::from_utf8_lossy(&buf[..n]).to_string();
+                            write_out(out, &Value::Text(Rc::new(text)));
+                            0
+                        }
+                        Err(_) => {
+                            fail("the connection closed.".to_string());
+                            1
+                        }
+                    }
+                }
+                None => rt_panic_at(
+                    &format!("that is not an open connection: {h}."),
+                    line,
+                ),
+            }
+        }
+        6 => {
+            // `close <listener or connection>` — stop the endpoint.
+            // Idempotent: closing twice (or a stale handle) does nothing.
+            let Value::Number(h) = av else {
+                rt_panic_at(
+                    &format!(
+                        "close needs a handle, but got {}.",
+                        format_value(&av)
+                    ),
+                    line,
+                );
+            };
+            if table
+                .listeners
+                .iter()
+                .position(|e| e.0 == h as u64)
+                .map(|ix| table.listeners.remove(ix))
+                .is_none()
+            {
+                table
+                    .conns
+                    .retain(|e| e.0 != h as u64);
+            }
+            write_out(out, &Value::Nothing);
+            0
+        }
+        _ => rt_panic_at("internal: unknown network operation.", line),
     }
 }
 

@@ -16,6 +16,7 @@ mod explain_cmd;
 mod fmt;
 mod fmt_cmd;
 mod help;
+mod lsp;
 mod new;
 mod packages;
 mod play;
@@ -72,6 +73,7 @@ fn dispatch(args: &[String]) -> Result<(), CliError> {
         "fmt" => fmt_cmd::cmd_fmt(rest),
         "new" => new::cmd_new(rest),
         "words" => words::cmd_words(rest),
+        "lsp" => lsp::cmd_lsp(rest),
         "uninstall" => uninstall::cmd_uninstall(rest),
         "explain" => explain_cmd::cmd_explain(rest),
         "version" | "--version" | "-V" => help::cmd_version(),

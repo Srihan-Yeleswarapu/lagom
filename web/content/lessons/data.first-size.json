@@ -1,0 +1,61 @@
+{
+  "id": "data.first-size",
+  "title": "Read the first item and the size",
+  "objective": "Use first of to get the first item of a list, and size of to count its items, including inside an if.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "first of gives the first item of a list. size of gives the number of items. Both work on any list, and they do not change it."
+    },
+    {
+      "type": "example",
+      "title": "First item and size",
+      "code": "make names equal to a list of \"Ana\", \"Bo\", \"Cy\"\nsay first of names\nsay size of names\n\nmake cards equal to a list of \"a\", \"b\", \"c\"\nmake remaining equal to (size of cards) minus 1\nsay remaining\n",
+      "inputMode": "none",
+      "expected": [
+        "Ana",
+        "3",
+        "2"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "first of gives back nothing when the list is empty, so check the size first before you read the first item. Here the check uses size of inside an if."
+    },
+    {
+      "type": "example",
+      "title": "Check before reading",
+      "code": "make queue equal to a list of \"a\", \"b\"\nif size of queue is greater than 0\n    say first of queue\n",
+      "inputMode": "none",
+      "expected": [
+        "a"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "data.first-size.count",
+      "prompt": "The program prints the first name but never says how many names there are. Make it print Ana and then 3.",
+      "starter": "make names equal to a list of \"Ana\", \"Bo\", \"Cy\"\nsay first of names\n",
+      "solution": "make names equal to a list of \"Ana\", \"Bo\", \"Cy\"\nsay first of names\nsay size of names\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints Ana and then 3",
+          "kind": "output",
+          "expect": [
+            "Ana",
+            "3"
+          ]
+        }
+      ]
+    }
+  ]
+}

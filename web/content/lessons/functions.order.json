@@ -1,0 +1,50 @@
+{
+  "id": "functions.order",
+  "title": "Pass arguments in order",
+  "objective": "Know that each value in a call goes to the parameter in the same position, so the order of the values changes the answer.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "The values in a call are matched to the parameters by position. The first value goes to the first takes line, the second value goes to the second takes line, and so on. Swapping two values gives a different answer, so the order is part of the call."
+    },
+    {
+      "type": "example",
+      "title": "The order of the values matters",
+      "code": "function subtract\n    takes number called left\n    takes number called right\n    gives back left minus right\n\nsay subtract 10 and 3\nsay subtract 3 and 10\n",
+      "inputMode": "none",
+      "expected": [
+        "7",
+        "-7"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "Each parameter needs exactly one value. If a call gives too few values, the compiler stops before the program runs and reports how many values the function needs and how many you gave."
+    },
+    {
+      "type": "exercise",
+      "id": "functions.order.subtract",
+      "prompt": "The program prints -7, but the answer should be 7. Make it print 7.",
+      "starter": "function subtract\n    takes number called left\n    takes number called right\n    gives back left minus right\n\nsay subtract 3 and 10\n",
+      "solution": "function subtract\n    takes number called left\n    takes number called right\n    gives back left minus right\n\nsay subtract 10 and 3\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints 7",
+          "kind": "output",
+          "expect": [
+            "7"
+          ]
+        }
+      ]
+    }
+  ]
+}

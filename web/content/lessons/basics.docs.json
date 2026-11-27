@@ -1,0 +1,65 @@
+{
+  "id": "basics.docs",
+  "title": "Document code with ## comments",
+  "objective": "Tell readers what a function or structure is for, using documentation comments.",
+  "minutes": 5,
+  "body": [
+    {
+      "type": "p",
+      "text": "A line that starts with two hash signs, ##, is a documentation comment. A single # comment explains one line. A ## comment describes the thing right below it, such as a function or a structure, so a reader knows what it is for before reading the code."
+    },
+    {
+      "type": "example",
+      "title": "Document a function",
+      "code": "## Greets one person.\nfunction greet\n    takes text called name\n    say \"Hello, {name}!\"\n\ngreet \"Ada\"\n",
+      "inputMode": "none",
+      "expected": [
+        "Hello, Ada!"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "A structure can be documented the same way. Write the description just above the word structure."
+    },
+    {
+      "type": "example",
+      "title": "Document a structure",
+      "code": "## A question used by the quiz.\nstructure question\n    has prompt of type text\n    has answer of type text\n\nmake q equal to a question with prompt \"capital of Sweden\" and answer \"Stockholm\"\nsay prompt of q\n",
+      "inputMode": "none",
+      "expected": [
+        "capital of Sweden"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "basics.docs.add",
+      "prompt": "Add a documentation comment above the function. It should say: Adds two whole numbers. The program should still print 5.",
+      "starter": "function add\n    takes number called left\n    takes number called right\n    gives back left plus right\n\nsay add 2 and 3\n",
+      "solution": "## Adds two whole numbers.\nfunction add\n    takes number called left\n    takes number called right\n    gives back left plus right\n\nsay add 2 and 3\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "doc-comment",
+          "description": "A ## line above the function says Adds two whole numbers.",
+          "kind": "source",
+          "matches": "^## Adds two whole numbers\\.\\s*\\n\\s*function add",
+          "flags": "m"
+        },
+        {
+          "id": "output",
+          "description": "It prints 5",
+          "kind": "output",
+          "expect": [
+            "5"
+          ]
+        }
+      ]
+    }
+  ]
+}

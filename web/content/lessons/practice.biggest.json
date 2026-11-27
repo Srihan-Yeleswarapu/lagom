@@ -1,0 +1,45 @@
+{
+  "id": "practice.biggest",
+  "title": "Find the biggest number",
+  "objective": "Keep the largest value seen so far in a changing name, and update it inside a loop.",
+  "minutes": 7,
+  "body": [
+    {
+      "type": "p",
+      "text": "To find the biggest item, start a changing name at the smallest value you expect. Visit each item in the list. When an item is greater than the name's value, set the name to that item. After the loop, the name holds the biggest one."
+    },
+    {
+      "type": "example",
+      "title": "The largest of four",
+      "code": "make changing biggest equal to 0\nmake nums equal to a list of 5, 1, 8, 3\nrepeat for each n in nums\n    if n is greater than biggest\n        set biggest to n\nsay biggest\n",
+      "inputMode": "none",
+      "expected": [
+        "8"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "practice.biggest.compare",
+      "prompt": "The program prints 0 because it keeps the smallest value instead of the largest. Make it print 9.",
+      "starter": "make changing biggest equal to 0\nmake nums equal to a list of 4, 9, 2, 6\nrepeat for each n in nums\n    if n is less than biggest\n        set biggest to n\nsay biggest\n",
+      "solution": "make changing biggest equal to 0\nmake nums equal to a list of 4, 9, 2, 6\nrepeat for each n in nums\n    if n is greater than biggest\n        set biggest to n\nsay biggest\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints 9",
+          "kind": "output",
+          "expect": [
+            "9"
+          ]
+        }
+      ]
+    }
+  ]
+}

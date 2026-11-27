@@ -1,0 +1,60 @@
+{
+  "id": "data.set-at",
+  "title": "Change one item with set at",
+  "objective": "Change a single item in a list or a single value in a map with set ... at ... to, when the collection was made changing.",
+  "minutes": 7,
+  "body": [
+    {
+      "type": "p",
+      "text": "set changes one item of a list or one value of a map. Write set, the name, at, the position or key, then to and the new value. The list or map must have been made changing. Other items stay the same."
+    },
+    {
+      "type": "example",
+      "title": "Change a list item",
+      "code": "make changing numbers equal to a list of 1, 2, 3\nset numbers at 0 to 10\nsay numbers at 0\n\nmake changing letters equal to a list of \"a\", \"b\", \"c\"\nset letters at 1 to \"y\"\nsay letters at 1\n",
+      "inputMode": "none",
+      "expected": [
+        "10",
+        "y"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "A map works the same way, with the key in place of the position. A new key cannot be added with set in this form; it changes a value that is already there."
+    },
+    {
+      "type": "example",
+      "title": "Change a map value",
+      "code": "make changing ages equal to a map from \"Ana\" to 11\nset ages at \"Ana\" to 12\nsay ages at \"Ana\"\n\nmake changing inventory equal to a map from \"keys\" to 0\nset inventory at \"keys\" to 4\nsay inventory at \"keys\"\n",
+      "inputMode": "none",
+      "expected": [
+        "12",
+        "4"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "data.set-at.change",
+      "prompt": "The program changes the third letter to z, but prints a instead. Make it print z.",
+      "starter": "make changing letters equal to a list of \"a\", \"b\", \"c\"\nset letters at 2 to \"z\"\nsay letters at 0\n",
+      "solution": "make changing letters equal to a list of \"a\", \"b\", \"c\"\nset letters at 2 to \"z\"\nsay letters at 2\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints z",
+          "kind": "output",
+          "expect": [
+            "z"
+          ]
+        }
+      ]
+    }
+  ]
+}

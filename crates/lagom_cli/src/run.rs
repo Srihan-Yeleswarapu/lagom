@@ -11,7 +11,9 @@ use super::packages;
 
 /// The source a run/build compiles: a project with a `Lagom.toml` merges its
 /// dependency sources ahead of the entry file (the vendored merge, 20.2);
-/// a bare file compiles alone.
+/// a bare file compiles alone. Before merging, git and registry
+/// dependencies are brought on disk at their locked pins — a fresh
+/// checkout builds.
 fn project_source(path: &Path, explicit: bool) -> Result<String, CliError> {
     let own = read_source(path)?;
     // An explicit file argument compiles alone; the default `main.lagom` is
@@ -19,6 +21,7 @@ fn project_source(path: &Path, explicit: bool) -> Result<String, CliError> {
     if explicit || !Path::new(packages::MANIFEST).exists() {
         return Ok(own);
     }
+    packages::ensure_vendored(Path::new("."))?;
     match packages::merged_sources(Path::new(".")) {
         Some((merged, files)) if !files.is_empty() => {
             // Replace the entry file's text with the merged whole (the entry
@@ -102,10 +105,13 @@ pub fn cmd_run(rest: &[String]) -> CliResult {
 }
 
 /// The `--trace` path: the interpreter, with stdin only when the program
-/// asks for it (the driver owns that policy).
+/// asks for it (the driver owns that policy). The same source resolution
+/// as the native path — a project's dependencies merge here too, so
+/// `--trace` and native builds run the same program.
 fn cmd_run_trace(rest: &[String]) -> CliResult {
-    let path = source_path(rest)?;
-    let src = read_source(&path)?;
+    let req = BuildRequest::parse(rest)?;
+    let path = req.path;
+    let src = req.src;
     let fe = lagom_driver::frontend(&src).map_err(|e| render_failure(&path, &src, &e))?;
     // Same honest report as the native path (the interpreter would run
     // nothing and exit silently).

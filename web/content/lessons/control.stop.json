@@ -1,0 +1,66 @@
+{
+  "id": "control.stop",
+  "title": "Leave a loop early with stop",
+  "objective": "Use stop to end a loop before its normal end, and know what runs next.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "stop ends the loop straight away, even if the loop has more items or its condition is still true. The program carries on with the line after the loop. Put stop inside an if, so it only happens when the condition is met."
+    },
+    {
+      "type": "example",
+      "title": "Stop at the first match",
+      "code": "make target equal to \"bo\"\nmake things equal to a list of \"ana\", \"bo\", \"cy\"\nrepeat for each item in things\n    if item is equal to target\n        stop\n    say item\nsay \"done\"\n",
+      "inputMode": "none",
+      "expected": [
+        "ana",
+        "done"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "stop also works with repeat while and repeat times. Here the loop would run 100 times, but stop ends it once the health is no longer above zero."
+    },
+    {
+      "type": "example",
+      "title": "Stop when health runs out",
+      "code": "make changing health equal to 10\nrepeat 100 times using turn\n    decrease health by 3\n    if health is at most 0\n        stop\nsay health\n",
+      "inputMode": "none",
+      "expected": [
+        "-2"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "control.stop.first",
+      "prompt": "The program prints every item of the list, but it should stop as soon as it reaches bo, so only ana is printed. Make it print only ana.",
+      "starter": "make things equal to a list of \"ana\", \"bo\", \"cy\"\nrepeat for each item in things\n    say item\n",
+      "solution": "make things equal to a list of \"ana\", \"bo\", \"cy\"\nrepeat for each item in things\n    if item is equal to \"bo\"\n        stop\n    say item\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "uses-stop",
+          "description": "It uses stop inside the loop",
+          "kind": "source",
+          "matches": "^\\s*stop\\s*$",
+          "flags": "m"
+        },
+        {
+          "id": "output",
+          "description": "It prints only ana",
+          "kind": "output",
+          "expect": [
+            "ana"
+          ]
+        }
+      ]
+    }
+  ]
+}

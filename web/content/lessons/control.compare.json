@@ -1,0 +1,80 @@
+{
+  "id": "control.compare",
+  "title": "Compare values",
+  "objective": "Compare two values with is equal to, is greater than, is at least and the other comparison phrases.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "A comparison asks whether a statement about two values is true. It gives true or false, and if uses that answer. Lagom writes comparisons as phrases: is equal to, is not equal to, is greater than, is less than, is at least and is at most."
+    },
+    {
+      "type": "example",
+      "title": "Greater than and less than",
+      "code": "make age equal to 15\nif age is greater than 13\n    say \"teenager or older\"\nmake score equal to 40\nif score is less than 50\n    say \"keep practicing\"\n",
+      "inputMode": "none",
+      "expected": [
+        "teenager or older",
+        "keep practicing"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "at least means greater than or equal to. at most means less than or equal to. Use them when the boundary value should count as a pass."
+    },
+    {
+      "type": "example",
+      "title": "At least and at most",
+      "code": "make score equal to 80\nif score is at least 80\n    say \"passing\"\nmake temperature equal to -2\nif temperature is at most 0\n    say \"freezing\"\n",
+      "inputMode": "none",
+      "expected": [
+        "passing",
+        "freezing"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "is equal to checks for the same value, and is not equal to checks for a different one. Use is equal to, not a single equals sign, to compare."
+    },
+    {
+      "type": "example",
+      "title": "Equal and not equal",
+      "code": "make name equal to \"Ada\"\nif name is not equal to \"\"\n    say \"a name was entered\"\nmake answer equal to 42\nif answer is equal to 42\n    say \"correct\"\n",
+      "inputMode": "none",
+      "expected": [
+        "a name was entered",
+        "correct"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "control.compare.pass",
+      "prompt": "A score of exactly 80 should also pass, but the program prints nothing at all for it. Make it print passing.",
+      "starter": "make score equal to 80\nif score is greater than 80\n    say \"passing\"\n",
+      "solution": "make score equal to 80\nif score is at least 80\n    say \"passing\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "uses-at-least",
+          "description": "The check uses is at least 80",
+          "kind": "source",
+          "matches": "is at least 80"
+        },
+        {
+          "id": "output",
+          "description": "It prints passing",
+          "kind": "output",
+          "expect": [
+            "passing"
+          ]
+        }
+      ]
+    }
+  ]
+}

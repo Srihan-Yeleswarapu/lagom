@@ -1,0 +1,73 @@
+{
+  "id": "functions.parameters",
+  "title": "Give a function inputs with takes",
+  "objective": "Declare the inputs a function needs with takes, and call it with values of the right kind.",
+  "minutes": 8,
+  "body": [
+    {
+      "type": "p",
+      "text": "A function can take inputs, called parameters. Each one is a takes line that gives its kind and name, such as takes number called left. When you call the function, you give one value for each parameter, in the same order. Inside the function, the parameter is a name you can use like any other variable."
+    },
+    {
+      "type": "example",
+      "title": "Greet with a text input",
+      "code": "function greet\n    takes text called name\n    say \"Hello, {name}!\"\n\ngreet \"Grace\"\n",
+      "inputMode": "none",
+      "expected": [
+        "Hello, Grace!"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "A function can take several inputs. Give each one its own takes line, and separate the values in the call with and."
+    },
+    {
+      "type": "example",
+      "title": "Two numbers",
+      "code": "function add\n    takes number called left\n    takes number called right\n    gives back left plus right\n\nsay add 4 and 5\n",
+      "inputMode": "none",
+      "expected": [
+        "9"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "A parameter can also be a list, or a pair. Write takes a list of number called scores for a list, and takes a pair of number and number called point for a pair. The call passes a list or pair in the same form."
+    },
+    {
+      "type": "example",
+      "title": "A list and a pair",
+      "code": "function print names\n    takes a list of text called names\n    repeat for each name in names\n        say name\n\nprint names a list of \"Ana\", \"Bo\"\n\nfunction describe point\n    takes a pair of number and number called point\n    say point\n\ndescribe point a pair of 3 and 4\n",
+      "inputMode": "none",
+      "expected": [
+        "Ana",
+        "Bo",
+        "(3, 4)"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "functions.parameters.greet",
+      "prompt": "The greet function is written but never used, so the program prints nothing. Make it print Hello, Ada!",
+      "starter": "function greet\n    takes text called name\n    say \"Hello, {name}!\"\n",
+      "solution": "function greet\n    takes text called name\n    say \"Hello, {name}!\"\n\ngreet \"Ada\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints Hello, Ada!",
+          "kind": "output",
+          "expect": [
+            "Hello, Ada!"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "id": "data.maps",
+  "title": "Look up values in a map",
+  "objective": "Make a map from keys to values, look a value up by its key, and change a value.",
+  "minutes": 8,
+  "body": [
+    {
+      "type": "p",
+      "text": "A map pairs each key with a value. make a map from builds one from key to value pairs, separated by commas. Look a value up with the map's name, at, and the key, as in ages at \"Bo\". size of gives the number of pairs."
+    },
+    {
+      "type": "example",
+      "title": "Look up an age",
+      "code": "make ages equal to a map from \"Ana\" to 11, \"Bo\" to 12\nsay ages at \"Bo\"\nsay \"There are {size of ages} people\"\n",
+      "inputMode": "none",
+      "expected": [
+        "12",
+        "There are 2 people"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "A map can be changed with set, the same way as a list, if it was made changing. Here Ana's age goes up by one."
+    },
+    {
+      "type": "example",
+      "title": "Change a value",
+      "code": "make changing ages equal to a map from \"Ana\" to 11\nset ages at \"Ana\" to 12\nsay ages at \"Ana\"\n",
+      "inputMode": "none",
+      "expected": [
+        "12"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "data.maps.lookup",
+      "prompt": "The program prints Ana's age, but it should print Bo's age, 14.",
+      "starter": "make ages equal to a map from \"Ana\" to 11, \"Bo\" to 14\nsay ages at \"Ana\"\n",
+      "solution": "make ages equal to a map from \"Ana\" to 11, \"Bo\" to 14\nsay ages at \"Bo\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints 14",
+          "kind": "output",
+          "expect": [
+            "14"
+          ]
+        }
+      ]
+    }
+  ]
+}

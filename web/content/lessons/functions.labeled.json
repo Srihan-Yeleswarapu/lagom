@@ -1,0 +1,43 @@
+{
+  "id": "functions.labeled",
+  "title": "Name the arguments with with",
+  "objective": "Call a function with named arguments using with, so each value is labelled by its parameter name.",
+  "minutes": 7,
+  "body": [
+    {
+      "type": "p",
+      "text": "A call can name each argument with the parameter it goes to. Write with, then the parameter name, then its value. Separate the arguments with and. The order no longer matters, and the call is easier to read when a function has several inputs."
+    },
+    {
+      "type": "example",
+      "title": "One labelled argument",
+      "code": "function greet\n    takes text called name\n    say \"Hello, {name}!\"\n\ngreet with name \"Ada\"\n",
+      "inputMode": "none",
+      "expected": [
+        "Hello, Ada!"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "The same form works for a structure. Each has field is named, so with fills in the field by name."
+    },
+    {
+      "type": "example",
+      "title": "Labelled structure fields",
+      "code": "structure point\n    has x of type number\n    has y of type number\n\nmake point equal to a point with x 3 and y 4\nsay point\n",
+      "inputMode": "none",
+      "expected": [
+        "point(3, 4)"
+      ]
+    },
+    {
+      "type": "example",
+      "title": "Several labelled arguments",
+      "code": "function format date\n    takes number called year\n    takes number called month\n    takes number called day\n    gives back \"{year}-{month}-{day}\"\n\nsay format date with year 2026 and month 9 and day 7\n",
+      "inputMode": "none",
+      "expected": [
+        "2026-9-7"
+      ]
+    }
+  ]
+}

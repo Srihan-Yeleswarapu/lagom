@@ -1,0 +1,49 @@
+{
+  "id": "control.if",
+  "title": "Choose a path with if",
+  "objective": "Run some lines when a condition is true, and other lines when it is not.",
+  "minutes": 7,
+  "body": [
+    {
+      "type": "p",
+      "text": "If runs the indented lines when its condition is true. otherwise runs the indented lines when it is not. Indent the lines under each part by four spaces."
+    },
+    {
+      "type": "example",
+      "title": "Teen or kid",
+      "code": "make age equal to 12\nif age is at least 13\n    say \"Teen\"\notherwise\n    say \"Kid\"\n",
+      "inputMode": "none",
+      "expected": [
+        "Kid"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "Conditions read like English: is equal to, is not equal to, is less than, is greater than, is at least and is at most. Change the age in the example to see the other branch run."
+    },
+    {
+      "type": "exercise",
+      "id": "control.if.pass",
+      "prompt": "A score of 75 earns a pass, but the program prints Try again. Make it print Pass.",
+      "starter": "make score equal to 75\nif score is at least 100\n    say \"Pass\"\notherwise\n    say \"Try again\"\n",
+      "solution": "make score equal to 75\nif score is at least 50\n    say \"Pass\"\notherwise\n    say \"Try again\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints Pass",
+          "kind": "output",
+          "expect": [
+            "Pass"
+          ]
+        }
+      ]
+    }
+  ]
+}

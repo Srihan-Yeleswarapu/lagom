@@ -1,0 +1,61 @@
+{
+  "id": "data.indexing",
+  "title": "Look up an item with at",
+  "objective": "Read one item from a list by its position, or one value from a map by its key, or one letter from a text, using at.",
+  "minutes": 7,
+  "body": [
+    {
+      "type": "p",
+      "text": "at reads one item. Write the name, at, then a position for a list. Positions start at 0, so the first item is at 0 and the third is at 2. A text works the same way, one letter at a time."
+    },
+    {
+      "type": "example",
+      "title": "Positions in a list and a text",
+      "code": "make things equal to a list of \"a\", \"b\", \"c\"\nsay things at 0\n\nmake numbers equal to a list of 1, 2, 3\nmake third equal to numbers at 2\nsay third\n\nmake greeting equal to \"hello\"\nmake letter equal to greeting at 1\nsay letter\n",
+      "inputMode": "none",
+      "expected": [
+        "a",
+        "3",
+        "e"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "For a map, the position is a key. Write the key in quotes, or use a variable that holds a key. A list position can also be a variable."
+    },
+    {
+      "type": "example",
+      "title": "Keys and positions in variables",
+      "code": "make rooms equal to a map from \"entrance\" to \"library\"\nsay rooms at \"entrance\"\n\nmake spot equal to 0\nmake halls equal to a list of \"a\", \"b\"\nsay halls at spot\n",
+      "inputMode": "none",
+      "expected": [
+        "library",
+        "a"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "data.indexing.third",
+      "prompt": "The program prints the second item, b. Change it so it prints the third item, c.",
+      "starter": "make things equal to a list of \"a\", \"b\", \"c\"\nsay things at 1\n",
+      "solution": "make things equal to a list of \"a\", \"b\", \"c\"\nsay things at 2\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints c",
+          "kind": "output",
+          "expect": [
+            "c"
+          ]
+        }
+      ]
+    }
+  ]
+}

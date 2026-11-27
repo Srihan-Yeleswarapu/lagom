@@ -1,0 +1,60 @@
+{
+  "id": "functions.returns",
+  "title": "Declare what a function returns",
+  "objective": "Use returns to say what kind of value a function gives back, and read a function's result as a value.",
+  "minutes": 7,
+  "body": [
+    {
+      "type": "p",
+      "text": "A returns line tells the reader and the compiler what kind of value the function gives back. Write returns a number, returns text, or returns a boolean. The value after gives back must match that kind. A function with a returns line can be used anywhere a value of that kind is expected, such as in a say line."
+    },
+    {
+      "type": "example",
+      "title": "Adding and greeting",
+      "code": "function add\n    takes number called left\n    takes number called right\n    returns a number\n    gives back left plus right\n\nsay add 3 and 4\n\nfunction greeting\n    takes text called name\n    returns text\n    gives back \"Hello, {name}!\"\n\nsay greeting \"Ada\"\n",
+      "inputMode": "none",
+      "expected": [
+        "7",
+        "Hello, Ada!"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "A function can return a boolean, which is true or false. This is useful for a yes-or-no check. The function below returns the answer to score is at least 0, so a negative score gives false."
+    },
+    {
+      "type": "example",
+      "title": "A yes or no answer",
+      "code": "function valid\n    takes number called score\n    returns a boolean\n    gives back score is at least 0\n\nsay valid -1\nsay valid 5\n",
+      "inputMode": "none",
+      "expected": [
+        "false",
+        "true"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "functions.returns.double",
+      "prompt": "double should return twice its input, but it adds 2 instead. Change it so double 5 prints 10.",
+      "starter": "function double\n    takes number called value\n    returns a number\n    gives back value plus 2\n\nsay double 5\n",
+      "solution": "function double\n    takes number called value\n    returns a number\n    gives back value times 2\n\nsay double 5\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "double 5 prints 10",
+          "kind": "output",
+          "expect": [
+            "10"
+          ]
+        }
+      ]
+    }
+  ]
+}

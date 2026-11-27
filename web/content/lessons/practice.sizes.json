@@ -1,0 +1,51 @@
+{
+  "id": "practice.sizes",
+  "title": "Label each number in a list",
+  "objective": "Put an if inside a loop so each item in a list gets its own answer.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "An if can sit inside a repeat for each loop. The loop visits every item, and the if decides what to say for that item. Each item gets its own answer, so one list can produce several different lines."
+    },
+    {
+      "type": "example",
+      "title": "Big or small",
+      "code": "make nums equal to a list of 3, 12, 7, 20\nrepeat for each n in nums\n    if n is at least 20\n        say \"{n} is big\"\n    otherwise\n        say \"{n} is small\"\n",
+      "inputMode": "none",
+      "expected": [
+        "3 is small",
+        "12 is small",
+        "7 is small",
+        "20 is big"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "practice.sizes.threshold",
+      "prompt": "The program labels every number small. Make it label 12 and 20 big and the rest small.",
+      "starter": "make nums equal to a list of 3, 12, 7, 20\nrepeat for each n in nums\n    if n is at least 100\n        say \"{n} is big\"\n    otherwise\n        say \"{n} is small\"\n",
+      "solution": "make nums equal to a list of 3, 12, 7, 20\nrepeat for each n in nums\n    if n is at least 10\n        say \"{n} is big\"\n    otherwise\n        say \"{n} is small\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints each number with big or small",
+          "kind": "output",
+          "expect": [
+            "3 is small",
+            "12 is big",
+            "7 is small",
+            "20 is big"
+          ]
+        }
+      ]
+    }
+  ]
+}

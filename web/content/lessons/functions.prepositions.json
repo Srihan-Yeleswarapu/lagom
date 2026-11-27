@@ -1,0 +1,71 @@
+{
+  "id": "functions.prepositions",
+  "title": "Read a call with of, at, from and to",
+  "objective": "Use the small words of, at, from and to between the values of a call, so the call reads like a sentence.",
+  "minutes": 8,
+  "body": [
+    {
+      "type": "p",
+      "text": "A call can put one of the words of, at, from or to in front of a value. The word belongs to the sentence, so the call reads more naturally. The values still go to the parameters in order, so the words do not change which parameter gets which value."
+    },
+    {
+      "type": "example",
+      "title": "Distance from a start to an end",
+      "code": "function distance\n    takes number called start\n    takes number called end\n    gives back end minus start\n\nsay distance from 3 to 10\n",
+      "inputMode": "none",
+      "expected": [
+        "7"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "at works the same way. This call writes a text value into a file. The first value is the content, and the value after at is the path."
+    },
+    {
+      "type": "example",
+      "title": "Write at a path",
+      "code": "function write\n    takes text called content\n    takes text called path\n    say \"{path}: {content}\"\n\nwrite \"hi\" at \"log.txt\"\n",
+      "inputMode": "none",
+      "expected": [
+        "log.txt: hi"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "of works with one value. A function that takes one number can be called with of, which reads like a question about that number."
+    },
+    {
+      "type": "example",
+      "title": "One value with of",
+      "code": "function double\n    takes number called n\n    gives back n times 2\n\nsay double of 4\n",
+      "inputMode": "none",
+      "expected": [
+        "8"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "functions.prepositions.write",
+      "prompt": "The write call is missing its path, so the program does not compile. Make it print notes.txt: hi.",
+      "starter": "function write\n    takes text called content\n    takes text called path\n    say \"{path}: {content}\"\n\nwrite \"hi\"\n",
+      "solution": "function write\n    takes text called content\n    takes text called path\n    say \"{path}: {content}\"\n\nwrite \"hi\" at \"notes.txt\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints notes.txt: hi",
+          "kind": "output",
+          "expect": [
+            "notes.txt: hi"
+          ]
+        }
+      ]
+    }
+  ]
+}

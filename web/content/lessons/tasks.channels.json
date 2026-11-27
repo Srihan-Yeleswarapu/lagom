@@ -1,0 +1,21 @@
+{
+  "id": "tasks.channels",
+  "title": "Send values between tasks with a channel",
+  "objective": "Make a channel, send a value into it from a task, and receive that value in the main program.",
+  "minutes": 6,
+  "body": [
+    {
+      "type": "p",
+      "text": "A channel is a pipe that carries values from one task to another. Write make, then a name, equal to a channel of text or of number. One task sends with send, and another side takes the value with receive from."
+    },
+    {
+      "type": "example",
+      "title": "Send a message from a task",
+      "code": "make messages equal to a channel of text\nstart a task\n    send \"hello\" to messages\nsay receive from messages\n",
+      "inputMode": "none",
+      "expected": [
+        "hello"
+      ]
+    }
+  ]
+}

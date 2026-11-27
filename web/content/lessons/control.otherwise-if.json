@@ -1,0 +1,66 @@
+{
+  "id": "control.otherwise-if",
+  "title": "Check several conditions with otherwise if",
+  "objective": "Chain conditions with otherwise if, and understand that only the first true condition runs.",
+  "minutes": 7,
+  "body": [
+    {
+      "type": "p",
+      "text": "When you have more than two outcomes, add otherwise if branches after the first if. Lagom checks them from top to bottom. The first condition that is true runs its lines, and the rest are skipped, even if they are also true."
+    },
+    {
+      "type": "example",
+      "title": "Grade a score",
+      "code": "make score equal to 85\nif score is at least 90\n    say \"A\"\notherwise if score is at least 80\n    say \"B\"\nmake temperature equal to 22\nif temperature is greater than 30\n    say \"hot\"\notherwise if temperature is greater than 15\n    say \"mild\"\n",
+      "inputMode": "none",
+      "expected": [
+        "B",
+        "mild"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "Order matters. Put the most specific condition first. In the example below, the second branch would also be true for 5, but the first branch wins because it is checked first."
+    },
+    {
+      "type": "example",
+      "title": "The first true branch wins",
+      "code": "make age equal to 4\nif age is less than 5\n    say \"toddler\"\notherwise if age is less than 13\n    say \"child\"\nmake status equal to \"open\"\nif status is equal to \"new\"\n    say \"created\"\notherwise if status is equal to \"open\"\n    say \"already open\"\n",
+      "inputMode": "none",
+      "expected": [
+        "toddler",
+        "already open"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "control.otherwise-if.grade",
+      "prompt": "A score of 85 should earn a B, but the program prints C. Make it print B.",
+      "starter": "make score equal to 85\nif score is at least 90\n    say \"A\"\notherwise\n    say \"C\"\n",
+      "solution": "make score equal to 85\nif score is at least 90\n    say \"A\"\notherwise if score is at least 80\n    say \"B\"\notherwise\n    say \"C\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "uses-otherwise-if",
+          "description": "It has an otherwise if branch",
+          "kind": "source",
+          "matches": "otherwise if"
+        },
+        {
+          "id": "output",
+          "description": "It prints B",
+          "kind": "output",
+          "expect": [
+            "B"
+          ]
+        }
+      ]
+    }
+  ]
+}

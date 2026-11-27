@@ -1,0 +1,65 @@
+{
+  "id": "functions.named-failures",
+  "title": "Name a failure with attempt as",
+  "objective": "Give a failure its own name with attempt ... as, so the message says which step failed.",
+  "minutes": 7,
+  "body": [
+    {
+      "type": "p",
+      "text": "attempt ... if it fails then gives the failure the name problem. When a program handles several failures, the name problem is not very clear. Write attempt ... as followed by a name of your choice, such as math problem. The name holds the reason, and the lines after the attempt run only when the call failed."
+    },
+    {
+      "type": "example",
+      "title": "Name the failure",
+      "code": "function divide\n    takes number called top\n    takes number called bottom\n    returns a decimal\n    can fail\n    if bottom is equal to 0\n        fail with \"cannot divide by zero\"\n    gives back top divided by bottom\n\nattempt divide 10 and 0 as math problem\n    say \"Math failed: {math problem}\"\notherwise\n    say \"ok\"\n",
+      "inputMode": "none",
+      "expected": [
+        "Math failed: cannot divide by zero"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "The otherwise branch still runs when the call works, and the result is in result. You can use a different name for each attempt, so each failure can be reported separately."
+    },
+    {
+      "type": "example",
+      "title": "Two attempts, two names",
+      "code": "function connect\n    takes text called address\n    returns text\n    can fail\n    fail with \"no route\"\n\nfunction divide\n    takes number called top\n    takes number called bottom\n    returns a decimal\n    can fail\n    if bottom is equal to 0\n        fail with \"cannot divide by zero\"\n    gives back top divided by bottom\n\nattempt connect \"x\" as network problem\n    say \"Network error: {network problem}\"\notherwise\n    say \"ok\"\nattempt divide 10 and 0 as math problem\n    say \"Math failed: {math problem}\"\notherwise\n    say \"ok\"\n",
+      "inputMode": "none",
+      "expected": [
+        "Network error: no route",
+        "Math failed: cannot divide by zero"
+      ]
+    },
+    {
+      "type": "exercise",
+      "id": "functions.named-failures.divide",
+      "prompt": "The program handles the failure with the plain name problem and prints only the reason. Give the failure its own name and report it as Math error: followed by the reason, so the program prints Math error: cannot divide by zero.",
+      "starter": "function divide\n    takes number called top\n    takes number called bottom\n    returns a decimal\n    can fail\n    if bottom is equal to 0\n        fail with \"cannot divide by zero\"\n    gives back top divided by bottom\n\nattempt divide 10 and 0 if it fails then\n    say problem\notherwise\n    say result\n",
+      "solution": "function divide\n    takes number called top\n    takes number called bottom\n    returns a decimal\n    can fail\n    if bottom is equal to 0\n        fail with \"cannot divide by zero\"\n    gives back top divided by bottom\n\nattempt divide 10 and 0 as math problem\n    say \"Math error: {math problem}\"\notherwise\n    say \"ok\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "uses-as",
+          "description": "It uses attempt ... as a name",
+          "kind": "source",
+          "matches": "attempt[\\s\\S]* as "
+        },
+        {
+          "id": "output",
+          "description": "It prints Math error: cannot divide by zero",
+          "kind": "output",
+          "expect": [
+            "Math error: cannot divide by zero"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "id": "functions.define",
+  "title": "Write a function",
+  "objective": "Name a reusable set of steps, and call it with an input.",
+  "minutes": 8,
+  "body": [
+    {
+      "type": "p",
+      "text": "Function gives a name to steps you want to reuse. takes names the input and its type, returns gives the type of the answer, and gives back sends the answer out."
+    },
+    {
+      "type": "example",
+      "title": "Double a number",
+      "code": "function double\n    takes number called x\n    returns a number\n    gives back x times 2\n\nmake result equal to double(5)\nsay \"{result}\"\n",
+      "inputMode": "none",
+      "expected": [
+        "10"
+      ]
+    },
+    {
+      "type": "p",
+      "text": "Call a function by writing its name and its input in brackets, as in double(5). The function runs with x set to 5 and gives back the answer. A function can be called as many times as you like, with a different input each time."
+    },
+    {
+      "type": "exercise",
+      "id": "functions.define.double",
+      "prompt": "double should multiply its input by 2, but it multiplies by 3. Fix the function so the program prints 8.",
+      "starter": "function double\n    takes number called x\n    returns a number\n    gives back x times 3\n\nmake result equal to double(4)\nsay \"{result}\"\n",
+      "solution": "function double\n    takes number called x\n    returns a number\n    gives back x times 2\n\nmake result equal to double(4)\nsay \"{result}\"\n",
+      "runMode": "both",
+      "inputMode": "none",
+      "checks": [
+        {
+          "id": "compiles",
+          "description": "The program compiles",
+          "kind": "compiles"
+        },
+        {
+          "id": "output",
+          "description": "It prints 8",
+          "kind": "output",
+          "expect": [
+            "8"
+          ]
+        }
+      ]
+    }
+  ]
+}
